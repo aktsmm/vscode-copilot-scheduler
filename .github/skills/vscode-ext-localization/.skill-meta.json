@@ -1,9 +1,0 @@
-{
-  "name": "vscode-ext-localization",
-  "source": "github-awesome-copilot",
-  "description": "Guidelines for proper localization of VS Code extensions, following VS Code extension development guidelines, libraries and good practices",
-  "description_ja": "Vscode Ext Localization",
-  "whenToUse": "This skill helps you localize every aspect of VS Code extensions",
-  "categories": [],
-  "installedAt": "2026-02-01T14:39:33.664Z"
-}
