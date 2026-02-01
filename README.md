@@ -1,4 +1,4 @@
-# Copilot Scheduler
+# ⏰ Copilot Scheduler
 
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/yamapan.copilot-scheduler?label=VS%20Code%20Marketplace&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![License CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
@@ -12,7 +12,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ![Copilot Scheduler Demo](images/demo-animated.gif)
 
-## Features
+## ✨ Features
 
 🗓️ **Cron Scheduling** - Schedule prompts to run at specific times using cron expressions
 
@@ -26,14 +26,14 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 📁 **Prompt Templates** - Use local or global prompt template files
 
-## Quick Start
+## 🚀 Quick Start
 
 1. Open the Copilot Scheduler sidebar (click the clock icon in the Activity Bar)
 2. Click the "+" button to create a new scheduled task
 3. Enter a task name, prompt, and cron schedule
 4. Your prompt will be automatically sent to Copilot at the scheduled time
 
-## Cron Expression Examples
+## ⏰ Cron Expression Examples
 
 | Expression     | Description             |
 | -------------- | ----------------------- |
@@ -44,7 +44,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `*/30 * * * *` | Every 30 minutes        |
 | `0 * * * *`    | Every hour              |
 
-## Commands
+## 📋 Commands
 
 | Command                                            | Description                |
 | -------------------------------------------------- | -------------------------- |
@@ -57,7 +57,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `Copilot Scheduler: Run Now`                       | Execute a task immediately |
 | `Copilot Scheduler: Copy Prompt`                   | Copy prompt to clipboard   |
 
-## Settings
+## ⚙️ Settings
 
 | Setting                             | Default     | Description                          |
 | ----------------------------------- | ----------- | ------------------------------------ |
@@ -69,7 +69,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `copilotSchedule.chatSession`       | `new`       | Chat session behavior (new/continue) |
 | `copilotSchedule.defaultScope`      | `workspace` | Default scope (global/workspace)     |
 
-## Prompt Placeholders
+## 📝 Prompt Placeholders
 
 Use these placeholders in your prompts:
 
@@ -82,29 +82,29 @@ Use these placeholders in your prompts:
 | `{{file}}`      | Current file name     |
 | `{{filepath}}`  | Current file path     |
 
-## Task Scope
+## 📂 Task Scope
 
 - **Global**: Task runs in all workspaces
 - **Workspace**: Task runs only in the specific workspace where it was created
 
-## Prompt Templates
+## 📄 Prompt Templates
 
 Store prompt templates for reuse:
 
 - **Local**: `.github/prompts/*.md` in your workspace
 - **Global**: `~/.github/prompts/*.md` or VS Code user prompts folder
 
-## Requirements
+## 📋 Requirements
 
 - VS Code 1.80.0 or higher
 - GitHub Copilot extension
 
-## Known Issues
+## ⚠️ Known Issues
 
 - Copilot Chat API is still evolving; some features may require updates as the API stabilizes
 - Model selection may not work in all configurations
 
-## Release Notes
+## 📦 Release Notes
 
 ### 0.1.0
 
@@ -117,9 +117,9 @@ Initial release:
 - Webview GUI for task management
 - Prompt template support
 
-## License
+## 📄 License
 
-CC-BY-NC-SA-4.0
+[CC-BY-NC-SA-4.0](LICENSE) © [yamapan](https://github.com/aktsmm)
 
 ---
 
