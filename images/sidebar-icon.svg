@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4FC3F7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2196F3;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#grad1)"/>
+  
+  <!-- Clock face -->
+  <circle cx="64" cy="64" r="45" fill="white" opacity="0.95"/>
+  
+  <!-- Clock center -->
+  <circle cx="64" cy="64" r="4" fill="#333"/>
+  
+  <!-- Hour hand -->
+  <line x1="64" y1="64" x2="64" y2="35" stroke="#333" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Minute hand -->
+  <line x1="64" y1="64" x2="88" y2="64" stroke="#333" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Hour markers -->
+  <circle cx="64" cy="24" r="3" fill="#333"/>
+  <circle cx="104" cy="64" r="3" fill="#333"/>
+  <circle cx="64" cy="104" r="3" fill="#333"/>
+  <circle cx="24" cy="64" r="3" fill="#333"/>
+  
+  <!-- Copilot sparkle -->
+  <g transform="translate(85, 25)">
+    <path d="M0,-8 L2,-2 L8,0 L2,2 L0,8 L-2,2 L-8,0 L-2,-2 Z" fill="#FF6B6B"/>
+  </g>
+  
+  <!-- Schedule indicator -->
+  <g transform="translate(95, 95)">
+    <circle cx="0" cy="0" r="12" fill="#4CAF50"/>
+    <text x="0" y="4" font-family="Arial" font-size="12" font-weight="bold" fill="white" text-anchor="middle">✓</text>
+  </g>
+</svg>
