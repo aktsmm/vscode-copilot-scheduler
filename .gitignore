@@ -6,3 +6,12 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# Development files
+.github/temp/
+.github/agents/
+.github/skills/
+.github/prompts/
+session/
+AGENTS.md
+FULL_SPECIFICATION.md
