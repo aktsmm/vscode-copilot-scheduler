@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -10,6 +10,10 @@
     "type": "git",
     "url": "https://github.com/aktsmm/vscode-copilot-scheduler"
   },
+  "bugs": {
+    "url": "https://github.com/aktsmm/vscode-copilot-scheduler/issues"
+  },
+  "homepage": "https://github.com/aktsmm/vscode-copilot-scheduler#readme",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -205,6 +209,10 @@
           "type": "string",
           "default": "",
           "description": "%config.globalAgentsPath%"
+        },
+        "copilotScheduler.reportIssue": {
+          "type": "null",
+          "markdownDescription": "%config.reportIssue%"
         }
       }
     },

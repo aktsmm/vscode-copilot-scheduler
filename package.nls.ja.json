@@ -36,5 +36,6 @@
   "config.defaultScope.workspace": "ワークスペース（現在のワークスペースのみ）",
   "config.globalPromptsPath": "グローバルプロンプトテンプレートのカスタムパス。デフォルト: %APPDATA%\\Code\\User\\prompts",
   "config.globalAgentsPath": "グローバルエージェントファイル（*.agent.md）のカスタムパス。デフォルト: %APPDATA%\\Code\\User\\prompts",
+  "config.reportIssue": "🐛 バグを見つけた場合は [GitHub で報告](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
   "view.tasks": "スケジュールタスク"
 }

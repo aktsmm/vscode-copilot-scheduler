@@ -36,5 +36,6 @@
   "config.defaultScope.workspace": "Workspace (current workspace only)",
   "config.globalPromptsPath": "Custom path for global prompt templates. Default: %APPDATA%\\Code\\User\\prompts",
   "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: %APPDATA%\\Code\\User\\prompts",
+  "config.reportIssue": "🐛 Found a bug? [Report an issue on GitHub](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
   "view.tasks": "Scheduled Tasks"
 }
