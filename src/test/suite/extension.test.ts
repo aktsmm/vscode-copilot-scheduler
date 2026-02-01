@@ -26,17 +26,17 @@ suite("Extension Test Suite", () => {
     const commands = await vscode.commands.getCommands(true);
 
     const expectedCommands = [
-      "copilotSchedule.createTask",
-      "copilotSchedule.createTaskGui",
-      "copilotSchedule.listTasks",
-      "copilotSchedule.deleteTask",
-      "copilotSchedule.toggleTask",
-      "copilotSchedule.runNow",
-      "copilotSchedule.copyPrompt",
-      "copilotSchedule.editTask",
-      "copilotSchedule.duplicateTask",
-      "copilotSchedule.openSettings",
-      "copilotSchedule.showVersion",
+      "copilotScheduler.createTask",
+      "copilotScheduler.createTaskGui",
+      "copilotScheduler.listTasks",
+      "copilotScheduler.deleteTask",
+      "copilotScheduler.toggleTask",
+      "copilotScheduler.runNow",
+      "copilotScheduler.copyPrompt",
+      "copilotScheduler.editTask",
+      "copilotScheduler.duplicateTask",
+      "copilotScheduler.openSettings",
+      "copilotScheduler.showVersion",
     ];
 
     for (const cmd of expectedCommands) {

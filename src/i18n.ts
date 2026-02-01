@@ -9,7 +9,7 @@ import type { CronPreset } from "./types";
  * Check if the current language is Japanese
  */
 export function isJapanese(): boolean {
-  const config = vscode.workspace.getConfiguration("promptPilot");
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
   const lang = config.get<string>("language", "auto");
 
   if (lang === "ja") {
@@ -36,9 +36,15 @@ function t(en: string, ja: string): string {
 export const messages = {
   // ==================== General ====================
   extensionActive: () =>
-    t("Prompt Pilot is now active", "Prompt Pilot が有効になりました"),
+    t(
+      "Copilot Scheduler is now active",
+      "Copilot Scheduler が有効になりました",
+    ),
   extensionDeactivated: () =>
-    t("Prompt Pilot has been deactivated", "Prompt Pilot が無効になりました"),
+    t(
+      "Copilot Scheduler has been deactivated",
+      "Copilot Scheduler が無効になりました",
+    ),
   schedulerStarted: () =>
     t("Scheduler started", "スケジューラーが開始されました"),
   schedulerStopped: () =>
@@ -153,6 +159,19 @@ export const messages = {
   labelCronExpression: () => t("Cron Expression", "Cron式"),
   labelPreset: () => t("Preset", "プリセット"),
   labelCustom: () => t("Custom", "カスタム"),
+  labelAdvanced: () => t("Advanced", "詳細設定"),
+  labelFrequency: () => t("Frequency", "頻度"),
+  labelFrequencyMinute: () => t("Every X minutes", "X分ごと"),
+  labelFrequencyHourly: () => t("Hourly", "毎時"),
+  labelFrequencyDaily: () => t("Daily", "毎日"),
+  labelFrequencyWeekly: () => t("Weekly", "毎週"),
+  labelFrequencyMonthly: () => t("Monthly", "毎月"),
+  labelSelectDays: () => t("Select days", "曜日を選択"),
+  labelSelectTime: () => t("Time", "時刻"),
+  labelSelectHour: () => t("Hour", "時"),
+  labelSelectMinute: () => t("Minute", "分"),
+  labelSelectDay: () => t("Day of month", "日"),
+  labelInterval: () => t("Interval", "間隔"),
   labelAgent: () => t("Agent", "エージェント"),
   labelModel: () => t("Model", "モデル"),
   labelScope: () => t("Scope", "スコープ"),
@@ -183,13 +202,13 @@ export const messages = {
 
   // ==================== Version Info ====================
   versionInfo: (version: string) =>
-    t(`Prompt Pilot v${version}`, `Prompt Pilot v${version}`),
+    t(`Copilot Scheduler v${version}`, `Copilot Scheduler v${version}`),
 
   // ==================== Settings ====================
   openingSettings: () =>
     t(
-      "Opening Prompt Pilot settings...",
-      "Prompt Pilot の設定を開いています...",
+      "Opening Copilot Scheduler settings...",
+      "Copilot Scheduler の設定を開いています...",
     ),
 
   // ==================== Agents ====================
@@ -248,34 +267,28 @@ export const messages = {
 export function getCronPresets(): CronPreset[] {
   return [
     {
-      id: "weekday-9am",
-      name: t("Weekdays 9:00 AM", "平日 9:00"),
-      expression: "0 9 * * 1-5",
-      description: t("Monday to Friday at 9:00 AM", "月曜〜金曜の9時"),
+      id: "every-3min",
+      name: t("Every 3 Minutes", "3分ごと"),
+      expression: "*/3 * * * *",
+      description: t("Every 3 minutes", "3分ごと"),
     },
     {
-      id: "weekday-6pm",
-      name: t("Weekdays 6:00 PM", "平日 18:00"),
-      expression: "0 18 * * 1-5",
-      description: t("Monday to Friday at 6:00 PM", "月曜〜金曜の18時"),
+      id: "every-5min",
+      name: t("Every 5 Minutes", "5分ごと"),
+      expression: "*/5 * * * *",
+      description: t("Every 5 minutes", "5分ごと"),
     },
     {
-      id: "daily-9am",
-      name: t("Daily 9:00 AM", "毎日 9:00"),
-      expression: "0 9 * * *",
-      description: t("Every day at 9:00 AM", "毎日9時"),
+      id: "every-10min",
+      name: t("Every 10 Minutes", "10分ごと"),
+      expression: "*/10 * * * *",
+      description: t("Every 10 minutes", "10分ごと"),
     },
     {
-      id: "weekly-monday",
-      name: t("Every Monday", "毎週月曜"),
-      expression: "0 9 * * 1",
-      description: t("Every Monday at 9:00 AM", "毎週月曜日の9時"),
-    },
-    {
-      id: "monthly-1st",
-      name: t("1st of Month", "毎月1日"),
-      expression: "0 9 1 * *",
-      description: t("1st day of every month at 9:00 AM", "毎月1日の9時"),
+      id: "every-15min",
+      name: t("Every 15 Minutes", "15分ごと"),
+      expression: "*/15 * * * *",
+      description: t("Every 15 minutes", "15分ごと"),
     },
     {
       id: "every-30min",
@@ -288,6 +301,54 @@ export function getCronPresets(): CronPreset[] {
       name: t("Hourly", "毎時"),
       expression: "0 * * * *",
       description: t("Every hour at minute 0", "毎時0分"),
+    },
+    {
+      id: "daily-9am",
+      name: t("Daily 9:00 AM", "毎日 9:00"),
+      expression: "0 9 * * *",
+      description: t("Every day at 9:00 AM", "毎日9時"),
+    },
+    {
+      id: "daily-12pm",
+      name: t("Daily 12:00 PM", "毎日 12:00"),
+      expression: "0 12 * * *",
+      description: t("Every day at 12:00 PM", "毎日12時"),
+    },
+    {
+      id: "daily-6pm",
+      name: t("Daily 6:00 PM", "毎日 18:00"),
+      expression: "0 18 * * *",
+      description: t("Every day at 6:00 PM", "毎日18時"),
+    },
+    {
+      id: "weekday-9am",
+      name: t("Weekdays 9:00 AM", "平日 9:00"),
+      expression: "0 9 * * 1-5",
+      description: t("Monday to Friday at 9:00 AM", "月曜〜金曜の9時"),
+    },
+    {
+      id: "weekday-6pm",
+      name: t("Weekdays 6:00 PM", "平日 18:00"),
+      expression: "0 18 * * 1-5",
+      description: t("Monday to Friday at 6:00 PM", "月曜〜金曜の18時"),
+    },
+    {
+      id: "weekly-monday",
+      name: t("Every Monday 9:00 AM", "毎週月曜 9:00"),
+      expression: "0 9 * * 1",
+      description: t("Every Monday at 9:00 AM", "毎週月曜日の9時"),
+    },
+    {
+      id: "weekly-friday",
+      name: t("Every Friday 6:00 PM", "毎週金曜 18:00"),
+      expression: "0 18 * * 5",
+      description: t("Every Friday at 6:00 PM", "毎週金曜日の18時"),
+    },
+    {
+      id: "monthly-1st",
+      name: t("1st of Month 9:00 AM", "毎月1日 9:00"),
+      expression: "0 9 1 * *",
+      description: t("1st day of every month at 9:00 AM", "毎月1日の9時"),
     },
   ];
 }
@@ -360,4 +421,3 @@ export function formatCronForDisplay(expression: string): string {
   }
   return expression;
 }
-

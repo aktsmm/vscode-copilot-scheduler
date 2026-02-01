@@ -74,7 +74,7 @@ export class ScheduledTaskItem extends vscode.TreeItem {
 
     // Set command to edit task on click
     this.command = {
-      command: "promptPilot.editTask",
+      command: "copilotScheduler.editTask",
       title: messages.actionEdit(),
       arguments: [this],
     };
@@ -255,4 +255,3 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
     return undefined;
   }
 }
-

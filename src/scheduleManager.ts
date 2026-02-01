@@ -61,6 +61,8 @@ export class ScheduleManager {
       [],
     );
 
+    let needsSave = false;
+
     for (const task of savedTasks) {
       // Restore Date objects from JSON serialization
       task.createdAt = new Date(task.createdAt);
@@ -80,10 +82,29 @@ export class ScheduleManager {
         task.promptSource = "inline";
       }
 
-      // Recalculate nextRun
-      task.nextRun = this.getNextRun(task.cronExpression);
+      // Recalculate nextRun for enabled tasks (always use current time)
+      if (task.enabled) {
+        const newNextRun = this.getNextRun(task.cronExpression);
+        if (
+          newNextRun &&
+          (!task.nextRun || task.nextRun.getTime() !== newNextRun.getTime())
+        ) {
+          task.nextRun = newNextRun;
+          needsSave = true;
+        }
+      } else {
+        if (task.nextRun !== undefined) {
+          task.nextRun = undefined;
+          needsSave = true;
+        }
+      }
 
       this.tasks.set(task.id, task);
+    }
+
+    // Save if any changes were made
+    if (needsSave) {
+      void this.saveTasks();
     }
   }
 
@@ -109,7 +130,7 @@ export class ScheduleManager {
    * Get timezone from configuration
    */
   private getTimeZone(): string | undefined {
-    const config = vscode.workspace.getConfiguration("promptPilot");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const tz = config.get<string>("timezone", "");
     return tz || undefined;
   }
@@ -190,7 +211,7 @@ export class ScheduleManager {
     }
 
     // Get default scope from configuration
-    const config = vscode.workspace.getConfiguration("promptPilot");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
 
     const task: ScheduledTask = {
@@ -258,6 +279,7 @@ export class ScheduleManager {
     }
 
     const now = new Date();
+    let nextRunWasSet = false;
 
     // Apply updates
     if (updates.name !== undefined) {
@@ -266,6 +288,7 @@ export class ScheduleManager {
     if (updates.cronExpression !== undefined) {
       task.cronExpression = updates.cronExpression;
       task.nextRun = this.getNextRun(updates.cronExpression, now);
+      nextRunWasSet = true;
     }
     if (updates.prompt !== undefined) {
       task.prompt = updates.prompt;
@@ -292,6 +315,17 @@ export class ScheduleManager {
     }
     if (updates.promptPath !== undefined) {
       task.promptPath = updates.promptPath;
+    }
+
+    // One-time immediate scheduling on update
+    if (updates.runFirstInOneMinute) {
+      task.nextRun = new Date(now.getTime() + 60 * 1000);
+      nextRunWasSet = true;
+    }
+
+    // Ensure nextRun exists after updates that didn't set it
+    if (!nextRunWasSet && !task.nextRun) {
+      task.nextRun = this.getNextRun(task.cronExpression, now);
     }
 
     task.updatedAt = now;
@@ -322,6 +356,31 @@ export class ScheduleManager {
     }
 
     task.enabled = !task.enabled;
+    task.updatedAt = new Date();
+
+    // Recalculate nextRun if being enabled
+    if (task.enabled) {
+      task.nextRun = this.getNextRun(task.cronExpression);
+    }
+
+    await this.saveTasks();
+
+    return task;
+  }
+
+  /**
+   * Set task enabled state explicitly
+   */
+  async setTaskEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<ScheduledTask | undefined> {
+    const task = this.tasks.get(id);
+    if (!task) {
+      return undefined;
+    }
+
+    task.enabled = enabled;
     task.updatedAt = new Date();
 
     // Recalculate nextRun if being enabled
@@ -416,7 +475,7 @@ export class ScheduleManager {
    * Check and execute tasks that are due
    */
   private async checkAndExecuteTasks(): Promise<void> {
-    const config = vscode.workspace.getConfiguration("promptPilot");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const enabled = config.get<boolean>("enabled", true);
 
     if (!enabled) {
@@ -493,4 +552,3 @@ export class ScheduleManager {
     }
   }
 }
-

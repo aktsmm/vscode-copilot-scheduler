@@ -6,6 +6,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { notifyInfo } from "./extension";
 import type {
   AgentInfo,
   ModelInfo,
@@ -47,7 +48,7 @@ export class CopilotExecutor {
     }
 
     // Get chat session behavior
-    const config = vscode.workspace.getConfiguration("copilotSchedule");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
 
     try {
@@ -65,12 +66,17 @@ export class CopilotExecutor {
       // Try to set model if specified
       if (options?.model && options.model !== "") {
         try {
+          console.log(
+            `[CopilotScheduler] Attempting to select model: ${options.model}`,
+          );
           await vscode.commands.executeCommand(
             "workbench.action.chat.selectModel",
             options.model,
           );
+          console.log(`[CopilotScheduler] Model selection command executed`);
           await this.delay(100);
-        } catch {
+        } catch (error) {
+          console.error(`[CopilotScheduler] Model selection failed:`, error);
           // Model selection may not be available, continue without it
         }
       }
@@ -93,7 +99,7 @@ export class CopilotExecutor {
 
       if (action === messages.actionCopyPrompt()) {
         await vscode.env.clipboard.writeText(fullPrompt);
-        vscode.window.showInformationMessage(messages.promptCopied());
+        notifyInfo(messages.promptCopied());
       }
 
       throw error;
@@ -276,12 +282,54 @@ export class CopilotExecutor {
   }
 
   /**
-   * Get all agents (built-in + custom)
+   * Get global agents from VS Code User prompts folder
+   */
+  static getGlobalAgents(): AgentInfo[] {
+    const agents: AgentInfo[] = [];
+
+    // Get global agents path from settings or default
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const customPath = config.get<string>("globalAgentsPath", "");
+    const defaultPath = process.env.APPDATA
+      ? path.join(process.env.APPDATA, "Code", "User", "prompts")
+      : "";
+
+    const globalPath = customPath || defaultPath;
+    if (!globalPath || !fs.existsSync(globalPath)) {
+      return agents;
+    }
+
+    try {
+      const files = fs.readdirSync(globalPath);
+      for (const file of files) {
+        if (file.endsWith(".agent.md")) {
+          const agentName = file.replace(".agent.md", "");
+          agents.push({
+            id: agentName,
+            name: agentName,
+            description: isJapanese()
+              ? "グローバルエージェント"
+              : "Global agent",
+            isCustom: true,
+            filePath: path.join(globalPath, file),
+          });
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+
+    return agents;
+  }
+
+  /**
+   * Get all agents (built-in + custom + global)
    */
   static async getAllAgents(): Promise<AgentInfo[]> {
     const builtIn = CopilotExecutor.getBuiltInAgents();
     const custom = await CopilotExecutor.getCustomAgents();
-    return [...builtIn, ...custom];
+    const global = CopilotExecutor.getGlobalAgents();
+    return [...builtIn, ...custom, ...global];
   }
 
   /**

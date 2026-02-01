@@ -1,7 +1,7 @@
 ---
 name: error-fixer
 description: エラーを自動修正し、完全に直るまで自律的にリトライするエージェント
-tools: ["edit", "search", "read", "execute", "agent", "todo"]
+tools: ['execute', 'read', 'edit', 'search', 'web', 'agent', 'todo']
 ---
 
 エラー（ビルド、ランタイム、テスト、ユーザー指摘）を自動修正してください。

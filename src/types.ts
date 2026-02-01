@@ -208,7 +208,7 @@ export interface CronPreset {
  */
 export interface TaskAction {
   /** Action type */
-  action: "run" | "toggle" | "delete" | "edit" | "copy";
+  action: "run" | "toggle" | "delete" | "edit" | "copy" | "duplicate";
 
   /** Task ID */
   taskId: string;
@@ -278,6 +278,7 @@ export type WebviewToExtensionMessage =
   | { type: "updateTask"; taskId: string; data: Partial<CreateTaskInput> }
   | { type: "testPrompt"; prompt: string; agent?: string; model?: string }
   | { type: "copyPrompt"; prompt: string }
+  | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
   | { type: "refreshPrompts" }
   | { type: "runTask"; taskId: string }

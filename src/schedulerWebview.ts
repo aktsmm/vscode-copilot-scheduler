@@ -6,6 +6,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { notifyInfo, notifyError } from "./extension";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -15,6 +16,7 @@ import type {
   PromptTemplate,
   TaskScope,
   PromptSource,
+  CronPreset,
   WebviewToExtensionMessage,
 } from "./types";
 import { CopilotExecutor } from "./copilotExecutor";
@@ -62,8 +64,8 @@ export class SchedulerWebview {
     } else {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
-        "promptPilot",
-        "Prompt Pilot",
+        "copilotScheduler",
+        "Copilot Scheduler",
         vscode.ViewColumn.One,
         {
           enableScripts: true,
@@ -79,10 +81,15 @@ export class SchedulerWebview {
       };
 
       // Set HTML content
-      this.panel.webview.html = this.getWebviewContent(
+      const htmlContent = this.getWebviewContent(
         this.panel.webview,
         tasks,
+        this.cachedAgents,
+        this.cachedModels,
+        this.cachedPromptTemplates,
       );
+
+      this.panel.webview.html = htmlContent;
 
       // Handle messages from webview
       this.panel.webview.onDidReceiveMessage(
@@ -112,6 +119,18 @@ export class SchedulerWebview {
   }
 
   /**
+   * Show an error message inside the webview
+   */
+  static showError(errorMessage: string): void {
+    if (this.panel) {
+      this.panel.webview.postMessage({
+        type: "showError",
+        text: errorMessage,
+      });
+    }
+  }
+
+  /**
    * Refresh language in the webview
    */
   static refreshLanguage(tasks: ScheduledTask[]): void {
@@ -120,6 +139,9 @@ export class SchedulerWebview {
       this.panel.webview.html = this.getWebviewContent(
         this.panel.webview,
         tasks,
+        this.cachedAgents,
+        this.cachedModels,
+        this.cachedPromptTemplates,
       );
     }
   }
@@ -190,7 +212,7 @@ export class SchedulerWebview {
 
       case "copyPrompt":
         await vscode.env.clipboard.writeText(message.prompt);
-        vscode.window.showInformationMessage(messages.promptCopied());
+        notifyInfo(messages.promptCopied());
         break;
 
       case "refreshAgents":
@@ -244,6 +266,15 @@ export class SchedulerWebview {
         }
         break;
 
+      case "duplicateTask":
+        if (this.onTaskActionCallback) {
+          this.onTaskActionCallback({
+            action: "duplicate",
+            taskId: message.taskId,
+          });
+        }
+        break;
+
       case "loadPromptTemplate":
         await this.loadPromptTemplateContent(message.path, message.source);
         break;
@@ -272,12 +303,33 @@ export class SchedulerWebview {
    * Refresh agents and models cache
    */
   private static async refreshAgentsAndModels(force = false): Promise<void> {
-    if (!force && this.cachedAgents.length > 0) {
+    if (
+      !force &&
+      this.cachedAgents.length > 0 &&
+      this.cachedModels.length > 0
+    ) {
       return;
     }
 
-    this.cachedAgents = await CopilotExecutor.getAllAgents();
-    this.cachedModels = await CopilotExecutor.getAvailableModels();
+    try {
+      this.cachedAgents = await CopilotExecutor.getAllAgents();
+    } catch {
+      this.cachedAgents = CopilotExecutor.getBuiltInAgents();
+    }
+
+    try {
+      this.cachedModels = await CopilotExecutor.getAvailableModels();
+    } catch {
+      this.cachedModels = CopilotExecutor.getFallbackModels();
+    }
+
+    // Ensure we always have at least fallback data
+    if (this.cachedAgents.length === 0) {
+      this.cachedAgents = CopilotExecutor.getBuiltInAgents();
+    }
+    if (this.cachedModels.length === 0) {
+      this.cachedModels = CopilotExecutor.getFallbackModels();
+    }
   }
 
   /**
@@ -323,16 +375,14 @@ export class SchedulerWebview {
     const globalPath = this.getGlobalPromptsPath();
     if (globalPath) {
       try {
-        if (fs.existsSync(globalPath)) {
-          const files = fs.readdirSync(globalPath);
-          for (const file of files) {
-            if (file.endsWith(".md")) {
-              templates.push({
-                path: path.join(globalPath, file),
-                name: file.replace(".md", ""),
-                source: "global",
-              });
-            }
+        const files = fs.readdirSync(globalPath);
+        for (const file of files) {
+          if (file.endsWith(".md")) {
+            templates.push({
+              path: path.join(globalPath, file),
+              name: file.replace(".md", ""),
+              source: "global",
+            });
           }
         }
       } catch {
@@ -347,35 +397,18 @@ export class SchedulerWebview {
    * Get global prompts path
    */
   private static getGlobalPromptsPath(): string | undefined {
-    const config = vscode.workspace.getConfiguration("promptPilot");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const customPath = config.get<string>("globalPromptsPath", "");
+    const defaultPath = process.env.APPDATA
+      ? path.join(process.env.APPDATA, "Code", "User", "prompts")
+      : "";
 
-    if (customPath) {
-      return customPath;
-    }
-
-    // Default paths
-    const homeDir = process.env.HOME || process.env.USERPROFILE;
-    if (!homeDir) {
+    const targetPath = customPath || defaultPath;
+    if (!targetPath) {
       return undefined;
     }
 
-    // Try VS Code user prompts path
-    const appData = process.env.APPDATA;
-    if (appData) {
-      const vscodePromptsPath = path.join(appData, "Code", "User", "prompts");
-      if (fs.existsSync(vscodePromptsPath)) {
-        return vscodePromptsPath;
-      }
-    }
-
-    // Try ~/.github/prompts
-    const githubPromptsPath = path.join(homeDir, ".github", "prompts");
-    if (fs.existsSync(githubPromptsPath)) {
-      return githubPromptsPath;
-    }
-
-    return undefined;
+    return fs.existsSync(targetPath) ? targetPath : undefined;
   }
 
   /**
@@ -395,7 +428,7 @@ export class SchedulerWebview {
         });
       }
     } catch {
-      vscode.window.showErrorMessage(messages.templateLoadError());
+      notifyError(messages.templateLoadError());
     }
   }
 
@@ -418,12 +451,21 @@ export class SchedulerWebview {
   private static getWebviewContent(
     webview: vscode.Webview,
     tasks: ScheduledTask[],
+    agents: AgentInfo[],
+    models: ModelInfo[],
+    promptTemplates: PromptTemplate[],
   ): string {
     const nonce = this.getNonce();
     const isJa = isJapanese();
     const presets = getCronPresets();
-    const config = vscode.workspace.getConfiguration("promptPilot");
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const initialTasks = Array.isArray(tasks) ? tasks : [];
+    const initialAgents = Array.isArray(agents) ? agents : [];
+    const initialModels = Array.isArray(models) ? models : [];
+    const initialTemplates = Array.isArray(promptTemplates)
+      ? promptTemplates
+      : [];
 
     // Localized strings
     const strings = {
@@ -441,6 +483,9 @@ export class SchedulerWebview {
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
       labelModel: messages.labelModel(),
+      labelModelNote: isJa
+        ? "モデルの選択はプレビュー機能で、環境によって反映されない場合があります。Copilot Chat パネルのモデルも確認してください。"
+        : "Model selection is a preview feature and may not apply in all environments. If needed, pick the model directly in the Copilot Chat panel.",
       labelScope: messages.labelScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
       labelScopeWorkspace: messages.labelScopeWorkspace(),
@@ -454,6 +499,7 @@ export class SchedulerWebview {
       placeholderTaskName: messages.placeholderTaskName(),
       placeholderPrompt: messages.placeholderPrompt(),
       placeholderCron: messages.placeholderCron(),
+      invalidCronExpression: messages.invalidCronExpression(),
       actionCreate: messages.actionCreate(),
       actionSave: messages.actionSave(),
       actionTestRun: messages.actionTestRun(),
@@ -462,8 +508,101 @@ export class SchedulerWebview {
       actionDelete: messages.actionDelete(),
       actionRefresh: messages.actionRefresh(),
       actionCopyPrompt: messages.actionCopyPrompt(),
+      actionDuplicate: messages.actionDuplicate(),
       noTasksFound: messages.noTasksFound(),
-      confirmDelete: (name: string) => messages.confirmDelete(name),
+      confirmDeleteTemplate: messages.confirmDelete("{name}"),
+      labelAdvanced: messages.labelAdvanced(),
+      labelFrequency: messages.labelFrequency(),
+      labelFrequencyMinute: messages.labelFrequencyMinute(),
+      labelFrequencyHourly: messages.labelFrequencyHourly(),
+      labelFrequencyDaily: messages.labelFrequencyDaily(),
+      labelFrequencyWeekly: messages.labelFrequencyWeekly(),
+      labelFrequencyMonthly: messages.labelFrequencyMonthly(),
+      labelSelectDays: messages.labelSelectDays(),
+      labelSelectTime: messages.labelSelectTime(),
+      labelInterval: messages.labelInterval(),
+      daySun: isJa ? "日" : "Sun",
+      dayMon: isJa ? "月" : "Mon",
+      dayTue: isJa ? "火" : "Tue",
+      dayWed: isJa ? "水" : "Wed",
+      dayThu: isJa ? "木" : "Thu",
+      dayFri: isJa ? "金" : "Fri",
+      daySat: isJa ? "土" : "Sat",
+      labelFriendlyBuilder: isJa ? "かんたんCron" : "Friendly cron builder",
+      labelFriendlyGenerate: isJa ? "生成する" : "Generate",
+      labelFriendlyPreview: isJa ? "プレビュー" : "Preview",
+      labelFriendlyFallback: isJa
+        ? "このCronの説明はありません"
+        : "Preview unavailable for this expression",
+      labelFriendlySelect: isJa ? "頻度を選択" : "Select frequency",
+      labelEveryNMinutes: isJa ? "N分ごと" : "Every N minutes",
+      labelHourlyAtMinute: isJa ? "毎時 指定分" : "Hourly at minute",
+      labelDailyAtTime: isJa ? "毎日 時刻" : "Daily at time",
+      labelWeeklyAtTime: isJa ? "毎週 曜日+時刻" : "Weekly at day/time",
+      labelMonthlyAtTime: isJa ? "毎月 日付+時刻" : "Monthly on day/time",
+      labelMinute: isJa ? "分" : "Minute",
+      labelHour: isJa ? "時" : "Hour",
+      labelDayOfMonth: isJa ? "実行日" : "Day of month",
+      labelDayOfWeek: isJa ? "曜日" : "Day of week",
+      labelOpenInGuru: isJa ? "crontab.guruを開く" : "Open in crontab.guru",
+    };
+
+    const extraPresets: CronPreset[] = [
+      {
+        id: "extra-hourly-00",
+        expression: "0 * * * *",
+        name: isJa ? "毎時" : "Every hour",
+        description: isJa ? "毎時 00 分" : "Top of every hour",
+      },
+      {
+        id: "extra-daily-9",
+        expression: "0 9 * * *",
+        name: isJa ? "毎日 09:00" : "Daily 09:00",
+        description: isJa ? "毎日 09:00 に実行" : "Run every day at 09:00",
+      },
+      {
+        id: "extra-weekday-9",
+        expression: "0 9 * * 1-5",
+        name: isJa ? "平日 09:00" : "Weekdays 09:00",
+        description: isJa ? "平日 09:00" : "Weekdays at 09:00",
+      },
+      {
+        id: "extra-monthly-1st-9",
+        expression: "0 9 1 * *",
+        name: isJa ? "毎月1日 09:00" : "Monthly 1st 09:00",
+        description: isJa
+          ? "毎月1日に実行"
+          : "Run on the 1st each month at 09:00",
+      },
+    ];
+
+    const allPresets = presets.concat(extraPresets);
+
+    const serializeForWebview = (value: unknown): string => {
+      const json = JSON.stringify(value ?? null) ?? "null";
+      // Escape < and U+2028/U+2029 to avoid breaking the surrounding <script> via document.write
+      return json
+        .replace(/</g, "\\u003c")
+        .replace(/\u2028/g, "\\u2028")
+        .replace(/\u2029/g, "\\u2029");
+    };
+
+    // Helper to escape HTML attributes
+    const escapeHtmlAttr = (str: string): string => {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    };
+
+    const initialData = {
+      tasks: initialTasks,
+      agents: initialAgents,
+      models: initialModels,
+      promptTemplates: initialTemplates,
+      strings,
     };
 
     return `<!DOCTYPE html>
@@ -472,7 +611,7 @@ export class SchedulerWebview {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} https:; font-src ${webview.cspSource};">
-  <title>Prompt Pilot</title>
+  <title>Copilot Scheduler</title>
   <style>
     :root {
       --vscode-font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
@@ -645,6 +784,15 @@ export class SchedulerWebview {
       font-size: 15px;
     }
     
+    .task-name.clickable, .task-status {
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    
+    .task-name.clickable:hover, .task-status:hover {
+      opacity: 0.7;
+    }
+    
     .task-status {
       padding: 2px 8px;
       border-radius: 10px;
@@ -724,12 +872,60 @@ export class SchedulerWebview {
     .inline-group .form-group {
       flex: 1;
     }
+
+    .friendly-cron {
+      margin-top: 10px;
+      padding: 12px;
+      border: 1px dashed var(--vscode-panel-border);
+      border-radius: 6px;
+      background-color: var(--vscode-editorWidget-background);
+    }
+
+    .friendly-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .friendly-grid .form-group {
+      flex: 1 1 160px;
+      margin-bottom: 8px;
+    }
+
+    .friendly-field {
+      display: none;
+    }
+
+    .friendly-field.visible {
+      display: block;
+    }
+
+    .friendly-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .cron-preview {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      flex-wrap: wrap;
+    }
+
+    .cron-preview strong {
+      color: var(--vscode-foreground);
+    }
   </style>
 </head>
 <body>
   <div class="tabs">
-    <button class="tab-button active" data-tab="create">${strings.tabCreate}</button>
-    <button class="tab-button" data-tab="list">${strings.tabList}</button>
+    <button type="button" class="tab-button active" data-tab="create">${strings.tabCreate}</button>
+    <button type="button" class="tab-button" data-tab="list">${strings.tabList}</button>
   </div>
   
   <div id="create-tab" class="tab-content active">
@@ -775,26 +971,79 @@ export class SchedulerWebview {
         <label>${strings.labelSchedule}</label>
         <div class="preset-select">
           <select id="cron-preset">
-            <option value="">${strings.labelCustom}</option>
-            ${presets.map((p) => `<option value="${p.expression}">${p.name}</option>`).join("")}
+            <option value="">${escapeHtmlAttr(strings.labelCustom)}</option>
+            ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtmlAttr(p.name)}</option>`).join("")}
           </select>
         </div>
-        <input type="text" id="cron-expression" placeholder="${strings.placeholderCron}">
+        <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}">
+        <div class="cron-preview">
+          <strong>${strings.labelFriendlyPreview}:</strong>
+          <span id="cron-preview-text">${strings.labelFriendlyFallback}</span>
+          <button type="button" class="btn-secondary btn-icon" id="open-guru-btn">${strings.labelOpenInGuru}</button>
+        </div>
+        <div class="friendly-cron">
+          <div class="section-title">${strings.labelFriendlyBuilder}</div>
+          <div class="friendly-grid">
+            <div class="form-group">
+              <label for="friendly-frequency">${strings.labelFrequency}</label>
+              <select id="friendly-frequency">
+                <option value="">-- ${strings.labelFriendlySelect} --</option>
+                <option value="every-n">${strings.labelEveryNMinutes}</option>
+                <option value="hourly">${strings.labelHourlyAtMinute}</option>
+                <option value="daily">${strings.labelDailyAtTime}</option>
+                <option value="weekly">${strings.labelWeeklyAtTime}</option>
+                <option value="monthly">${strings.labelMonthlyAtTime}</option>
+              </select>
+            </div>
+            <div class="form-group friendly-field" data-field="interval">
+              <label for="friendly-interval">${strings.labelInterval}</label>
+              <input type="number" id="friendly-interval" min="1" max="59" value="5">
+            </div>
+            <div class="form-group friendly-field" data-field="minute">
+              <label for="friendly-minute">${strings.labelMinute}</label>
+              <input type="number" id="friendly-minute" min="0" max="59" value="0">
+            </div>
+            <div class="form-group friendly-field" data-field="hour">
+              <label for="friendly-hour">${strings.labelHour}</label>
+              <input type="number" id="friendly-hour" min="0" max="23" value="9">
+            </div>
+            <div class="form-group friendly-field" data-field="dow">
+              <label for="friendly-dow">${strings.labelDayOfWeek}</label>
+              <select id="friendly-dow">
+                <option value="0">${strings.daySun}</option>
+                <option value="1">${strings.dayMon}</option>
+                <option value="2">${strings.dayTue}</option>
+                <option value="3">${strings.dayWed}</option>
+                <option value="4">${strings.dayThu}</option>
+                <option value="5">${strings.dayFri}</option>
+                <option value="6">${strings.daySat}</option>
+              </select>
+            </div>
+            <div class="form-group friendly-field" data-field="dom">
+              <label for="friendly-dom">${strings.labelDayOfMonth}</label>
+              <input type="number" id="friendly-dom" min="1" max="31" value="1">
+            </div>
+          </div>
+          <div class="friendly-actions">
+            <button type="button" class="btn-secondary" id="friendly-generate">${strings.labelFriendlyGenerate}</button>
+          </div>
+        </div>
       </div>
       
       <div class="inline-group">
         <div class="form-group">
           <label for="agent-select">${strings.labelAgent}</label>
           <select id="agent-select">
-            <option value="">Loading...</option>
+            ${initialAgents.length > 0 ? '<option value="">-- Select Agent --</option>' + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtmlAttr(a.name || "")}</option>`).join("") : '<option value="">Loading...</option>'}
           </select>
         </div>
         
         <div class="form-group">
           <label for="model-select">${strings.labelModel}</label>
           <select id="model-select">
-            <option value="">Loading...</option>
+            ${initialModels.length > 0 ? '<option value="">-- Select Model --</option>' + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtmlAttr(m.name || "")}</option>`).join("") : '<option value="">Loading...</option>'}
           </select>
+          <p class="note">${strings.labelModelNote}</p>
         </div>
       </div>
       
@@ -835,210 +1084,632 @@ export class SchedulerWebview {
     </div>
   </div>
   
+  <script id="initial-data" type="application/json">${serializeForWebview(initialData)}</script>
+
   <script nonce="${nonce}">
     (function() {
-      const vscode = acquireVsCodeApi();
+      var vscode = acquireVsCodeApi();
       
-      // Initial data
-      let tasks = ${JSON.stringify(tasks)};
-      let agents = [];
-      let models = [];
-      let promptTemplates = [];
-      let editingTaskId = null;
+      // Initial data (JSON from inline script tag)
+      var initialData = {};
+      try {
+        var initialScript = document.getElementById('initial-data');
+        if (initialScript && initialScript.textContent) {
+          initialData = JSON.parse(initialScript.textContent) || {};
+        }
+      } catch (e) {
+        initialData = {};
+      }
+
+      var tasks = Array.isArray(initialData.tasks) ? initialData.tasks : [];
+      var agents = Array.isArray(initialData.agents) ? initialData.agents : [];
+      var models = Array.isArray(initialData.models) ? initialData.models : [];
+      var promptTemplates = Array.isArray(initialData.promptTemplates)
+        ? initialData.promptTemplates
+        : [];
+      var editingTaskId = null;
+
+      var strings = initialData.strings || {};
+      var lastRenderedTasksHtml = '';
       
-      const strings = ${JSON.stringify(strings)};
+      // DOM elements - with null safety
+      var taskForm = document.getElementById('task-form');
+      var taskList = document.getElementById('task-list');
+      var editTaskIdInput = document.getElementById('edit-task-id');
+      var submitBtn = document.getElementById('submit-btn');
+      var testBtn = document.getElementById('test-btn');
+      var refreshBtn = document.getElementById('refresh-btn');
+      var cronPreset = document.getElementById('cron-preset');
+      var cronExpression = document.getElementById('cron-expression');
+      var agentSelect = document.getElementById('agent-select');
+      var modelSelect = document.getElementById('model-select');
+      var templateSelect = document.getElementById('template-select');
+      var templateSelectGroup = document.getElementById('template-select-group');
+      var promptGroup = document.getElementById('prompt-group');
+      var friendlyFrequency = document.getElementById('friendly-frequency');
+      var friendlyInterval = document.getElementById('friendly-interval');
+      var friendlyMinute = document.getElementById('friendly-minute');
+      var friendlyHour = document.getElementById('friendly-hour');
+      var friendlyDow = document.getElementById('friendly-dow');
+      var friendlyDom = document.getElementById('friendly-dom');
+      var friendlyGenerate = document.getElementById('friendly-generate');
+      var openGuruBtn = document.getElementById('open-guru-btn');
+      var cronPreviewText = document.getElementById('cron-preview-text');
       
-      // DOM elements
-      const tabButtons = document.querySelectorAll('.tab-button');
-      const tabContents = document.querySelectorAll('.tab-content');
-      const taskForm = document.getElementById('task-form');
-      const taskList = document.getElementById('task-list');
-      const editTaskIdInput = document.getElementById('edit-task-id');
-      const submitBtn = document.getElementById('submit-btn');
-      const testBtn = document.getElementById('test-btn');
-      const refreshBtn = document.getElementById('refresh-btn');
-      const cronPreset = document.getElementById('cron-preset');
-      const cronExpression = document.getElementById('cron-expression');
-      const agentSelect = document.getElementById('agent-select');
-      const modelSelect = document.getElementById('model-select');
-      const templateSelect = document.getElementById('template-select');
-      const templateSelectGroup = document.getElementById('template-select-group');
-      const promptGroup = document.getElementById('prompt-group');
-      const promptSourceRadios = document.querySelectorAll('input[name="prompt-source"]');
-      
-      // Tab switching
-      tabButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-          const tab = btn.dataset.tab;
-          tabButtons.forEach(b => b.classList.remove('active'));
-          tabContents.forEach(c => c.classList.remove('active'));
-          btn.classList.add('active');
-          document.getElementById(tab + '-tab').classList.add('active');
+      // Tab switching function
+      function switchTab(tabName) {
+        document.querySelectorAll('.tab-button').forEach(function(b) { 
+          b.classList.remove('active'); 
         });
+        document.querySelectorAll('.tab-content').forEach(function(c) { 
+          c.classList.remove('active'); 
+        });
+        var targetBtn = document.querySelector('.tab-button[data-tab="' + tabName + '"]');
+        var targetContent = document.getElementById(tabName + '-tab');
+        if (targetBtn) targetBtn.classList.add('active');
+        if (targetContent) targetContent.classList.add('active');
+      }
+      
+      // Use event delegation for tab buttons (more reliable)
+      document.addEventListener('click', function(e) {
+        var target = e.target;
+        if (target && target.classList && target.classList.contains('tab-button')) {
+          e.preventDefault();
+          e.stopPropagation();
+          var tabName = target.getAttribute('data-tab');
+          if (tabName) {
+            switchTab(tabName);
+          }
+        }
       });
       
-      // Prompt source handling
-      promptSourceRadios.forEach(radio => {
-        radio.addEventListener('change', () => {
-          const source = radio.value;
-          if (source === 'inline') {
-            templateSelectGroup.style.display = 'none';
-            promptGroup.style.display = 'block';
-          } else {
-            templateSelectGroup.style.display = 'block';
-            promptGroup.style.display = 'block';
-            updateTemplateOptions(source);
+      // Use event delegation for prompt source radio buttons
+      document.addEventListener('change', function(e) {
+        var target = e.target;
+        if (target && target.name === 'prompt-source' && target.checked) {
+          applyPromptSource(target.value);
+        }
+      });
+      
+      // Cron preset handling with null check
+      if (cronPreset && cronExpression) {
+        cronPreset.addEventListener('change', function() {
+          if (cronPreset.value) {
+            cronExpression.value = cronPreset.value;
+          }
+          updateCronPreview();
+        });
+        
+        cronExpression.addEventListener('input', function() {
+          cronPreset.value = '';
+          updateCronPreview();
+        });
+      }
+
+      if (friendlyFrequency) {
+        friendlyFrequency.addEventListener('change', function() {
+          updateFriendlyVisibility();
+        });
+      }
+
+      if (friendlyGenerate) {
+        friendlyGenerate.addEventListener('click', function() {
+          generateCronFromFriendly();
+        });
+      }
+
+      if (openGuruBtn) {
+        openGuruBtn.addEventListener('click', function() {
+          var expression = cronExpression ? cronExpression.value.trim() : '';
+          if (!expression) {
+            expression = '* * * * *';
+          }
+          var targetUrl = 'https://crontab.guru/#' + encodeURIComponent(expression);
+          window.open(targetUrl, '_blank');
+        });
+      }
+      
+      // Template selection with null check
+      if (templateSelect) {
+        templateSelect.addEventListener('change', function() {
+          var selectedPath = templateSelect.value;
+          if (selectedPath) {
+            var sourceEl = document.querySelector('input[name="prompt-source"]:checked');
+            var source = sourceEl ? sourceEl.value : 'inline';
+            vscode.postMessage({
+              type: 'loadPromptTemplate',
+              path: selectedPath,
+              source: source
+            });
           }
         });
-      });
+      }
       
-      // Cron preset handling
-      cronPreset.addEventListener('change', () => {
-        if (cronPreset.value) {
-          cronExpression.value = cronPreset.value;
+      // Form submission with null checks
+      if (taskForm) {
+        taskForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+          
+          var taskNameEl = document.getElementById('task-name');
+          var promptTextEl = document.getElementById('prompt-text');
+          var scopeEl = document.querySelector('input[name="scope"]:checked');
+          var promptSourceEl = document.querySelector('input[name="prompt-source"]:checked');
+          var runFirstEl = document.getElementById('run-first');
+          
+          var taskData = {
+            name: taskNameEl ? taskNameEl.value : '',
+            prompt: promptTextEl ? promptTextEl.value : '',
+            cronExpression: cronExpression ? cronExpression.value : '',
+            agent: agentSelect ? agentSelect.value : '',
+            model: modelSelect ? modelSelect.value : '',
+            scope: scopeEl ? scopeEl.value : 'workspace',
+            promptSource: promptSourceEl ? promptSourceEl.value : 'inline',
+            promptPath: templateSelect ? templateSelect.value : '',
+            runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
+            enabled: true
+          };
+
+          var cronValue = (taskData.cronExpression || '').trim();
+          if (!cronValue) {
+            window.alert(strings.invalidCronExpression || 'Invalid cron expression');
+            return;
+          }
+          
+          if (editingTaskId) {
+            vscode.postMessage({
+              type: 'updateTask',
+              taskId: editingTaskId,
+              data: taskData
+            });
+          } else {
+            vscode.postMessage({
+              type: 'createTask',
+              data: taskData
+            });
+          }
+          
+          // Reset form and switch to list tab
+          resetForm();
+          switchTab('list');
+        });
+      }
+      
+      // Test button with null check
+      if (testBtn) {
+        testBtn.addEventListener('click', function() {
+          var promptTextEl = document.getElementById('prompt-text');
+          var prompt = promptTextEl ? promptTextEl.value : '';
+          var agent = agentSelect ? agentSelect.value : '';
+          var model = modelSelect ? modelSelect.value : '';
+          
+          if (prompt) {
+            vscode.postMessage({
+              type: 'testPrompt',
+              prompt: prompt,
+              agent: agent,
+              model: model
+            });
+          }
+        });
+      }
+      
+      // Refresh button with null check
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', function() {
+          vscode.postMessage({ type: 'refreshAgents' });
+          vscode.postMessage({ type: 'refreshPrompts' });
+        });
+      }
+      
+      // Task action delegation (single listener)
+      function resolveActionTarget(node) {
+        var el = node && node.nodeType === 3 ? node.parentElement : node;
+        while (el && el !== document.body) {
+          if (el.hasAttribute && el.hasAttribute('data-action') && el.hasAttribute('data-id')) {
+            return el;
+          }
+          el = el.parentElement;
         }
-      });
-      
-      cronExpression.addEventListener('input', () => {
-        cronPreset.value = '';
-      });
-      
-      // Template selection
-      templateSelect.addEventListener('change', () => {
-        const selectedPath = templateSelect.value;
-        if (selectedPath) {
-          const source = document.querySelector('input[name="prompt-source"]:checked').value;
-          vscode.postMessage({
-            type: 'loadPromptTemplate',
-            path: selectedPath,
-            source: source
-          });
+        return null;
+      }
+
+      document.addEventListener('click', function(e) {
+        var actionTarget = resolveActionTarget(e.target);
+        if (!actionTarget) {
+          return;
         }
-      });
-      
-      // Form submission
-      taskForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        
-        const taskData = {
-          name: document.getElementById('task-name').value,
-          prompt: document.getElementById('prompt-text').value,
-          cronExpression: cronExpression.value,
-          agent: agentSelect.value,
-          model: modelSelect.value,
-          scope: document.querySelector('input[name="scope"]:checked').value,
-          promptSource: document.querySelector('input[name="prompt-source"]:checked').value,
-          promptPath: templateSelect.value,
-          runFirstInOneMinute: document.getElementById('run-first').checked,
-          enabled: true
+
+        if (!taskList || !taskList.isConnected) {
+          taskList = document.getElementById('task-list');
+        }
+        if (taskList && !taskList.contains(actionTarget)) {
+          return;
+        }
+
+        var action = actionTarget.getAttribute('data-action');
+        var taskId = actionTarget.getAttribute('data-id');
+        if (!action || !taskId) {
+          return;
+        }
+
+        var actionHandlers = {
+          toggle: window.toggleTask,
+          run: window.runTask,
+          edit: window.editTask,
+          copy: window.copyPrompt,
+          duplicate: window.duplicateTask,
+          delete: window.deleteTask
         };
-        
-        if (editingTaskId) {
-          vscode.postMessage({
-            type: 'updateTask',
-            taskId: editingTaskId,
-            data: taskData
-          });
-        } else {
-          vscode.postMessage({
-            type: 'createTask',
-            data: taskData
-          });
+
+        var handler = actionHandlers[action];
+        if (typeof handler === 'function') {
+          e.preventDefault();
+          handler(taskId);
         }
-        
-        // Reset form
-        resetForm();
-      });
-      
-      // Test button
-      testBtn.addEventListener('click', () => {
-        const prompt = document.getElementById('prompt-text').value;
-        const agent = agentSelect.value;
-        const model = modelSelect.value;
-        
-        if (prompt) {
-          vscode.postMessage({
-            type: 'testPrompt',
-            prompt: prompt,
-            agent: agent,
-            model: model
-          });
-        }
-      });
-      
-      // Refresh button
-      refreshBtn.addEventListener('click', () => {
-        vscode.postMessage({ type: 'refreshAgents' });
-        vscode.postMessage({ type: 'refreshPrompts' });
       });
       
       // Render task list
-      function renderTaskList() {
-        if (tasks.length === 0) {
-          taskList.innerHTML = '<div class="empty-state">' + strings.noTasksFound + '</div>';
+      function renderTaskList(nextTasks) {
+        if (Array.isArray(nextTasks)) {
+          tasks = nextTasks.filter(Boolean);
+        }
+
+        if (!taskList || !taskList.isConnected) {
+          taskList = document.getElementById('task-list');
+        }
+        if (!taskList) return;
+
+        var taskItems = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+        var renderedTasks = '';
+
+        if (taskItems.length === 0) {
+          renderedTasks = '<div class="empty-state">' + strings.noTasksFound + '</div>';
+        } else {
+          renderedTasks = taskItems.map(function(task) {
+            if (!task || !task.id) {
+              return '';
+            }
+
+            var enabled = task.enabled || false;
+            var statusClass = enabled ? 'enabled' : 'disabled';
+            var statusText = enabled ? strings.labelEnabled : strings.labelDisabled;
+            var toggleIcon = enabled ? '⏸️' : '▶️';
+            var toggleTitle = enabled ? 'Disable' : 'Enable';
+            var nextRun = task.nextRun ? new Date(task.nextRun).toLocaleString() : strings.labelNever;
+            var promptText = typeof task.prompt === 'string' ? task.prompt : '';
+            var promptPreview = promptText.length > 100 ? promptText.substring(0, 100) + '...' : promptText;
+            var cronText = escapeHtml(task.cronExpression || '');
+            var taskName = escapeHtml(task.name || '');
+
+            // Escape for HTML attributes to avoid broken inline handlers
+            var taskIdEscaped = escapeAttr(task.id || '');
+
+            return '<div class="task-card ' + (enabled ? '' : 'disabled') + '" data-id="' + taskIdEscaped + '">' +
+              '<div class="task-header">' +
+                '<span class="task-name clickable" data-action="toggle" data-id="' + taskIdEscaped + '">' + taskName + '</span>' +
+                '<span class="task-status ' + statusClass + '" data-action="toggle" data-id="' + taskIdEscaped + '">' + statusText + '</span>' +
+              '</div>' +
+              '<div class="task-info">' +
+                '<span>⏰ ' + cronText + '</span>' +
+                '<span>' + strings.labelNextRun + ': ' + nextRun + '</span>' +
+              '</div>' +
+              '<div class="task-prompt">' + escapeHtml(promptPreview) + '</div>' +
+              '<div class="task-actions">' +
+                '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' + taskIdEscaped + '" title="' + toggleTitle + '">' + toggleIcon + '</button>' +
+                '<button class="btn-secondary btn-icon" data-action="run" data-id="' + taskIdEscaped + '" title="' + strings.actionRun + '">🚀</button>' +
+                '<button class="btn-secondary btn-icon" data-action="edit" data-id="' + taskIdEscaped + '" title="' + strings.actionEdit + '">✏️</button>' +
+                '<button class="btn-secondary btn-icon" data-action="copy" data-id="' + taskIdEscaped + '" title="' + strings.actionCopyPrompt + '">📋</button>' +
+                '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' + taskIdEscaped + '" title="' + strings.actionDuplicate + '">📄</button>' +
+                '<button class="btn-danger btn-icon" data-action="delete" data-id="' + taskIdEscaped + '" title="' + strings.actionDelete + '">🗑️</button>' +
+              '</div>' +
+            '</div>';
+          }).filter(Boolean).join('');
+
+          if (!renderedTasks) {
+            renderedTasks = '<div class="empty-state">' + strings.noTasksFound + '</div>';
+          }
+        }
+
+        if (renderedTasks === lastRenderedTasksHtml) {
           return;
         }
-        
-        taskList.innerHTML = tasks.map(task => {
-          const statusClass = task.enabled ? 'enabled' : 'disabled';
-          const statusText = task.enabled ? strings.labelEnabled : strings.labelDisabled;
-          const nextRun = task.nextRun ? new Date(task.nextRun).toLocaleString() : strings.labelNever;
-          const lastRun = task.lastRun ? new Date(task.lastRun).toLocaleString() : strings.labelNever;
-          const promptPreview = task.prompt.length > 100 ? task.prompt.substring(0, 100) + '...' : task.prompt;
-          
-          return '<div class="task-card ' + (task.enabled ? '' : 'disabled') + '" data-id="' + task.id + '">' +
-            '<div class="task-header">' +
-              '<span class="task-name">' + escapeHtml(task.name) + '</span>' +
-              '<span class="task-status ' + statusClass + '">' + statusText + '</span>' +
-            '</div>' +
-            '<div class="task-info">' +
-              '<span>⏰ ' + task.cronExpression + '</span>' +
-              '<span>' + strings.labelNextRun + ': ' + nextRun + '</span>' +
-            '</div>' +
-            '<div class="task-prompt">' + escapeHtml(promptPreview) + '</div>' +
-            '<div class="task-actions">' +
-              '<button class="btn-secondary btn-icon" onclick="runTask(\\'' + task.id + '\\')" title="' + strings.actionRun + '">▶</button>' +
-              '<button class="btn-secondary btn-icon" onclick="editTask(\\'' + task.id + '\\')" title="' + strings.actionEdit + '">✏️</button>' +
-              '<button class="btn-secondary btn-icon" onclick="copyPrompt(\\'' + task.id + '\\')" title="' + strings.actionCopyPrompt + '">📋</button>' +
-              '<button class="btn-danger btn-icon" onclick="deleteTask(\\'' + task.id + '\\')" title="' + strings.actionDelete + '">🗑️</button>' +
-            '</div>' +
-          '</div>';
-        }).join('');
+
+        lastRenderedTasksHtml = renderedTasks;
+        taskList.innerHTML = renderedTasks;
       }
       
       // Helper functions
       function escapeHtml(text) {
-        const div = document.createElement('div');
+        var div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
       }
       
+      function escapeAttr(text) {
+        if (typeof text !== 'string') text = String(text || '');
+        return text
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      var dayNames = [
+        strings.daySun || 'Sun',
+        strings.dayMon || 'Mon',
+        strings.dayTue || 'Tue',
+        strings.dayWed || 'Wed',
+        strings.dayThu || 'Thu',
+        strings.dayFri || 'Fri',
+        strings.daySat || 'Sat'
+      ];
+
+      function padNumber(value) {
+        var num = parseInt(String(value), 10);
+        if (isNaN(num)) num = 0;
+        return num < 10 ? '0' + num : String(num);
+      }
+
+      function boundedNumber(value, min, max, fallback) {
+        var num = parseInt(String(value), 10);
+        if (isNaN(num)) {
+          num = fallback;
+        }
+        num = Math.max(min, Math.min(max, num));
+        return num;
+      }
+
+      function normalizeDow(value) {
+        var normalized = String(value || '').trim().toLowerCase();
+        if (/^\\d+$/.test(normalized)) {
+          var asNumber = parseInt(normalized, 10);
+          if (asNumber === 7) asNumber = 0;
+          if (asNumber >= 0 && asNumber <= 6) return asNumber;
+        }
+
+        var map = {
+          sun: 0,
+          mon: 1,
+          tue: 2,
+          wed: 3,
+          thu: 4,
+          fri: 5,
+          sat: 6
+        };
+
+        if (map.hasOwnProperty(normalized)) {
+          return map[normalized];
+        }
+
+        return null;
+      }
+
+      function formatTime(hour, minute) {
+        return padNumber(hour) + ':' + padNumber(minute);
+      }
+
+      function getCronSummary(expression) {
+        var fallback = strings.labelFriendlyFallback || 'Preview unavailable for this expression';
+        var expr = (expression || '').trim();
+        if (!expr) return fallback;
+
+        var parts = expr.split(/\\s+/);
+        if (parts.length !== 5) {
+          return fallback + ' (' + expr + ')';
+        }
+
+        var minute = parts[0];
+        var hour = parts[1];
+        var dom = parts[2];
+        var mon = parts[3];
+        var dow = parts[4];
+
+        var isNumber = function(value) { return /^\\d+$/.test(String(value)); };
+        var dowLower = String(dow || '').toLowerCase();
+        var isWeekdays = dowLower === '1-5' || dowLower === 'mon-fri';
+        var everyN = /^\\*\\/(\\d+)$/.exec(minute);
+
+        if (everyN && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+          return 'Every ' + everyN[1] + ' minutes';
+        }
+
+        if (isNumber(minute) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+          return 'Hourly at minute ' + minute;
+        }
+
+        if (isNumber(minute) && isNumber(hour) && dom === '*' && mon === '*' && dow === '*') {
+          return 'Daily at ' + formatTime(hour, minute);
+        }
+
+        if (isNumber(minute) && isNumber(hour) && dom === '*' && mon === '*' && isWeekdays) {
+          return 'Weekdays at ' + formatTime(hour, minute);
+        }
+
+        var dowValue = normalizeDow(dow);
+        if (isNumber(minute) && isNumber(hour) && dom === '*' && mon === '*' && dowValue !== null) {
+          var dayLabel = dayNames[dowValue] || ('Day ' + dowValue);
+          return 'Weekly on ' + dayLabel + ' at ' + formatTime(hour, minute);
+        }
+
+        if (isNumber(minute) && isNumber(hour) && isNumber(dom) && mon === '*' && dow === '*') {
+          return 'Monthly on day ' + dom + ' at ' + formatTime(hour, minute);
+        }
+
+        return fallback + ' (' + expr + ')';
+      }
+
+      function updateCronPreview() {
+        if (!cronPreviewText || !cronExpression) return;
+        cronPreviewText.textContent = getCronSummary(cronExpression.value || '');
+      }
+
+      function updateFriendlyVisibility() {
+        var selection = friendlyFrequency ? friendlyFrequency.value : '';
+        var fields = [];
+        switch (selection) {
+          case 'every-n':
+            fields = ['interval'];
+            break;
+          case 'hourly':
+            fields = ['minute'];
+            break;
+          case 'daily':
+            fields = ['hour', 'minute'];
+            break;
+          case 'weekly':
+            fields = ['dow', 'hour', 'minute'];
+            break;
+          case 'monthly':
+            fields = ['dom', 'hour', 'minute'];
+            break;
+          default:
+            fields = [];
+        }
+
+        var friendlyFields = document.querySelectorAll('.friendly-field');
+        friendlyFields.forEach(function(el) {
+          if (!el || !el.getAttribute) return;
+          var fieldName = el.getAttribute('data-field');
+          if (fields.indexOf(fieldName) !== -1) {
+            el.classList.add('visible');
+          } else {
+            el.classList.remove('visible');
+          }
+        });
+      }
+
+      function generateCronFromFriendly() {
+        if (!friendlyFrequency || !cronExpression) return;
+        var selection = friendlyFrequency.value;
+        var expr = '';
+
+        switch (selection) {
+          case 'every-n': {
+            var interval = boundedNumber(friendlyInterval ? friendlyInterval.value : '', 1, 59, 5);
+            expr = '*/' + interval + ' * * * *';
+            break;
+          }
+          case 'hourly': {
+            var minuteValue = boundedNumber(friendlyMinute ? friendlyMinute.value : '', 0, 59, 0);
+            expr = minuteValue + ' * * * *';
+            break;
+          }
+          case 'daily': {
+            var dailyMinute = boundedNumber(friendlyMinute ? friendlyMinute.value : '', 0, 59, 0);
+            var dailyHour = boundedNumber(friendlyHour ? friendlyHour.value : '', 0, 23, 9);
+            expr = dailyMinute + ' ' + dailyHour + ' * * *';
+            break;
+          }
+          case 'weekly': {
+            var weeklyMinute = boundedNumber(friendlyMinute ? friendlyMinute.value : '', 0, 59, 0);
+            var weeklyHour = boundedNumber(friendlyHour ? friendlyHour.value : '', 0, 23, 9);
+            var dowValue = boundedNumber(friendlyDow ? friendlyDow.value : '', 0, 6, 1);
+            expr = weeklyMinute + ' ' + weeklyHour + ' * * ' + dowValue;
+            break;
+          }
+          case 'monthly': {
+            var monthlyMinute = boundedNumber(friendlyMinute ? friendlyMinute.value : '', 0, 59, 0);
+            var monthlyHour = boundedNumber(friendlyHour ? friendlyHour.value : '', 0, 23, 9);
+            var domValue = boundedNumber(friendlyDom ? friendlyDom.value : '', 1, 31, 1);
+            expr = monthlyMinute + ' ' + monthlyHour + ' ' + domValue + ' * *';
+            break;
+          }
+          default:
+            expr = '';
+        }
+
+        if (expr) {
+          cronExpression.value = expr;
+          if (cronPreset) cronPreset.value = '';
+          updateCronPreview();
+        }
+      }
+      
       function resetForm() {
-        taskForm.reset();
+        if (taskForm) taskForm.reset();
         editingTaskId = null;
-        editTaskIdInput.value = '';
-        submitBtn.textContent = strings.actionCreate;
-        templateSelectGroup.style.display = 'none';
-        promptGroup.style.display = 'block';
+        if (editTaskIdInput) editTaskIdInput.value = '';
+        if (submitBtn) submitBtn.textContent = strings.actionCreate;
+        applyPromptSource('inline');
+        if (friendlyFrequency) friendlyFrequency.value = '';
+        updateFriendlyVisibility();
+        updateCronPreview();
       }
       
       function updateAgentOptions() {
-        agentSelect.innerHTML = agents.map(a => 
-          '<option value="' + a.id + '">' + a.name + '</option>'
-        ).join('');
+        if (!agentSelect) return;
+        var items = Array.isArray(agents) ? agents : [];
+        if (items.length === 0) {
+          agentSelect.innerHTML = '<option value="">-- No agents available --</option>';
+        } else {
+          var placeholder = '<option value="">-- Select Agent --</option>';
+          agentSelect.innerHTML = placeholder + items.map(function(a) { 
+            return '<option value="' + escapeAttr(a.id) + '">' + escapeHtml(a.name) + '</option>';
+          }).join('');
+        }
       }
       
       function updateModelOptions() {
-        modelSelect.innerHTML = models.map(m => 
-          '<option value="' + m.id + '">' + m.name + '</option>'
-        ).join('');
+        if (!modelSelect) return;
+        var items = Array.isArray(models) ? models : [];
+        if (items.length === 0) {
+          modelSelect.innerHTML = '<option value="">-- No models available --</option>';
+        } else {
+          var placeholder = '<option value="">-- Select Model --</option>';
+          modelSelect.innerHTML = placeholder + items.map(function(m) { 
+            return '<option value="' + escapeAttr(m.id) + '">' + escapeHtml(m.name) + '</option>';
+          }).join('');
+        }
       }
       
-      function updateTemplateOptions(source) {
-        const filtered = promptTemplates.filter(t => t.source === source);
-        templateSelect.innerHTML = '<option value="">-- Select Template --</option>' +
-          filtered.map(t => '<option value="' + t.path + '">' + t.name + '</option>').join('');
+      function updateTemplateOptions(source, selectedPath) {
+        if (!templateSelect) return;
+        selectedPath = selectedPath || '';
+        var templates = Array.isArray(promptTemplates) ? promptTemplates : [];
+        var filtered = templates.filter(function(t) { return t.source === source; });
+        var placeholder = '<option value="">-- Select Template --</option>';
+        templateSelect.innerHTML = placeholder +
+          filtered.map(function(t) { return '<option value="' + escapeAttr(t.path) + '">' + escapeHtml(t.name) + '</option>'; }).join('');
+
+        if (selectedPath && templateSelect.querySelector('option[value="' + selectedPath + '"]')) {
+          templateSelect.value = selectedPath;
+        } else {
+          templateSelect.value = '';
+        }
       }
+
+      function applyPromptSource(source, keepSelection) {
+        var effectiveSource = source || 'inline';
+        var selectedPath = keepSelection && templateSelect ? templateSelect.value : '';
+
+        if (effectiveSource === 'inline') {
+          if (templateSelectGroup) templateSelectGroup.style.display = 'none';
+          if (promptGroup) promptGroup.style.display = 'block';
+          if (!keepSelection && templateSelect) {
+            templateSelect.value = '';
+          }
+          return;
+        }
+
+        if (templateSelectGroup) {
+          templateSelectGroup.style.display = 'block';
+        } else {
+          console.warn('[CopilotScheduler] Template select group missing; template selection is disabled.');
+        }
+        if (promptGroup) promptGroup.style.display = 'block';
+        updateTemplateOptions(effectiveSource, selectedPath);
+      }
+
+      // Initialize dropdowns with cached data
+      updateAgentOptions();
+      updateModelOptions();
+      var initialPromptSource = document.querySelector('input[name="prompt-source"]:checked');
+      if (initialPromptSource) {
+        applyPromptSource(initialPromptSource.value);
+      }
+      updateFriendlyVisibility();
+      updateCronPreview();
       
       // Global functions for onclick handlers
       window.runTask = function(id) {
@@ -1046,83 +1717,135 @@ export class SchedulerWebview {
       };
       
       window.editTask = function(id) {
-        const task = tasks.find(t => t.id === id);
+        var taskListArray = Array.isArray(tasks) ? tasks : [];
+        var task = taskListArray.find(function(t) { return t && t.id === id; });
         if (!task) return;
         
         editingTaskId = id;
-        document.getElementById('task-name').value = task.name;
-        document.getElementById('prompt-text').value = task.prompt;
-        cronExpression.value = task.cronExpression;
-        cronPreset.value = '';
+        var taskNameEl = document.getElementById('task-name');
+        var promptTextEl = document.getElementById('prompt-text');
+        if (taskNameEl) taskNameEl.value = task.name || '';
+        if (promptTextEl) promptTextEl.value = typeof task.prompt === 'string' ? task.prompt : '';
+        if (cronExpression) cronExpression.value = task.cronExpression || '';
+        if (cronPreset) cronPreset.value = '';
+        updateCronPreview();
         
-        if (task.agent) agentSelect.value = task.agent;
-        if (task.model) modelSelect.value = task.model;
-        
-        document.querySelector('input[name="scope"][value="' + task.scope + '"]').checked = true;
-        document.querySelector('input[name="prompt-source"][value="' + task.promptSource + '"]').checked = true;
-        
-        if (task.promptSource !== 'inline') {
-          templateSelectGroup.style.display = 'block';
-          updateTemplateOptions(task.promptSource);
-          if (task.promptPath) templateSelect.value = task.promptPath;
+        if (task.agent && agentSelect) agentSelect.value = task.agent;
+        if (task.model && modelSelect) modelSelect.value = task.model;
+        var scopeValue = task.scope || 'workspace';
+        var scopeRadio = document.querySelector('input[name="scope"][value="' + scopeValue + '"]');
+        if (scopeRadio) {
+          scopeRadio.checked = true;
         }
+        var sourceValue = task.promptSource || 'inline';
+        var sourceRadio = document.querySelector('input[name="prompt-source"][value="' + sourceValue + '"]');
+        if (sourceRadio) {
+          sourceRadio.checked = true;
+        }
+
+        applyPromptSource(sourceValue, true);
+        if (task.promptPath && templateSelect) templateSelect.value = task.promptPath;
         
-        submitBtn.textContent = strings.actionSave;
+        // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
+        var runFirstEl = document.getElementById('run-first');
+        if (runFirstEl) runFirstEl.checked = false;
+        
+        if (submitBtn) submitBtn.textContent = strings.actionSave;
         
         // Switch to create tab
-        document.querySelector('.tab-button[data-tab="create"]').click();
+        switchTab('create');
       };
       
       window.copyPrompt = function(id) {
-        const task = tasks.find(t => t.id === id);
+        var task = tasks.find(function(t) { return t && t.id === id; });
         if (task) {
-          vscode.postMessage({ type: 'copyPrompt', prompt: task.prompt });
+          vscode.postMessage({ type: 'copyPrompt', prompt: task.prompt || '' });
         }
+      };
+
+      window.duplicateTask = function(id) {
+        vscode.postMessage({ type: 'duplicateTask', taskId: id });
+      };
+      
+      window.toggleTask = function(id) {
+        vscode.postMessage({ type: 'toggleTask', taskId: id });
       };
       
       window.deleteTask = function(id) {
-        const task = tasks.find(t => t.id === id);
-        if (task && confirm(strings.confirmDelete(task.name))) {
-          vscode.postMessage({ type: 'deleteTask', taskId: id });
+        var task = tasks.find(function(t) { return t && t.id === id; });
+        if (!task) {
+          return;
         }
+
+        // Send delete request to extension (confirmation will be handled there)
+        vscode.postMessage({ type: 'deleteTask', taskId: id, taskName: task.name });
       };
       
       // Handle messages from extension
-      window.addEventListener('message', event => {
-        const message = event.data;
+      window.addEventListener('message', function(event) {
+        var message = event.data;
         
         switch (message.type) {
           case 'updateTasks':
-            tasks = message.tasks;
-            renderTaskList();
+            renderTaskList(message.tasks);
             break;
           case 'updateAgents':
-            agents = message.agents;
-            updateAgentOptions();
+            {
+              var currentAgentValue = agentSelect ? agentSelect.value : '';
+              agents = Array.isArray(message.agents) ? message.agents : [];
+              updateAgentOptions();
+              if (agentSelect && currentAgentValue && agentSelect.querySelector('option[value="' + currentAgentValue + '"]')) {
+                agentSelect.value = currentAgentValue;
+              }
+            }
             break;
           case 'updateModels':
-            models = message.models;
-            updateModelOptions();
+            {
+              var currentModelValue = modelSelect ? modelSelect.value : '';
+              models = Array.isArray(message.models) ? message.models : [];
+              updateModelOptions();
+              if (modelSelect && currentModelValue && modelSelect.querySelector('option[value="' + currentModelValue + '"]')) {
+                modelSelect.value = currentModelValue;
+              }
+            }
             break;
           case 'updatePromptTemplates':
-            promptTemplates = message.templates;
+            promptTemplates = Array.isArray(message.templates) ? message.templates : [];
+            {
+              var sourceElement = document.querySelector('input[name="prompt-source"]:checked');
+              var currentSource = sourceElement ? sourceElement.value : 'inline';
+              updateTemplateOptions(currentSource, templateSelect ? templateSelect.value : '');
+              if (currentSource === 'local' || currentSource === 'global') {
+                if (templateSelectGroup) templateSelectGroup.style.display = 'block';
+              } else {
+                if (templateSelectGroup) templateSelectGroup.style.display = 'none';
+              }
+            }
             break;
           case 'promptTemplateLoaded':
-            document.getElementById('prompt-text').value = message.content;
+            var promptTextEl = document.getElementById('prompt-text');
+            if (promptTextEl) promptTextEl.value = message.content;
             break;
           case 'switchToList':
-            document.querySelector('.tab-button[data-tab="list"]').click();
+            switchTab('list');
             break;
           case 'focusTask':
-            document.querySelector('.tab-button[data-tab="list"]').click();
-            const card = document.querySelector('.task-card[data-id="' + message.taskId + '"]');
-            if (card) card.scrollIntoView({ behavior: 'smooth' });
+            switchTab('list');
+            setTimeout(function() {
+              var card = document.querySelector('.task-card[data-id="' + message.taskId + '"]');
+              if (card) card.scrollIntoView({ behavior: 'smooth' });
+            }, 100);
+            break;
+          case 'showError':
+            if (message.text) {
+              window.alert(message.text);
+            }
             break;
         }
       });
       
       // Initial render
-      renderTaskList();
+      renderTaskList(tasks);
       
       // Notify extension that webview is ready
       vscode.postMessage({ type: 'webviewReady' });
@@ -1132,4 +1855,3 @@ export class SchedulerWebview {
 </html>`;
   }
 }
-

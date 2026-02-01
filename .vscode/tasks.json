@@ -1,5 +1,12 @@
 {
   "version": "2.0.0",
+  "options": {
+    "cwd": "${workspaceFolder}",
+    "shell": {
+      "executable": "C:/Program Files/PowerShell/7/pwsh.exe",
+      "args": ["-NoProfile", "-Command"]
+    }
+  },
   "tasks": [
     {
       "type": "npm",
@@ -15,9 +22,13 @@
       }
     },
     {
-      "type": "npm",
-      "script": "compile",
+      "label": "npm: compile",
+      "type": "shell",
+      "command": "npm run compile",
       "problemMatcher": "$tsc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "group": "build"
     }
   ]

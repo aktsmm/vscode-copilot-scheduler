@@ -4,6 +4,8 @@
   "command.listTasks": "スケジュールタスク一覧",
   "command.deleteTask": "タスクを削除",
   "command.toggleTask": "タスクの有効/無効を切り替え",
+  "command.enableTask": "タスクを有効にする",
+  "command.disableTask": "タスクを無効にする",
   "command.runNow": "今すぐ実行",
   "command.copyPrompt": "プロンプトをクリップボードにコピー",
   "command.editTask": "タスクを編集",
@@ -12,6 +14,10 @@
   "command.showVersion": "バージョン情報を表示",
   "config.enabled": "スケジュール実行の有効/無効",
   "config.showNotifications": "タスク実行時に通知を表示",
+  "config.notificationMode": "通知のモード",
+  "config.notificationMode.sound": "OSの通知を使う（音が鳴る場合あり）",
+  "config.notificationMode.silentToast": "静かなトースト通知（音を抑制）",
+  "config.notificationMode.silentStatus": "ステータスバーのみ（無音）",
   "config.logLevel": "拡張機能のログレベル",
   "config.logLevel.none": "ログなし",
   "config.logLevel.error": "エラーのみ",
@@ -28,6 +34,7 @@
   "config.defaultScope": "新規タスクのデフォルトスコープ",
   "config.defaultScope.global": "グローバル（全ワークスペース）",
   "config.defaultScope.workspace": "ワークスペース（現在のワークスペースのみ）",
-  "config.globalPromptsPath": "グローバルプロンプトテンプレートのカスタムパス",
+  "config.globalPromptsPath": "グローバルプロンプトテンプレートのカスタムパス。デフォルト: %APPDATA%\\Code\\User\\prompts",
+  "config.globalAgentsPath": "グローバルエージェントファイル（*.agent.md）のカスタムパス。デフォルト: %APPDATA%\\Code\\User\\prompts",
   "view.tasks": "スケジュールタスク"
 }

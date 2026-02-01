@@ -1,0 +1,9 @@
+{
+  "name": "vscode-ext-commands",
+  "source": "github-awesome-copilot",
+  "description": "Guidelines for contributing commands in VS Code extensions.",
+  "description_ja": "Vscode Ext Commands",
+  "whenToUse": "This skill helps you to contribute commands in VS Code extensions",
+  "categories": [],
+  "installedAt": "2026-02-01T14:39:33.231Z"
+}

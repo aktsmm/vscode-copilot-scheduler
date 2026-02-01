@@ -4,6 +4,8 @@
   "command.listTasks": "List Scheduled Tasks",
   "command.deleteTask": "Delete Task",
   "command.toggleTask": "Toggle Task (Enable/Disable)",
+  "command.enableTask": "Enable Task",
+  "command.disableTask": "Disable Task",
   "command.runNow": "Run Now",
   "command.copyPrompt": "Copy Prompt to Clipboard",
   "command.editTask": "Edit Task",
@@ -12,6 +14,10 @@
   "command.showVersion": "Show Version",
   "config.enabled": "Enable or disable scheduled execution",
   "config.showNotifications": "Show notifications when tasks are executed",
+  "config.notificationMode": "Notification mode",
+  "config.notificationMode.sound": "Use OS notification (may play sound)",
+  "config.notificationMode.silentToast": "Quiet toast notification (reduced sound)",
+  "config.notificationMode.silentStatus": "Status bar only (silent)",
   "config.logLevel": "Log level for the extension",
   "config.logLevel.none": "No logging",
   "config.logLevel.error": "Errors only",
@@ -28,6 +34,7 @@
   "config.defaultScope": "Default scope for new tasks",
   "config.defaultScope.global": "Global (all workspaces)",
   "config.defaultScope.workspace": "Workspace (current workspace only)",
-  "config.globalPromptsPath": "Custom path for global prompt templates",
+  "config.globalPromptsPath": "Custom path for global prompt templates. Default: %APPDATA%\\Code\\User\\prompts",
+  "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: %APPDATA%\\Code\\User\\prompts",
   "view.tasks": "Scheduled Tasks"
 }

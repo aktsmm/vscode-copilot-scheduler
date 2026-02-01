@@ -18,6 +18,51 @@ import type {
   PromptSource,
 } from "./types";
 
+type NotificationMode = "sound" | "silentToast" | "silentStatus";
+
+function shouldNotify(): boolean {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  return config.get<boolean>("showNotifications", true);
+}
+
+function getNotificationMode(): NotificationMode {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const mode = config.get<NotificationMode>("notificationMode", "sound");
+  // Legacy: if notifications were disabled, honor that as silentStatus
+  if (shouldNotify() === false) {
+    return "silentStatus";
+  }
+  return mode || "sound";
+}
+
+export function notifyInfo(message: string, timeoutMs = 4000): void {
+  if (!shouldNotify()) return;
+  const mode = getNotificationMode();
+  switch (mode) {
+    case "silentStatus":
+      vscode.window.setStatusBarMessage(message, timeoutMs);
+      break;
+    case "silentToast":
+      void vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: message },
+        async () => {},
+      );
+      break;
+    default:
+      void vscode.window.showInformationMessage(message);
+  }
+}
+
+export function notifyError(message: string, timeoutMs = 6000): void {
+  const mode = getNotificationMode();
+  if (mode === "silentStatus") {
+    vscode.window.setStatusBarMessage(`⚠ ${message}`, timeoutMs);
+    console.error(message);
+    return;
+  }
+  void vscode.window.showErrorMessage(message);
+}
+
 // Global instances
 let scheduleManager: ScheduleManager;
 let copilotExecutor: CopilotExecutor;
@@ -33,7 +78,7 @@ export function activate(context: vscode.ExtensionContext): void {
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
 
   // Register TreeView
-  const treeView = vscode.window.createTreeView("promptPilotTasks", {
+  const treeView = vscode.window.createTreeView("copilotSchedulerTasks", {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
   });
@@ -46,6 +91,8 @@ export function activate(context: vscode.ExtensionContext): void {
     registerEditTaskCommand(context),
     registerDeleteTaskCommand(),
     registerToggleTaskCommand(),
+    registerEnableTaskCommand(),
+    registerDisableTaskCommand(),
     registerRunNowCommand(),
     registerCopyPromptCommand(),
     registerDuplicateTaskCommand(),
@@ -59,14 +106,28 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Show activation message
-  const config = vscode.workspace.getConfiguration("promptPilot");
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
   const logLevel = config.get<string>("logLevel", "info");
   if (logLevel === "info" || logLevel === "debug") {
-    vscode.window.showInformationMessage(messages.extensionActive());
+    notifyInfo(messages.extensionActive());
   }
 
+  // React to language changes so the webview can be re-rendered in the selected locale
+  const configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("copilotScheduler.language")) {
+      SchedulerWebview.refreshLanguage(scheduleManager.getAllTasks());
+      treeProvider.refresh();
+    }
+    if (
+      e.affectsConfiguration("copilotScheduler.globalPromptsPath") ||
+      e.affectsConfiguration("copilotScheduler.globalAgentsPath")
+    ) {
+      SchedulerWebview.refreshLanguage(scheduleManager.getAllTasks());
+    }
+  });
+
   // Register subscriptions
-  context.subscriptions.push(treeView, ...commands);
+  context.subscriptions.push(treeView, configWatcher, ...commands);
 }
 
 /**
@@ -80,11 +141,11 @@ export function deactivate(): void {
  * Execute a scheduled task
  */
 async function executeTask(task: ScheduledTask): Promise<void> {
-  const config = vscode.workspace.getConfiguration("promptPilot");
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
   const showNotifications = config.get<boolean>("showNotifications", true);
 
   if (showNotifications) {
-    vscode.window.showInformationMessage(messages.taskExecuting(task.name));
+    notifyInfo(messages.taskExecuting(task.name));
   }
 
   try {
@@ -98,13 +159,11 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     });
 
     if (showNotifications) {
-      vscode.window.showInformationMessage(messages.taskExecuted(task.name));
+      notifyInfo(messages.taskExecuted(task.name));
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    vscode.window.showErrorMessage(
-      messages.taskExecutionFailed(task.name, errorMessage),
-    );
+    notifyError(messages.taskExecutionFailed(task.name, errorMessage));
   }
 }
 
@@ -144,30 +203,16 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
  * Resolve global prompt file path
  */
 function resolveGlobalPromptPath(promptPath: string): string | undefined {
-  const config = vscode.workspace.getConfiguration("promptPilot");
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
   const customPath = config.get<string>("globalPromptsPath", "");
 
-  let globalRoot: string | undefined;
+  const defaultRoot = process.env.APPDATA
+    ? path.join(process.env.APPDATA, "Code", "User", "prompts")
+    : "";
 
-  if (customPath) {
-    globalRoot = customPath;
-  } else {
-    const homeDir = process.env.HOME || process.env.USERPROFILE;
-    if (homeDir) {
-      const appData = process.env.APPDATA;
-      if (appData) {
-        const vscodePromptsPath = path.join(appData, "Code", "User", "prompts");
-        if (fs.existsSync(vscodePromptsPath)) {
-          globalRoot = vscodePromptsPath;
-        }
-      }
-      if (!globalRoot) {
-        globalRoot = path.join(homeDir, ".github", "prompts");
-      }
-    }
-  }
+  const globalRoot = customPath || defaultRoot;
 
-  if (!globalRoot) {
+  if (!globalRoot || !fs.existsSync(globalRoot)) {
     return undefined;
   }
 
@@ -211,72 +256,97 @@ function resolveAllowedPromptPath(
  * Handle task actions from Webview
  */
 function handleTaskAction(action: TaskAction): void {
-  switch (action.action) {
-    case "run":
-      const runTask = scheduleManager.getTask(action.taskId);
-      if (runTask) {
-        executeTask(runTask);
-      }
-      break;
+  void handleTaskActionAsync(action);
+}
 
-    case "toggle":
-      scheduleManager.toggleTask(action.taskId).then((task) => {
+async function handleTaskActionAsync(action: TaskAction): Promise<void> {
+  try {
+    switch (action.action) {
+      case "run": {
+        const runTask = scheduleManager.getTask(action.taskId);
+        if (runTask) {
+          await executeTask(runTask);
+        }
+        break;
+      }
+
+      case "toggle": {
+        const task = await scheduleManager.toggleTask(action.taskId);
         if (task) {
-          vscode.window.showInformationMessage(
+          notifyInfo(
             task.enabled
               ? messages.taskEnabled(task.name)
               : messages.taskDisabled(task.name),
           );
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         }
-      });
-      break;
-
-    case "delete":
-      const deleteTask = scheduleManager.getTask(action.taskId);
-      if (deleteTask) {
-        scheduleManager.deleteTask(action.taskId).then(() => {
-          vscode.window.showInformationMessage(
-            messages.taskDeleted(deleteTask.name),
-          );
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-        });
+        break;
       }
-      break;
 
-    case "edit":
-      if (action.taskId === "__create__" && action.data) {
-        // Create new task
-        scheduleManager
-          .createTask(action.data as CreateTaskInput)
-          .then((task) => {
-            vscode.window.showInformationMessage(
-              messages.taskCreated(task.name),
-            );
+      case "delete": {
+        const deleteTask = scheduleManager.getTask(action.taskId);
+        if (deleteTask) {
+          // Show confirmation dialog
+          const confirm = await vscode.window.showWarningMessage(
+            messages.confirmDelete(deleteTask.name),
+            { modal: true },
+            messages.confirmDeleteYes(),
+          );
+
+          if (confirm === messages.confirmDeleteYes()) {
+            await scheduleManager.deleteTask(action.taskId);
+            notifyInfo(messages.taskDeleted(deleteTask.name));
             SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-            SchedulerWebview.switchToList();
-          });
-      } else if (action.data) {
-        // Update existing task
-        scheduleManager.updateTask(action.taskId, action.data).then((task) => {
+          }
+        }
+        break;
+      }
+
+      case "edit": {
+        if (action.taskId === "__create__" && action.data) {
+          const task = await scheduleManager.createTask(
+            action.data as CreateTaskInput,
+          );
+          notifyInfo(messages.taskCreated(task.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+          SchedulerWebview.switchToList();
+        } else if (action.data) {
+          const task = await scheduleManager.updateTask(
+            action.taskId,
+            action.data,
+          );
           if (task) {
-            vscode.window.showInformationMessage(
-              messages.taskUpdated(task.name),
-            );
+            notifyInfo(messages.taskUpdated(task.name));
             SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
             SchedulerWebview.switchToList();
           }
-        });
+        }
+        break;
       }
-      break;
 
-    case "copy":
-      const copyTask = scheduleManager.getTask(action.taskId);
-      if (copyTask) {
-        vscode.env.clipboard.writeText(copyTask.prompt);
-        vscode.window.showInformationMessage(messages.promptCopied());
+      case "copy": {
+        const copyTask = scheduleManager.getTask(action.taskId);
+        if (copyTask) {
+          await vscode.env.clipboard.writeText(copyTask.prompt);
+          notifyInfo(messages.promptCopied());
+        }
+        break;
       }
-      break;
+
+      case "duplicate": {
+        const task = await scheduleManager.duplicateTask(action.taskId);
+        if (task) {
+          notifyInfo(messages.taskDuplicated(task.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        }
+        break;
+      }
+    }
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : String(error ?? "");
+    notifyError(errorMessage);
+    SchedulerWebview.showError(errorMessage);
   }
 }
 
@@ -284,7 +354,7 @@ function handleTaskAction(action: TaskAction): void {
 
 function registerCreateTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.createTask",
+    "copilotScheduler.createTask",
     async () => {
       // CLI-style task creation using InputBox
       const name = await vscode.window.showInputBox({
@@ -312,11 +382,11 @@ function registerCreateTaskCommand(): vscode.Disposable {
           prompt,
           cronExpression,
         });
-        vscode.window.showInformationMessage(messages.taskCreated(task.name));
+        notifyInfo(messages.taskCreated(task.name));
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(errorMessage);
+        notifyError(errorMessage);
       }
     },
   );
@@ -326,7 +396,7 @@ function registerCreateTaskGuiCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.createTaskGui",
+    "copilotScheduler.createTaskGui",
     async () => {
       await SchedulerWebview.show(
         context.extensionUri,
@@ -339,7 +409,7 @@ function registerCreateTaskGuiCommand(
           } catch (error) {
             const errorMessage =
               error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(errorMessage);
+            notifyError(errorMessage);
           }
         },
       );
@@ -351,7 +421,7 @@ function registerListTasksCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.listTasks",
+    "copilotScheduler.listTasks",
     async () => {
       await SchedulerWebview.show(
         context.extensionUri,
@@ -367,7 +437,7 @@ function registerEditTaskCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.editTask",
+    "copilotScheduler.editTask",
     async (item?: ScheduledTaskItem) => {
       let taskId: string | undefined;
 
@@ -377,7 +447,7 @@ function registerEditTaskCommand(
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -406,7 +476,7 @@ function registerEditTaskCommand(
 
 function registerDeleteTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.deleteTask",
+    "copilotScheduler.deleteTask",
     async (item?: ScheduledTaskItem) => {
       let task: ScheduledTask | undefined;
 
@@ -416,7 +486,7 @@ function registerDeleteTaskCommand(): vscode.Disposable {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -442,7 +512,8 @@ function registerDeleteTaskCommand(): vscode.Disposable {
 
       if (confirm === messages.confirmDeleteYes()) {
         await scheduleManager.deleteTask(task.id);
-        vscode.window.showInformationMessage(messages.taskDeleted(task.name));
+        notifyInfo(messages.taskDeleted(task.name));
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       }
     },
   );
@@ -450,7 +521,7 @@ function registerDeleteTaskCommand(): vscode.Disposable {
 
 function registerToggleTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.toggleTask",
+    "copilotScheduler.toggleTask",
     async (item?: ScheduledTaskItem) => {
       let taskId: string | undefined;
 
@@ -460,7 +531,7 @@ function registerToggleTaskCommand(): vscode.Disposable {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -479,11 +550,42 @@ function registerToggleTaskCommand(): vscode.Disposable {
 
       const task = await scheduleManager.toggleTask(taskId);
       if (task) {
-        vscode.window.showInformationMessage(
+        notifyInfo(
           task.enabled
             ? messages.taskEnabled(task.name)
             : messages.taskDisabled(task.name),
         );
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+      }
+    },
+  );
+}
+
+function registerEnableTaskCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand(
+    "copilotScheduler.enableTask",
+    async (item?: ScheduledTaskItem) => {
+      if (item instanceof ScheduledTaskItem) {
+        const task = await scheduleManager.setTaskEnabled(item.task.id, true);
+        if (task) {
+          notifyInfo(messages.taskEnabled(task.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        }
+      }
+    },
+  );
+}
+
+function registerDisableTaskCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand(
+    "copilotScheduler.disableTask",
+    async (item?: ScheduledTaskItem) => {
+      if (item instanceof ScheduledTaskItem) {
+        const task = await scheduleManager.setTaskEnabled(item.task.id, false);
+        if (task) {
+          notifyInfo(messages.taskDisabled(task.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        }
       }
     },
   );
@@ -491,7 +593,7 @@ function registerToggleTaskCommand(): vscode.Disposable {
 
 function registerRunNowCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.runNow",
+    "copilotScheduler.runNow",
     async (item?: ScheduledTaskItem) => {
       let task: ScheduledTask | undefined;
 
@@ -501,7 +603,7 @@ function registerRunNowCommand(): vscode.Disposable {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -525,7 +627,7 @@ function registerRunNowCommand(): vscode.Disposable {
 
 function registerCopyPromptCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.copyPrompt",
+    "copilotScheduler.copyPrompt",
     async (item?: ScheduledTaskItem) => {
       let task: ScheduledTask | undefined;
 
@@ -535,7 +637,7 @@ function registerCopyPromptCommand(): vscode.Disposable {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -554,14 +656,14 @@ function registerCopyPromptCommand(): vscode.Disposable {
 
       const promptText = await resolvePromptText(task);
       await vscode.env.clipboard.writeText(promptText);
-      vscode.window.showInformationMessage(messages.promptCopied());
+      notifyInfo(messages.promptCopied());
     },
   );
 }
 
 function registerDuplicateTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.duplicateTask",
+    "copilotScheduler.duplicateTask",
     async (item?: ScheduledTaskItem) => {
       let taskId: string | undefined;
       let taskName: string | undefined;
@@ -573,7 +675,7 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
         if (tasks.length === 0) {
-          vscode.window.showInformationMessage(messages.noTasksFound());
+          notifyInfo(messages.noTasksFound());
           return;
         }
 
@@ -594,9 +696,8 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
 
       const duplicated = await scheduleManager.duplicateTask(taskId);
       if (duplicated) {
-        vscode.window.showInformationMessage(
-          messages.taskDuplicated(duplicated.name),
-        );
+        notifyInfo(messages.taskDuplicated(duplicated.name));
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       }
     },
   );
@@ -604,11 +705,11 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
 
 function registerOpenSettingsCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.openSettings",
+    "copilotScheduler.openSettings",
     async () => {
       await vscode.commands.executeCommand(
         "workbench.action.openSettings",
-        "@ext:yamapan.prompt-pilot",
+        "@ext:yamapan.copilot-scheduler",
       );
     },
   );
@@ -618,12 +719,11 @@ function registerShowVersionCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
-    "promptPilot.showVersion",
+    "copilotScheduler.showVersion",
     async () => {
       const packageJson = context.extension.packageJSON as { version: string };
       const version = packageJson.version || "0.0.0";
-      vscode.window.showInformationMessage(messages.versionInfo(version));
+      notifyInfo(messages.versionInfo(version));
     },
   );
 }
-

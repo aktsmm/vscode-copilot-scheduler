@@ -1,6 +1,16 @@
-# Prompt Pilot
+# Copilot Scheduler
+
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/yamapan.copilot-scheduler?label=VS%20Code%20Marketplace&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
+[![License CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
+[![GitHub](https://img.shields.io/github/stars/aktsmm/vscode-copilot-scheduler?style=social)](https://github.com/aktsmm/vscode-copilot-scheduler)
 
 Schedule automatic AI prompts with cron expressions in VS Code.
+
+[Japanese / 日本語版はこちら](README_ja.md)
+
+## 🎬 Demo
+
+![Copilot Scheduler Demo](images/demo-animated.gif)
 
 ## Features
 
@@ -18,7 +28,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## Quick Start
 
-1. Open the Prompt Pilot sidebar (click the clock icon in the Activity Bar)
+1. Open the Copilot Scheduler sidebar (click the clock icon in the Activity Bar)
 2. Click the "+" button to create a new scheduled task
 3. Enter a task name, prompt, and cron schedule
 4. Your prompt will be automatically sent to Copilot at the scheduled time

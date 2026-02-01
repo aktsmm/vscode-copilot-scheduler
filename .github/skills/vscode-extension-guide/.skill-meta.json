@@ -1,8 +1,8 @@
 {
   "name": "vscode-extension-guide",
   "source": "aktsmm-Agent-Skills",
-  "description": "Vscode Extension Guide",
+  "description": "Guide for creating VS Code extensions from scratch to Marketplace publication.",
   "whenToUse": "VS Code extension, extension development, vscode plugin; Creating a new VS Code extension from scratch; Adding commands, keybindings, or settings to an extension; Publishing to VS Code Marketplace",
   "categories": [],
-  "installedAt": "2026-02-01T10:47:20.077Z"
+  "installedAt": "2026-02-01T14:39:34.993Z"
 }
