@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-02-17
+
+### Added
+
+- **Per-task jitter (random delay)**: Each task can set a max random delay (0–600s) before execution to reduce machine-like patterns. A global default is also available via `copilotScheduler.jitterSeconds`.
+- **Daily execution limit**: Configurable cap on scheduled executions per day (default: 50, `copilotScheduler.maxDailyExecutions`). A one-time notification is shown when the limit is reached.
+- **Minimum cron interval warning**: Warns when a cron expression runs more often than every 30 minutes. Can be toggled via `copilotScheduler.minimumIntervalWarning`.
+- **Disclaimer notification**: A one-time informational message about GitHub ToS/AUP risks is shown when the first enabled task is created or activated.
+- **Prompt template sync**: Tasks using local/global prompt templates now have their cached prompt text synced at startup and once daily, so UI displays stay up to date.
+
+### Changed
+
+- Daily execution counter now uses local date instead of UTC.
+- README settings table fixed from `copilotSchedule.*` to correct `copilotScheduler.*` prefix.
+
+### Documentation
+
+- Added disclaimer about GitHub Acceptable Use Policies and automation risks to README (EN/JA).
+- Documented new settings: `jitterSeconds`, `maxDailyExecutions`, `minimumIntervalWarning`.
+
 ## [0.1.0] - 2026-02-01
 
 ### Added

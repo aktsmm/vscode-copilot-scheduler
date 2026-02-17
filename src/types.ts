@@ -64,6 +64,9 @@ export interface ScheduledTask {
   /** Path to prompt file (when promptSource is not "inline") */
   promptPath?: string;
 
+  /** Max random delay in seconds applied before execution (0 or undefined = no jitter) */
+  jitterSeconds?: number;
+
   /** Last execution time */
   lastRun?: Date;
 
@@ -110,6 +113,9 @@ export interface CreateTaskInput {
 
   /** Path to prompt file */
   promptPath?: string;
+
+  /** Max random delay in seconds applied before execution (0 or undefined = no jitter) */
+  jitterSeconds?: number;
 }
 
 /**

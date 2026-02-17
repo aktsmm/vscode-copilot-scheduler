@@ -186,6 +186,8 @@ export const messages = {
   labelNever: () => t("Never", "なし"),
   labelRunFirstInOneMinute: () =>
     t("Run first execution in 1 minute", "1分後に初回実行する"),
+  labelJitterSeconds: () =>
+    t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
 
   placeholderTaskName: () => t("Enter task name...", "タスク名を入力..."),
   placeholderPrompt: () =>
@@ -258,6 +260,36 @@ export const messages = {
     t(
       `Task "${name}" skipped (workspace-specific)`,
       `タスク「${name}」をスキップしました（ワークスペース固有）`,
+    ),
+
+  // ==================== Safety / Rate Limiting ====================
+  dailyLimitReached: (limit: number) =>
+    t(
+      `Daily execution limit (${limit}) reached. No more automatic executions today. You can increase this limit in settings.`,
+      `1日の実行回数上限（${limit}回）に達しました。本日はこれ以上の自動実行は行われません。設定で上限を変更できます。`,
+    ),
+  jitterApplied: (seconds: number) =>
+    t(
+      `Applying ${seconds}s random delay to reduce detection risk...`,
+      `検出リスク軽減のため ${seconds}秒のランダム遅延を適用中...`,
+    ),
+  minimumIntervalWarning: () =>
+    t(
+      "⚠️ Warning: Cron intervals shorter than 30 minutes may increase the risk of being flagged by GitHub's abuse-detection system. Consider using a longer interval.",
+      "⚠️ 警告: 30分未満のcron間隔は、GitHubの不正検出システムに検出されるリスクが高まる可能性があります。より長い間隔の使用を検討してください。",
+    ),
+  disclaimerTitle: () => t("⚠️ Important Notice", "⚠️ 重要なお知らせ"),
+  disclaimerMessage: () =>
+    t(
+      "This extension automates Copilot Chat interactions via scheduled prompts. GitHub's Acceptable Use Policies prohibit 'excessive automated bulk activity' and 'scripted interactions' with Copilot. Using this extension may violate GitHub's Terms of Service and could result in your Copilot access being restricted or your account being suspended. Use at your own risk.",
+      "この拡張機能は、スケジュールされたプロンプトによりCopilot Chatの操作を自動化します。GitHubの利用規約（Acceptable Use Policies）は「過度な自動化された一括活動」および「スクリプトによるCopilotとのやり取り」を禁止しています。この拡張機能の使用はGitHubの利用規約に違反する可能性があり、Copilotへのアクセス制限やアカウント停止につながる恐れがあります。ご利用は自己責任でお願いします。",
+    ),
+  disclaimerAccept: () => t("I understand the risks", "リスクを理解しました"),
+  disclaimerDecline: () => t("Cancel", "キャンセル"),
+  dailyExecutionCount: (count: number, limit: number) =>
+    t(
+      `Today's executions: ${count}/${limit}`,
+      `本日の実行回数: ${count}/${limit}`,
     ),
 };
 

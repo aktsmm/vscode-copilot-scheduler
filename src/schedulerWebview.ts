@@ -496,6 +496,7 @@ export class SchedulerWebview {
       labelLastRun: messages.labelLastRun(),
       labelNever: messages.labelNever(),
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
+      labelJitterSeconds: messages.labelJitterSeconds(),
       placeholderTaskName: messages.placeholderTaskName(),
       placeholderPrompt: messages.placeholderPrompt(),
       placeholderCron: messages.placeholderCron(),
@@ -1067,6 +1068,12 @@ export class SchedulerWebview {
           <label for="run-first">${strings.labelRunFirstInOneMinute}</label>
         </div>
       </div>
+
+      <div class="form-group">
+        <label for="jitter-seconds">${strings.labelJitterSeconds}</label>
+        <input type="number" id="jitter-seconds" min="0" max="600" value="0">
+        <p class="note" style="margin-top:4px;">0 ${isJa ? "で無効。値を入れると0〜その秒数でランダム遅延します。" : "disables jitter. Adds a random delay between 0 and the specified seconds before execution."}</p>
+      </div>
       
       <div class="button-group">
         <button type="submit" class="btn-primary" id="submit-btn">${strings.actionCreate}</button>
@@ -1126,6 +1133,7 @@ export class SchedulerWebview {
       var templateSelect = document.getElementById('template-select');
       var templateSelectGroup = document.getElementById('template-select-group');
       var promptGroup = document.getElementById('prompt-group');
+      var jitterSecondsInput = document.getElementById('jitter-seconds');
       var friendlyFrequency = document.getElementById('friendly-frequency');
       var friendlyInterval = document.getElementById('friendly-interval');
       var friendlyMinute = document.getElementById('friendly-minute');
@@ -1246,6 +1254,9 @@ export class SchedulerWebview {
             promptSource: promptSourceEl ? promptSourceEl.value : 'inline',
             promptPath: templateSelect ? templateSelect.value : '',
             runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
+            jitterSeconds: jitterSecondsInput
+              ? Number(jitterSecondsInput.value || 0)
+              : 0,
             enabled: true
           };
 
@@ -1633,6 +1644,7 @@ export class SchedulerWebview {
         if (submitBtn) submitBtn.textContent = strings.actionCreate;
         applyPromptSource('inline');
         if (friendlyFrequency) friendlyFrequency.value = '';
+        if (jitterSecondsInput) jitterSecondsInput.value = '0';
         updateFriendlyVisibility();
         updateCronPreview();
       }
@@ -1745,6 +1757,10 @@ export class SchedulerWebview {
 
         applyPromptSource(sourceValue, true);
         if (task.promptPath && templateSelect) templateSelect.value = task.promptPath;
+
+        if (jitterSecondsInput) {
+          jitterSecondsInput.value = String(task.jitterSeconds ?? 0);
+        }
         
         // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
         var runFirstEl = document.getElementById('run-first');

@@ -15,3 +15,7 @@ Thumbs.db
 session/
 AGENTS.md
 FULL_SPECIFICATION.md
+
+# Copilot Orchestrator temporary files
+.orchestrator/
+.worktrees/

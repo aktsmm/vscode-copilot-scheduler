@@ -27,15 +27,18 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 📊 **Sidebar TreeView** - Manage all your scheduled tasks from the sidebar
 
 🖥️ **Webview GUI** - Easy-to-use graphical interface for creating and editing tasks
-
-📁 **Prompt Templates** - Use local or global prompt template files
-
-## 🚀 Quick Start
-
-1. Open the Copilot Scheduler sidebar (click the clock icon in the Activity Bar)
-2. Click the "+" button to create a new scheduled task
-3. Enter a task name, prompt, and cron schedule
-4. Your prompt will be automatically sent to Copilot at the scheduled time
+| Setting | Default | Description |
+| -------------------------------------- | ------- | ---------------------------------------------------------------- |
+| `copilotScheduler.enabled` | `true` | Enable/disable scheduled execution |
+| `copilotScheduler.showNotifications` | `true` | Show notifications when tasks are executed |
+| `copilotScheduler.logLevel` | `info` | Log level (none/error/info/debug) |
+| `copilotScheduler.language` | `auto` | UI language (auto/en/ja) |
+| `copilotScheduler.timezone` | `""` | Timezone for scheduling |
+| `copilotScheduler.chatSession` | `new` | Chat session (new/continue) |
+| `copilotScheduler.defaultScope` | `workspace` | Default scope |
+| `copilotScheduler.jitterSeconds` | `0` | Default max random delay (seconds) before execution (0 = off). Each task can override it. |
+| `copilotScheduler.maxDailyExecutions` | `50` | Max scheduled executions per day across all tasks (0 = unlimited) |
+| `copilotScheduler.minimumIntervalWarning` | `true` | Warn when cron interval is shorter than 30 minutes |
 
 ## ⏰ Cron Expression Examples
 
@@ -107,6 +110,10 @@ Store prompt templates for reuse:
 
 - Copilot Chat API is still evolving; some features may require updates as the API stabilizes
 - Model selection may not work in all configurations
+
+**Disclaimer:** This extension automates Copilot Chat. GitHub's Acceptable Use Policies prohibit "excessive automated bulk activity" and "scripted interactions" with Copilot. Use at your own risk; your account could be rate-limited or restricted. Configure jitter/daily limits/longer intervals to reduce risk, but there is no guarantee.
+
+Note: There are reports of Copilot access being restricted even without using automation tools. These mitigations reduce obvious automation patterns but cannot eliminate that risk.
 
 🐛 [Report a bug](https://github.com/aktsmm/vscode-copilot-scheduler/issues)
 

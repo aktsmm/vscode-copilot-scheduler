@@ -20,6 +20,8 @@ import type {
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
 
+const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
+
 function shouldNotify(): boolean {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   return config.get<boolean>("showNotifications", true);
@@ -33,6 +35,65 @@ function getNotificationMode(): NotificationMode {
     return "silentStatus";
   }
   return mode || "sound";
+}
+
+async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
+  if (!cronExpression) return;
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const enabled = config.get<boolean>("minimumIntervalWarning", true);
+  if (!enabled) return;
+  const warning = scheduleManager.checkMinimumInterval(cronExpression);
+  if (warning) {
+    await vscode.window.showInformationMessage(warning);
+  }
+}
+
+async function maybeShowDisclaimerOnce(task: ScheduledTask): Promise<void> {
+  if (!task.enabled) return;
+  if (scheduleManager.isDisclaimerAccepted()) return;
+  await vscode.window.showInformationMessage(
+    messages.disclaimerMessage(),
+    messages.disclaimerAccept(),
+  );
+  await scheduleManager.setDisclaimerAccepted(true);
+}
+
+async function syncPromptTemplatesIfNeeded(
+  context: vscode.ExtensionContext,
+  force = false,
+): Promise<void> {
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  if (!force) {
+    const last = context.globalState.get<string>(PROMPT_SYNC_DATE_KEY, "");
+    if (last === todayKey) {
+      return;
+    }
+  }
+
+  const tasks = scheduleManager.getAllTasks();
+  let updated = false;
+
+  for (const task of tasks) {
+    if (task.promptSource === "inline") continue;
+    if (!task.promptPath) continue;
+    try {
+      const latest = await resolvePromptText(task);
+      if (latest && latest !== task.prompt) {
+        await scheduleManager.updateTask(task.id, { prompt: latest });
+        updated = true;
+      }
+    } catch (error) {
+      console.error(`Prompt sync failed for task ${task.name}: ${error}`);
+    }
+  }
+
+  if (updated) {
+    SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+    treeProvider.refresh();
+  }
+
+  await context.globalState.update(PROMPT_SYNC_DATE_KEY, todayKey);
 }
 
 export function notifyInfo(message: string, timeoutMs = 4000): void {
@@ -104,6 +165,15 @@ export function activate(context: vscode.ExtensionContext): void {
   scheduleManager.startScheduler(async (task) => {
     await executeTask(task);
   });
+
+  // Sync prompt templates to tasks (startup and daily)
+  void syncPromptTemplatesIfNeeded(context, true);
+  setInterval(
+    () => {
+      void syncPromptTemplatesIfNeeded(context, false);
+    },
+    24 * 60 * 60 * 1000,
+  );
 
   // Show activation message
   const config = vscode.workspace.getConfiguration("copilotScheduler");
@@ -278,6 +348,9 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
               ? messages.taskEnabled(task.name)
               : messages.taskDisabled(task.name),
           );
+          if (task.enabled) {
+            await maybeShowDisclaimerOnce(task);
+          }
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         }
         break;
@@ -304,13 +377,16 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
       case "edit": {
         if (action.taskId === "__create__" && action.data) {
+          await maybeWarnCronInterval(action.data.cronExpression);
           const task = await scheduleManager.createTask(
             action.data as CreateTaskInput,
           );
+          await maybeShowDisclaimerOnce(task);
           notifyInfo(messages.taskCreated(task.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           SchedulerWebview.switchToList();
         } else if (action.data) {
+          await maybeWarnCronInterval(action.data.cronExpression);
           const task = await scheduleManager.updateTask(
             action.taskId,
             action.data,
@@ -377,6 +453,7 @@ function registerCreateTaskCommand(): vscode.Disposable {
       if (!cronExpression) return;
 
       try {
+        await maybeWarnCronInterval(cronExpression);
         const task = await scheduleManager.createTask({
           name,
           prompt,
@@ -569,6 +646,7 @@ function registerEnableTaskCommand(): vscode.Disposable {
         const task = await scheduleManager.setTaskEnabled(item.task.id, true);
         if (task) {
           notifyInfo(messages.taskEnabled(task.name));
+          await maybeShowDisclaimerOnce(task);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         }
       }

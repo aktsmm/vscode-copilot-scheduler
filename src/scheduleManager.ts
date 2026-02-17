@@ -18,6 +18,17 @@ declare const console: {
 };
 
 const STORAGE_KEY = "scheduledTasks";
+const DAILY_EXEC_COUNT_KEY = "dailyExecCount";
+const DAILY_EXEC_DATE_KEY = "dailyExecDate";
+const DAILY_LIMIT_NOTIFIED_DATE_KEY = "dailyLimitNotifiedDate";
+const DISCLAIMER_ACCEPTED_KEY = "disclaimerAccepted";
+
+function getLocalDateKey(date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 /**
  * Manages scheduled tasks including CRUD operations, cron parsing, and persistence
@@ -30,10 +41,150 @@ export class ScheduleManager {
   private onExecuteCallback:
     | ((task: ScheduledTask) => Promise<void>)
     | undefined;
+  private dailyExecCount = 0;
+  private dailyExecDate = "";
+  private dailyLimitNotifiedDate = "";
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    this.loadDailyExecCount();
+    this.dailyLimitNotifiedDate = this.context.globalState.get<string>(
+      DAILY_LIMIT_NOTIFIED_DATE_KEY,
+      "",
+    );
     this.loadTasks();
+  }
+
+  // ==================== Safety: Daily Execution Limit ====================
+
+  /**
+   * Load daily execution count from globalState
+   */
+  private loadDailyExecCount(): void {
+    const today = getLocalDateKey();
+    const savedDate = this.context.globalState.get<string>(
+      DAILY_EXEC_DATE_KEY,
+      "",
+    );
+    if (savedDate === today) {
+      this.dailyExecCount = this.context.globalState.get<number>(
+        DAILY_EXEC_COUNT_KEY,
+        0,
+      );
+    } else {
+      // New day, reset counter
+      this.dailyExecCount = 0;
+      this.dailyExecDate = today;
+      void this.context.globalState.update(DAILY_EXEC_COUNT_KEY, 0);
+      void this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+    }
+    this.dailyExecDate = today;
+  }
+
+  /**
+   * Increment daily execution count
+   */
+  private async incrementDailyExecCount(): Promise<void> {
+    const today = getLocalDateKey();
+    if (this.dailyExecDate !== today) {
+      this.dailyExecCount = 0;
+      this.dailyExecDate = today;
+    }
+    this.dailyExecCount++;
+    await this.context.globalState.update(
+      DAILY_EXEC_COUNT_KEY,
+      this.dailyExecCount,
+    );
+    await this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+  }
+
+  /**
+   * Check if daily execution limit has been reached
+   */
+  private isDailyLimitReached(): boolean {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const maxDaily = config.get<number>("maxDailyExecutions", 50);
+    if (maxDaily <= 0) return false; // 0 = unlimited
+    const today = getLocalDateKey();
+    if (this.dailyExecDate !== today) {
+      this.dailyExecCount = 0;
+      this.dailyExecDate = today;
+    }
+    return this.dailyExecCount >= maxDaily;
+  }
+
+  /**
+   * Get current daily execution count and limit
+   */
+  getDailyExecInfo(): { count: number; limit: number } {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const maxDaily = config.get<number>("maxDailyExecutions", 50);
+    return { count: this.dailyExecCount, limit: maxDaily };
+  }
+
+  // ==================== Safety: Jitter (Random Delay) ====================
+
+  /**
+   * Apply random jitter delay to reduce machine-like patterns
+   */
+  private async applyJitter(maxJitterSeconds: number): Promise<void> {
+    if (maxJitterSeconds <= 0) return;
+
+    const jitterMs = Math.floor(Math.random() * maxJitterSeconds * 1000);
+    const jitterSec = Math.round(jitterMs / 1000);
+    if (jitterSec > 0) {
+      const logLevel = config.get<string>("logLevel", "info");
+      if (logLevel === "debug") {
+        console.log(`[CopilotScheduler] Jitter: waiting ${jitterSec}s`);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, jitterMs));
+    }
+  }
+
+  // ==================== Safety: Minimum Interval Warning ====================
+
+  /**
+   * Check if a cron expression has a short interval and return warning if so
+   */
+  checkMinimumInterval(cronExpression: string): string | undefined {
+    try {
+      const options: { currentDate: Date; tz?: string } = {
+        currentDate: new Date(),
+      };
+      const tz = this.getTimeZone();
+      if (tz) options.tz = tz;
+
+      const interval = parseExpression(cronExpression, options);
+      const first = interval.next().toDate();
+      const second = interval.next().toDate();
+      const diffMinutes = (second.getTime() - first.getTime()) / (1000 * 60);
+
+      if (diffMinutes < 30) {
+        return messages.minimumIntervalWarning();
+      }
+    } catch {
+      // If parsing fails, skip interval check
+    }
+    return undefined;
+  }
+
+  // ==================== Safety: Disclaimer ====================
+
+  /**
+   * Check if the user has accepted the disclaimer
+   */
+  isDisclaimerAccepted(): boolean {
+    return this.context.globalState.get<boolean>(
+      DISCLAIMER_ACCEPTED_KEY,
+      false,
+    );
+  }
+
+  /**
+   * Set disclaimer accepted state
+   */
+  async setDisclaimerAccepted(accepted: boolean): Promise<void> {
+    await this.context.globalState.update(DISCLAIMER_ACCEPTED_KEY, accepted);
   }
 
   /**
@@ -80,6 +231,11 @@ export class ScheduleManager {
       }
       if (!task.promptSource) {
         task.promptSource = "inline";
+      }
+
+      // Migration: add jitterSeconds if missing
+      if (task.jitterSeconds === undefined) {
+        task.jitterSeconds = 0;
       }
 
       // Recalculate nextRun for enabled tasks (always use current time)
@@ -213,6 +369,7 @@ export class ScheduleManager {
     // Get default scope from configuration
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const defaultJitter = config.get<number>("jitterSeconds", 0);
 
     const task: ScheduledTask = {
       id,
@@ -229,6 +386,12 @@ export class ScheduleManager {
           : undefined,
       promptSource: input.promptSource || "inline",
       promptPath: input.promptPath,
+      jitterSeconds:
+        input.jitterSeconds !== undefined
+          ? input.jitterSeconds
+          : defaultJitter > 0
+            ? defaultJitter
+            : 0,
       nextRun,
       createdAt: now,
       updatedAt: now,
@@ -315,6 +478,9 @@ export class ScheduleManager {
     }
     if (updates.promptPath !== undefined) {
       task.promptPath = updates.promptPath;
+    }
+    if (updates.jitterSeconds !== undefined) {
+      task.jitterSeconds = updates.jitterSeconds;
     }
 
     // One-time immediate scheduling on update
@@ -513,10 +679,42 @@ export class ScheduleManager {
 
       // Check if due
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
+        // Safety: Check daily execution limit
+        if (this.isDailyLimitReached()) {
+          const config = vscode.workspace.getConfiguration("copilotScheduler");
+          const maxDaily = config.get<number>("maxDailyExecutions", 50);
+          console.log(
+            `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
+          );
+          const todayKey = getLocalDateKey();
+          if (this.dailyLimitNotifiedDate !== todayKey) {
+            this.dailyLimitNotifiedDate = todayKey;
+            void this.context.globalState.update(
+              DAILY_LIMIT_NOTIFIED_DATE_KEY,
+              todayKey,
+            );
+            void vscode.window.showInformationMessage(
+              messages.dailyLimitReached(maxDaily),
+            );
+          }
+          // Still advance nextRun so it doesn't keep retrying
+          task.nextRun = this.getNextRun(task.cronExpression, now);
+          await this.saveTasks();
+          continue;
+        }
+
+        // Safety: Apply jitter (random delay)
+        const config = vscode.workspace.getConfiguration("copilotScheduler");
+        const maxJitterSeconds =
+          task.jitterSeconds ?? config.get<number>("jitterSeconds", 0);
+        await this.applyJitter(maxJitterSeconds ?? 0);
+
         // Execute
         if (this.onExecuteCallback) {
           try {
             await this.onExecuteCallback(task);
+            // Track daily execution count
+            await this.incrementDailyExecCount();
           } catch (error) {
             console.error(`Task execution error: ${error}`);
           }
