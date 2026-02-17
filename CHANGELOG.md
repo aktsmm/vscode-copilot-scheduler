@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-02-17
+
+### Changed
+
+- **Remove unlimited bypass**: `maxDailyExecutions` no longer accepts 0 (unlimited). Enforced range: 1–48 (default: 12).
+- **Hard cap raised**: `maxDailyExecutions` hard cap changed from 24 to 48 for flexibility.
+
+## [0.9.2] - 2026-02-17
+
+### Changed
+
+- **Safety-first defaults**: `jitterSeconds` default changed from 0 to 600 (10 min max random delay enabled by default).
+- **Jitter hard minimum**: `jitterSeconds` minimum raised from 0 to 60 seconds.
+- **Daily execution limit tightened**: `maxDailyExecutions` default changed from 50 to 12, with a hard cap of 24/day.
+
 ## [0.9.1] - 2026-02-17
 
 ### Documentation

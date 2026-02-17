@@ -103,8 +103,8 @@ export class ScheduleManager {
    */
   private isDailyLimitReached(): boolean {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const maxDaily = config.get<number>("maxDailyExecutions", 50);
-    if (maxDaily <= 0) return false; // 0 = unlimited
+    const rawMax = config.get<number>("maxDailyExecutions", 12);
+    const maxDaily = Math.min(Math.max(rawMax, 1), 48); // enforce 1–48
     const today = getLocalDateKey();
     if (this.dailyExecDate !== today) {
       this.dailyExecCount = 0;
@@ -118,7 +118,8 @@ export class ScheduleManager {
    */
   getDailyExecInfo(): { count: number; limit: number } {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const maxDaily = config.get<number>("maxDailyExecutions", 50);
+    const rawMax = config.get<number>("maxDailyExecutions", 12);
+    const maxDaily = Math.min(Math.max(rawMax, 1), 48); // enforce 1–48
     return { count: this.dailyExecCount, limit: maxDaily };
   }
 
@@ -369,7 +370,7 @@ export class ScheduleManager {
     // Get default scope from configuration
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
-    const defaultJitter = config.get<number>("jitterSeconds", 0);
+    const defaultJitter = config.get<number>("jitterSeconds", 600);
 
     const task: ScheduledTask = {
       id,
@@ -682,7 +683,8 @@ export class ScheduleManager {
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached()) {
           const config = vscode.workspace.getConfiguration("copilotScheduler");
-          const maxDaily = config.get<number>("maxDailyExecutions", 50);
+          const rawMax = config.get<number>("maxDailyExecutions", 12);
+          const maxDaily = Math.min(Math.max(rawMax, 1), 48);
           console.log(
             `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
           );
