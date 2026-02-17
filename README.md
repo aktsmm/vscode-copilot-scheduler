@@ -36,7 +36,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `copilotScheduler.timezone` | `""` | Timezone for scheduling |
 | `copilotScheduler.chatSession` | `new` | Chat session (new/continue) |
 | `copilotScheduler.defaultScope` | `workspace` | Default scope |
-| `copilotScheduler.jitterSeconds` | `600` | Max random delay (seconds) before execution (60–600). Each task can override it. |
+| `copilotScheduler.jitterSeconds` | `600` | Max random delay (seconds) before execution (60–1800). Each task can override it. |
 | `copilotScheduler.maxDailyExecutions` | `12` | Daily execution limit across all tasks (1–48). | Max scheduled executions per day across all tasks (0 = unlimited) |
 | `copilotScheduler.minimumIntervalWarning` | `true` | Warn when cron interval is shorter than 30 minutes |
 

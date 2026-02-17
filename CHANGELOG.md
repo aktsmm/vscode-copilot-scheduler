@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-02-17
+
+### Changed
+
+- **Jitter max raised**: `jitterSeconds` maximum raised from 600 to 1800 (30 min), allowing users to add more randomization.
+
 ## [0.9.3] - 2026-02-17
 
 ### Changed
