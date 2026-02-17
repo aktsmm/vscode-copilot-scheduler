@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-02-17
+
+### Documentation
+
+- Added primary source URLs to disclaimer sections (AUP §4, ToS §H, Copilot Additional Terms, Community Discussion #160013)
+
 ## [0.9.0] - 2026-02-17
 
 ### Added
