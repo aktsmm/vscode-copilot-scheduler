@@ -7,9 +7,11 @@ import * as vscode from "vscode";
 import { parseExpression } from "cron-parser";
 import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
 import { messages } from "./i18n";
+import { logDebug, logError } from "./logger";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
+declare const clearTimeout: (timeoutId: NodeJS.Timeout) => void;
 declare const setInterval: (callback: () => void, ms: number) => NodeJS.Timeout;
 declare const clearInterval: (intervalId: NodeJS.Timeout) => void;
 declare const console: {
@@ -36,6 +38,7 @@ function getLocalDateKey(date = new Date()): string {
 export class ScheduleManager {
   private tasks: Map<string, ScheduledTask> = new Map();
   private schedulerInterval: ReturnType<typeof setInterval> | undefined;
+  private schedulerTimeout: ReturnType<typeof setTimeout> | undefined;
   private context: vscode.ExtensionContext;
   private onTasksChangedCallback: (() => void) | undefined;
   private onExecuteCallback:
@@ -78,7 +81,7 @@ export class ScheduleManager {
       void this.context.globalState
         .update(DAILY_EXEC_COUNT_KEY, 0)
         .then(undefined, (error: unknown) =>
-          console.error(
+            logError(
             "[CopilotScheduler] Failed to reset daily execution count:",
             error,
           ),
@@ -86,7 +89,7 @@ export class ScheduleManager {
       void this.context.globalState
         .update(DAILY_EXEC_DATE_KEY, today)
         .then(undefined, (error: unknown) =>
-          console.error(
+            logError(
             "[CopilotScheduler] Failed to reset daily execution date:",
             error,
           ),
@@ -153,11 +156,7 @@ export class ScheduleManager {
     const jitterMs = Math.floor(Math.random() * maxJitterSeconds * 1000);
     const jitterSec = Math.round(jitterMs / 1000);
     if (jitterSec > 0) {
-      const config = vscode.workspace.getConfiguration("copilotScheduler");
-      const logLevel = config.get<string>("logLevel", "info");
-      if (logLevel === "debug") {
-        console.log(`[CopilotScheduler] Jitter: waiting ${jitterSec}s`);
-      }
+      logDebug(`[CopilotScheduler] Jitter: waiting ${jitterSec}s`);
       await new Promise<void>((resolve) => setTimeout(resolve, jitterMs));
     }
   }
@@ -282,7 +281,7 @@ export class ScheduleManager {
     // Save if any changes were made
     if (needsSave) {
       void this.saveTasks().catch((error) =>
-        console.error(
+          logError(
           "[CopilotScheduler] Failed to save migrated tasks:",
           error,
         ),
@@ -306,7 +305,7 @@ export class ScheduleManager {
     const updatePromise = Promise.resolve(updateThenable);
     const guarded = updatePromise.catch((error) => {
       if (timedOut) {
-        console.error(
+        logError(
           "[CopilotScheduler] Task save failed after timeout:",
           error,
         );
@@ -545,7 +544,8 @@ export class ScheduleManager {
       if (nextScope !== task.scope) {
         task.scope = nextScope;
         if (nextScope === "workspace") {
-          task.workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          task.workspacePath =
+            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         } else {
           task.workspacePath = undefined;
         }
@@ -696,7 +696,8 @@ export class ScheduleManager {
       (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
 
     // Start after alignment
-    setTimeout(() => {
+    this.schedulerTimeout = setTimeout(() => {
+      this.schedulerTimeout = undefined;
       // Execute immediately on first aligned minute
       this.checkAndExecuteTasks();
 
@@ -711,6 +712,10 @@ export class ScheduleManager {
    * Stop the scheduler
    */
   stopScheduler(): void {
+    if (this.schedulerTimeout) {
+      clearTimeout(this.schedulerTimeout);
+      this.schedulerTimeout = undefined;
+    }
     if (this.schedulerInterval) {
       clearInterval(this.schedulerInterval);
       this.schedulerInterval = undefined;
@@ -765,7 +770,7 @@ export class ScheduleManager {
           const rawMax = config.get<number>("maxDailyExecutions", 24);
           const maxDaily =
             rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100);
-          console.log(
+            logDebug(
             `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
           );
           const todayKey = getLocalDateKey();
@@ -774,7 +779,7 @@ export class ScheduleManager {
             void this.context.globalState
               .update(DAILY_LIMIT_NOTIFIED_DATE_KEY, todayKey)
               .then(undefined, (error: unknown) =>
-                console.error(
+                  logError(
                   "[CopilotScheduler] Failed to persist daily limit notified date:",
                   error,
                 ),
@@ -802,7 +807,7 @@ export class ScheduleManager {
             // Track daily execution count
             await this.incrementDailyExecCount();
           } catch (error) {
-            console.error(`Task execution error: ${error}`);
+              logError(`Task execution error: ${error}`);
           }
         }
 

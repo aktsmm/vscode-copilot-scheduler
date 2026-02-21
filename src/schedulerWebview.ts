@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import { CopilotExecutor } from "./copilotExecutor";
 import { messages, isJapanese, getCronPresets } from "./i18n";
+import { logError } from "./logger";
 
 /**
  * Manages the Webview panel for task management
@@ -75,10 +76,7 @@ export class SchedulerWebview {
           });
         })
         .catch((error) => {
-          console.error(
-            "[CopilotScheduler] Failed to refresh agents/models:",
-            error,
-          );
+          logError("[CopilotScheduler] Failed to refresh agents/models:", error);
         });
 
       void this.refreshPromptTemplates(true)
@@ -90,7 +88,7 @@ export class SchedulerWebview {
           });
         })
         .catch((error) => {
-          console.error(
+          logError(
             "[CopilotScheduler] Failed to refresh prompt templates:",
             error,
           );
@@ -187,6 +185,40 @@ export class SchedulerWebview {
         this.cachedPromptTemplates,
       );
     }
+  }
+
+  /**
+   * Refresh cached agents/models/templates and notify the webview without rebuilding HTML.
+   * Use this for settings changes (e.g., global paths) to avoid resetting form state.
+   */
+  static async refreshCachesAndNotifyPanel(force = true): Promise<void> {
+    try {
+      await this.refreshAgentsAndModels(force);
+    } catch {
+      this.cachedAgents = CopilotExecutor.getBuiltInAgents();
+      this.cachedModels = CopilotExecutor.getFallbackModels();
+    }
+
+    try {
+      await this.refreshPromptTemplates(force);
+    } catch {
+      this.cachedPromptTemplates = [];
+    }
+
+    if (!this.panel) return;
+
+    this.panel.webview.postMessage({
+      type: "updateAgents",
+      agents: this.cachedAgents,
+    });
+    this.panel.webview.postMessage({
+      type: "updateModels",
+      models: this.cachedModels,
+    });
+    this.panel.webview.postMessage({
+      type: "updatePromptTemplates",
+      templates: this.cachedPromptTemplates,
+    });
   }
 
   /**

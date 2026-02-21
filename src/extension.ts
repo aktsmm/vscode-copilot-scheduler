@@ -11,6 +11,7 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
+import { logError } from "./logger";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -88,7 +89,7 @@ async function syncPromptTemplatesIfNeeded(
         updated = true;
       }
     } catch (error) {
-      console.error(`Prompt sync failed for task ${task.name}: ${error}`);
+      logError(`Prompt sync failed for task ${task.name}: ${error}`);
     }
   }
 
@@ -122,7 +123,7 @@ export function notifyError(message: string, timeoutMs = 6000): void {
   const mode = getNotificationMode();
   if (mode === "silentStatus") {
     vscode.window.setStatusBarMessage(`⚠ ${message}`, timeoutMs);
-    console.error(message);
+    logError(message);
     return;
   }
   void vscode.window.showErrorMessage(message);
@@ -170,14 +171,22 @@ export function activate(context: vscode.ExtensionContext): void {
     await executeTask(task);
   });
 
+  // If disabled in settings, stop the timer immediately (callback stays set for manual runs)
+  {
+    const cfg = vscode.workspace.getConfiguration("copilotScheduler");
+    if (cfg.get<boolean>("enabled", true) === false) {
+      scheduleManager.stopScheduler();
+    }
+  }
+
   // Sync prompt templates to tasks (startup and daily)
   void syncPromptTemplatesIfNeeded(context, true).catch((error) =>
-    console.error("[CopilotScheduler] Prompt template sync failed:", error),
+    logError("[CopilotScheduler] Prompt template sync failed:", error),
   );
   setInterval(
     () => {
       void syncPromptTemplatesIfNeeded(context, false).catch((error) =>
-        console.error(
+        logError(
           "[CopilotScheduler] Prompt template daily sync failed:",
           error,
         ),
@@ -203,7 +212,18 @@ export function activate(context: vscode.ExtensionContext): void {
       e.affectsConfiguration("copilotScheduler.globalPromptsPath") ||
       e.affectsConfiguration("copilotScheduler.globalAgentsPath")
     ) {
-      SchedulerWebview.refreshLanguage(scheduleManager.getAllTasks());
+      void SchedulerWebview.refreshCachesAndNotifyPanel(true);
+    }
+    if (e.affectsConfiguration("copilotScheduler.enabled")) {
+      const cfg = vscode.workspace.getConfiguration("copilotScheduler");
+      const enabled = cfg.get<boolean>("enabled", true);
+      if (enabled) {
+        scheduleManager.startScheduler(async (task) => {
+          await executeTask(task);
+        });
+      } else {
+        scheduleManager.stopScheduler();
+      }
     }
     if (e.affectsConfiguration("copilotScheduler.maxDailyExecutions")) {
       const cfg = vscode.workspace.getConfiguration("copilotScheduler");

@@ -14,6 +14,7 @@ import type {
   ChatSessionBehavior,
 } from "./types";
 import { messages, isJapanese } from "./i18n";
+import { logDebug, logError } from "./logger";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -45,11 +46,11 @@ export class CopilotExecutor {
           fullPrompt = `@${options.agent} ${processedPrompt}`;
         }
       }
-      console.log(
+      logDebug(
         `[CopilotScheduler] Agent set: ${options.agent}, Full prompt: ${fullPrompt.substring(0, 100)}...`,
       );
     } else {
-      console.log(`[CopilotScheduler] No agent specified, using default`);
+      logDebug(`[CopilotScheduler] No agent specified, using default`);
     }
 
     // Get chat session behavior
@@ -71,21 +72,21 @@ export class CopilotExecutor {
       // Try to set model if specified
       if (options?.model && options.model !== "") {
         try {
-          console.log(
+          logDebug(
             `[CopilotScheduler] Attempting to select model: ${options.model}`,
           );
           const result = await vscode.commands.executeCommand(
             "workbench.action.chat.selectModel",
             options.model,
           );
-          console.log(`[CopilotScheduler] Model selection result:`, result);
+          logDebug(`[CopilotScheduler] Model selection result:`, result);
           await this.delay(200);
         } catch (error) {
-          console.error(`[CopilotScheduler] Model selection failed:`, error);
+          logError(`[CopilotScheduler] Model selection failed:`, error);
           // Model selection may not be available, continue without it
         }
       } else {
-        console.log(`[CopilotScheduler] No model specified or model is empty`);
+        logDebug(`[CopilotScheduler] No model specified or model is empty`);
       }
 
       // Type the prompt using the type command
