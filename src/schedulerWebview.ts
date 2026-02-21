@@ -190,11 +190,11 @@ export class SchedulerWebview {
   }
 
   /**
-   * Switch to the list tab
+   * Switch to the list tab, optionally showing a success toast
    */
-  static switchToList(): void {
+  static switchToList(successMessage?: string): void {
     if (this.panel) {
-      this.panel.webview.postMessage({ type: "switchToList" });
+      this.panel.webview.postMessage({ type: "switchToList", successMessage });
     }
   }
 
@@ -1132,6 +1132,7 @@ export class SchedulerWebview {
   </div>
   
   <div id="list-tab" class="tab-content">
+    <div id="success-toast" style="display:none; background:var(--vscode-notificationsInfoIcon-foreground, #3794ff); color:#fff; padding:8px 14px; border-radius:4px; margin-bottom:12px; font-size:13px; opacity:1; transition:opacity 0.5s ease-out;"></div>
     <div class="button-group" style="margin-bottom: 16px;">
       <button class="btn-secondary" id="refresh-btn">${strings.actionRefresh}</button>
     </div>
@@ -1942,6 +1943,16 @@ export class SchedulerWebview {
             if (submitBtn) submitBtn.disabled = false;
             resetForm();
             switchTab('list');
+            if (message.successMessage) {
+              var toast = document.getElementById('success-toast');
+              if (toast) {
+                toast.textContent = '\u2714 ' + message.successMessage;
+                toast.style.display = 'block';
+                toast.style.opacity = '1';
+                setTimeout(function() { toast.style.opacity = '0'; }, 3000);
+                setTimeout(function() { toast.style.display = 'none'; toast.style.opacity = '1'; }, 3500);
+              }
+            }
             break;
           case 'focusTask':
             switchTab('list');

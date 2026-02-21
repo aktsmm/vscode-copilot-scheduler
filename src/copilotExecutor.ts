@@ -45,6 +45,11 @@ export class CopilotExecutor {
           fullPrompt = `@${options.agent} ${processedPrompt}`;
         }
       }
+      console.log(
+        `[CopilotScheduler] Agent set: ${options.agent}, Full prompt: ${fullPrompt.substring(0, 100)}...`,
+      );
+    } else {
+      console.log(`[CopilotScheduler] No agent specified, using default`);
     }
 
     // Get chat session behavior
@@ -69,16 +74,18 @@ export class CopilotExecutor {
           console.log(
             `[CopilotScheduler] Attempting to select model: ${options.model}`,
           );
-          await vscode.commands.executeCommand(
+          const result = await vscode.commands.executeCommand(
             "workbench.action.chat.selectModel",
             options.model,
           );
-          console.log(`[CopilotScheduler] Model selection command executed`);
-          await this.delay(100);
+          console.log(`[CopilotScheduler] Model selection result:`, result);
+          await this.delay(200);
         } catch (error) {
           console.error(`[CopilotScheduler] Model selection failed:`, error);
           // Model selection may not be available, continue without it
         }
+      } else {
+        console.log(`[CopilotScheduler] No model specified or model is empty`);
       }
 
       // Type the prompt using the type command

@@ -399,9 +399,10 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             action.data as CreateTaskInput,
           );
           await maybeShowDisclaimerOnce(task);
-          notifyInfo(messages.taskCreated(task.name));
+          const createdMsg = messages.taskCreated(task.name);
+          notifyInfo(createdMsg);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-          SchedulerWebview.switchToList();
+          SchedulerWebview.switchToList(createdMsg);
         } else if (action.data) {
           await maybeWarnCronInterval(action.data.cronExpression);
           const task = await scheduleManager.updateTask(
@@ -409,9 +410,10 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             action.data,
           );
           if (task) {
-            notifyInfo(messages.taskUpdated(task.name));
+            const updatedMsg = messages.taskUpdated(task.name);
+            notifyInfo(updatedMsg);
             SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-            SchedulerWebview.switchToList();
+            SchedulerWebview.switchToList(updatedMsg);
           }
         }
         break;
