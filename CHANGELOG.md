@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-02-22
+
+### Fixed
+
+- **Edit form: agent/model/template preservation**: Editing a task no longer loses agent, model, or prompt template selections when dropdown options haven't loaded yet (pending-value mechanism).
+- **Edit form: enabled state**: Editing a disabled task no longer re-enables it on save.
+- **Edit form: workspacePath stability**: Editing a workspace-scoped task from a different workspace no longer overwrites the original `workspacePath`.
+- **Manual run (Run Now)**: Now correctly persists `lastRun` and refreshes the tree/webview after execution, without applying jitter or daily limits.
+
+### Added
+
+- **Logger utility** (`src/logger.ts`): All `console.log`/`console.error` output is now gated by the `copilotScheduler.logLevel` setting (`none` / `error` / `info` / `debug`).
+- **Settings hot-reload**: Changing `globalPromptsPath` or `globalAgentsPath` now refreshes the agent/model/template caches and updates the webview **without rebuilding the HTML** (preserving form state).
+- **Scheduler enabled/disabled toggle**: Changing `copilotScheduler.enabled` now starts or stops the scheduler timer immediately, instead of only checking at each tick.
+
 ## [0.9.6] - 2026-02-22
 
 ### Fixed
