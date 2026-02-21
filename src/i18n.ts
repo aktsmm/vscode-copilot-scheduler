@@ -275,8 +275,8 @@ export const messages = {
     ),
   minimumIntervalWarning: () =>
     t(
-      "⚠️ Warning: Cron intervals shorter than 30 minutes may increase the risk of being flagged by GitHub's abuse-detection system. Consider using a longer interval.",
-      "⚠️ 警告: 30分未満のcron間隔は、GitHubの不正検出システムに検出されるリスクが高まる可能性があります。より長い間隔の使用を検討してください。",
+      "Cron intervals shorter than 30 minutes may increase the risk of being flagged by GitHub's abuse-detection system.",
+      "30分未満のcron間隔は、GitHubの不正検出システムに検出されるリスクが高まる可能性があります。",
     ),
   disclaimerTitle: () => t("⚠️ Important Notice", "⚠️ 重要なお知らせ"),
   disclaimerMessage: () =>
@@ -286,10 +286,19 @@ export const messages = {
     ),
   disclaimerAccept: () => t("I understand the risks", "リスクを理解しました"),
   disclaimerDecline: () => t("Cancel", "キャンセル"),
+  unlimitedDailyWarning: () =>
+    t(
+      "⚠️ Daily execution limit is set to unlimited (0). Excessive automated usage may result in API rate-limiting or account restrictions by the provider. Use at your own risk.",
+      "⚠️ 1日の実行回数上限が無制限（0）に設定されています。過度な自動利用はAPIプロバイダーによるレート制限やアカウント制限の原因となる可能性があります。自己責任でご利用ください。",
+    ),
   dailyExecutionCount: (count: number, limit: number) =>
     t(
-      `Today's executions: ${count}/${limit}`,
-      `本日の実行回数: ${count}/${limit}`,
+      limit === 0
+        ? `Today's executions: ${count} (unlimited)`
+        : `Today's executions: ${count}/${limit}`,
+      limit === 0
+        ? `本日の実行回数: ${count} (無制限)`
+        : `本日の実行回数: ${count}/${limit}`,
     ),
 };
 

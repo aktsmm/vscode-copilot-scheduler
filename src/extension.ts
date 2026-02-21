@@ -194,6 +194,12 @@ export function activate(context: vscode.ExtensionContext): void {
     ) {
       SchedulerWebview.refreshLanguage(scheduleManager.getAllTasks());
     }
+    if (e.affectsConfiguration("copilotScheduler.maxDailyExecutions")) {
+      const cfg = vscode.workspace.getConfiguration("copilotScheduler");
+      if (cfg.get<number>("maxDailyExecutions", 24) === 0) {
+        void vscode.window.showWarningMessage(messages.unlimitedDailyWarning());
+      }
+    }
   });
 
   // Register subscriptions

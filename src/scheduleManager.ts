@@ -103,8 +103,12 @@ export class ScheduleManager {
    */
   private isDailyLimitReached(): boolean {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const rawMax = config.get<number>("maxDailyExecutions", 12);
-    const maxDaily = Math.min(Math.max(rawMax, 1), 48); // enforce 1–48
+    const rawMax = config.get<number>("maxDailyExecutions", 24);
+    // 0 = unlimited (no daily limit, use at your own risk)
+    if (rawMax === 0) {
+      return false;
+    }
+    const maxDaily = Math.min(Math.max(rawMax, 1), 100); // enforce 1–100
     const today = getLocalDateKey();
     if (this.dailyExecDate !== today) {
       this.dailyExecCount = 0;
@@ -118,8 +122,9 @@ export class ScheduleManager {
    */
   getDailyExecInfo(): { count: number; limit: number } {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const rawMax = config.get<number>("maxDailyExecutions", 12);
-    const maxDaily = Math.min(Math.max(rawMax, 1), 48); // enforce 1–48
+    const rawMax = config.get<number>("maxDailyExecutions", 24);
+    // 0 = unlimited
+    const maxDaily = rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100); // enforce 0 or 1–100
     return { count: this.dailyExecCount, limit: maxDaily };
   }
 
@@ -683,8 +688,9 @@ export class ScheduleManager {
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached()) {
           const config = vscode.workspace.getConfiguration("copilotScheduler");
-          const rawMax = config.get<number>("maxDailyExecutions", 12);
-          const maxDaily = Math.min(Math.max(rawMax, 1), 48);
+          const rawMax = config.get<number>("maxDailyExecutions", 24);
+          const maxDaily =
+            rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100);
           console.log(
             `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
           );

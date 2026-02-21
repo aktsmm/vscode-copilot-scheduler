@@ -35,7 +35,7 @@
   "config.defaultScope.global": "Global (all workspaces)",
   "config.defaultScope.workspace": "Workspace (current workspace only)",
   "config.jitterSeconds": "Default max random delay in seconds before running a task (0 = off). Each task can override this.",
-  "config.maxDailyExecutions": "Maximum number of scheduled executions per day across all tasks (0 = unlimited)",
+  "config.maxDailyExecutions": "Maximum scheduled executions per day across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.",
   "config.minimumIntervalWarning": "Show a warning when a cron interval is shorter than 30 minutes",
   "config.globalPromptsPath": "Custom path for global prompt templates. Default: %APPDATA%\\Code\\User\\prompts",
   "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: %APPDATA%\\Code\\User\\prompts",

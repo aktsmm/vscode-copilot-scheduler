@@ -1071,7 +1071,7 @@ export class SchedulerWebview {
 
       <div class="form-group">
         <label for="jitter-seconds">${strings.labelJitterSeconds}</label>
-        <input type="number" id="jitter-seconds" min="0" max="600" value="0">
+        <input type="number" id="jitter-seconds" min="0" max="1800" value="0">
         <p class="note" style="margin-top:4px;">0 ${isJa ? "で無効。値を入れると0〜その秒数でランダム遅延します。" : "disables jitter. Adds a random delay between 0 and the specified seconds before execution."}</p>
       </div>
       

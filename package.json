@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -209,9 +209,9 @@
         },
         "copilotScheduler.maxDailyExecutions": {
           "type": "number",
-          "default": 12,
-          "minimum": 1,
-          "maximum": 48,
+          "default": 24,
+          "minimum": 0,
+          "maximum": 100,
           "description": "%config.maxDailyExecutions%"
         },
         "copilotScheduler.minimumIntervalWarning": {

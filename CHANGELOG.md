@@ -5,6 +5,15 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-02-21
+
+### Changed
+
+- **Allow unlimited daily executions**: `maxDailyExecutions` now accepts 0 (unlimited) again, with a warning that excessive usage may risk API rate-limiting. Use at your own risk.
+- **Default raised to 24**: `maxDailyExecutions` default changed from 12 to 24.
+- **Hard cap raised to 100**: `maxDailyExecutions` range changed from 1–48 to 0–100 (0 = unlimited).
+- **Unlimited warning**: A warning message is shown when setting `maxDailyExecutions` to 0.
+
 ## [0.9.4] - 2026-02-17
 
 ### Changed
