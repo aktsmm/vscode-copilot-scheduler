@@ -1185,6 +1185,10 @@ export class SchedulerWebview {
         ? initialData.promptTemplates
         : [];
       var editingTaskId = null;
+      var pendingAgentValue = '';
+      var pendingModelValue = '';
+      var pendingTemplatePath = '';
+      var editingTaskEnabled = true;
       var pendingSubmit = false;
 
       var strings = initialData.strings || {};
@@ -1227,6 +1231,23 @@ export class SchedulerWebview {
         var targetContent = document.getElementById(tabName + '-tab');
         if (targetBtn) targetBtn.classList.add('active');
         if (targetContent) targetContent.classList.add('active');
+      }
+
+      // Keep pending values in sync when the user explicitly changes selection
+      if (agentSelect) {
+        agentSelect.addEventListener('change', function() {
+          pendingAgentValue = '';
+        });
+      }
+      if (modelSelect) {
+        modelSelect.addEventListener('change', function() {
+          pendingModelValue = '';
+        });
+      }
+      if (templateSelect) {
+        templateSelect.addEventListener('change', function() {
+          pendingTemplatePath = templateSelect ? templateSelect.value : '';
+        });
       }
       
       // Use event delegation for tab buttons (more reliable)
@@ -1319,21 +1340,42 @@ export class SchedulerWebview {
           var scopeEl = document.querySelector('input[name="scope"]:checked');
           var promptSourceEl = document.querySelector('input[name="prompt-source"]:checked');
           var runFirstEl = document.getElementById('run-first');
+
+          var promptSourceValue = promptSourceEl ? promptSourceEl.value : 'inline';
+
+          // Preserve values if dropdown options are not loaded yet
+          var agentValue = agentSelect ? agentSelect.value : '';
+          if (editingTaskId && !agentValue && pendingAgentValue) {
+            agentValue = pendingAgentValue;
+          }
+          var modelValue = modelSelect ? modelSelect.value : '';
+          if (editingTaskId && !modelValue && pendingModelValue) {
+            modelValue = pendingModelValue;
+          }
+          var promptPathValue = templateSelect ? templateSelect.value : '';
+          if (
+            promptSourceValue !== 'inline' &&
+            editingTaskId &&
+            !promptPathValue &&
+            pendingTemplatePath
+          ) {
+            promptPathValue = pendingTemplatePath;
+          }
           
           var taskData = {
             name: taskNameEl ? taskNameEl.value : '',
             prompt: promptTextEl ? promptTextEl.value : '',
             cronExpression: cronExpression ? cronExpression.value : '',
-            agent: agentSelect ? agentSelect.value : '',
-            model: modelSelect ? modelSelect.value : '',
+            agent: agentValue,
+            model: modelValue,
             scope: scopeEl ? scopeEl.value : 'workspace',
-            promptSource: promptSourceEl ? promptSourceEl.value : 'inline',
-            promptPath: templateSelect ? templateSelect.value : '',
+            promptSource: promptSourceValue,
+            promptPath: promptPathValue,
             runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
             jitterSeconds: jitterSecondsInput
               ? Number(jitterSecondsInput.value || 0)
               : 0,
-            enabled: true
+            enabled: editingTaskId ? editingTaskEnabled : true
           };
 
           var nameValue = (taskData.name || '').trim();
@@ -1736,6 +1778,10 @@ export class SchedulerWebview {
       function resetForm() {
         if (taskForm) taskForm.reset();
         editingTaskId = null;
+        pendingAgentValue = '';
+        pendingModelValue = '';
+        pendingTemplatePath = '';
+        editingTaskEnabled = true;
         if (editTaskIdInput) editTaskIdInput.value = '';
         if (submitBtn) submitBtn.textContent = strings.actionCreate;
         applyPromptSource('inline');
@@ -1838,8 +1884,27 @@ export class SchedulerWebview {
         if (cronPreset) cronPreset.value = '';
         updateCronPreview();
         
-        if (task.agent && agentSelect) agentSelect.value = task.agent;
-        if (task.model && modelSelect) modelSelect.value = task.model;
+        // Restore agent/model — if options not loaded yet, store as pending
+        pendingAgentValue = task.agent || '';
+        pendingModelValue = task.model || '';
+        if (agentSelect) {
+          if (pendingAgentValue && agentSelect.querySelector('option[value="' + pendingAgentValue + '"]')) {
+            agentSelect.value = pendingAgentValue;
+            pendingAgentValue = '';
+          } else if (pendingAgentValue) {
+            // Option not yet loaded — will be applied when updateAgents arrives
+            agentSelect.value = '';
+          }
+        }
+        if (modelSelect) {
+          if (pendingModelValue && modelSelect.querySelector('option[value="' + pendingModelValue + '"]')) {
+            modelSelect.value = pendingModelValue;
+            pendingModelValue = '';
+          } else if (pendingModelValue) {
+            modelSelect.value = '';
+          }
+        }
+        editingTaskEnabled = task.enabled !== false;
         var scopeValue = task.scope || 'workspace';
         var scopeRadio = document.querySelector('input[name="scope"][value="' + scopeValue + '"]');
         if (scopeRadio) {
@@ -1852,7 +1917,18 @@ export class SchedulerWebview {
         }
 
         applyPromptSource(sourceValue, true);
-        if (task.promptPath && templateSelect) templateSelect.value = task.promptPath;
+        pendingTemplatePath = task.promptPath || '';
+        if (templateSelect) {
+          if (
+            pendingTemplatePath &&
+            templateSelect.querySelector('option[value="' + pendingTemplatePath + '"]')
+          ) {
+            templateSelect.value = pendingTemplatePath;
+            pendingTemplatePath = '';
+          } else if (pendingTemplatePath) {
+            templateSelect.value = '';
+          }
+        }
 
         if (jitterSecondsInput) {
           jitterSecondsInput.value = String(task.jitterSeconds ?? 0);
@@ -1903,21 +1979,23 @@ export class SchedulerWebview {
             break;
           case 'updateAgents':
             {
-              var currentAgentValue = agentSelect ? agentSelect.value : '';
+              var currentAgentValue = pendingAgentValue || (agentSelect ? agentSelect.value : '');
               agents = Array.isArray(message.agents) ? message.agents : [];
               updateAgentOptions();
               if (agentSelect && currentAgentValue && agentSelect.querySelector('option[value="' + currentAgentValue + '"]')) {
                 agentSelect.value = currentAgentValue;
+                pendingAgentValue = '';
               }
             }
             break;
           case 'updateModels':
             {
-              var currentModelValue = modelSelect ? modelSelect.value : '';
+              var currentModelValue = pendingModelValue || (modelSelect ? modelSelect.value : '');
               models = Array.isArray(message.models) ? message.models : [];
               updateModelOptions();
               if (modelSelect && currentModelValue && modelSelect.querySelector('option[value="' + currentModelValue + '"]')) {
                 modelSelect.value = currentModelValue;
+                pendingModelValue = '';
               }
             }
             break;
@@ -1926,7 +2004,16 @@ export class SchedulerWebview {
             {
               var sourceElement = document.querySelector('input[name="prompt-source"]:checked');
               var currentSource = sourceElement ? sourceElement.value : 'inline';
-              updateTemplateOptions(currentSource, templateSelect ? templateSelect.value : '');
+              var currentTemplateValue = pendingTemplatePath || (templateSelect ? templateSelect.value : '');
+              updateTemplateOptions(currentSource, currentTemplateValue);
+              if (
+                templateSelect &&
+                currentTemplateValue &&
+                templateSelect.querySelector('option[value="' + currentTemplateValue + '"]')
+              ) {
+                templateSelect.value = currentTemplateValue;
+                pendingTemplatePath = '';
+              }
               if (currentSource === 'local' || currentSource === 'global') {
                 if (templateSelectGroup) templateSelectGroup.style.display = 'block';
               } else {

@@ -350,10 +350,16 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
   try {
     switch (action.action) {
       case "run": {
-        const runTask = scheduleManager.getTask(action.taskId);
-        if (runTask) {
-          await executeTask(runTask);
+        // Manual run: no jitter / no daily limit. Persist lastRun when possible.
+        const ok = await scheduleManager.runTaskNow(action.taskId);
+        if (!ok) {
+          const runTask = scheduleManager.getTask(action.taskId);
+          if (runTask) {
+            await executeTask(runTask);
+          }
         }
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        treeProvider.refresh();
         break;
       }
 
@@ -717,7 +723,13 @@ function registerRunNowCommand(): vscode.Disposable {
         task = selected.task;
       }
 
-      await executeTask(task);
+      // Manual run: no jitter / no daily limit. Persist lastRun when possible.
+      const ok = await scheduleManager.runTaskNow(task.id);
+      if (!ok) {
+        await executeTask(task);
+      }
+      SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+      treeProvider.refresh();
     },
   );
 }
