@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-02-22
+
+### Fixed
+
+- **Task creation reliability**: Webview task creation no longer resets the form before the extension confirms success; validation errors are shown inline.
+- **Windows Server stability**: Webview no longer blocks on agent/model/template refresh; background refresh reduces UI hangs.
+- **Jitter runtime error**: Fixed a potential ReferenceError during jitter delay.
+- **Tooltip safety**: Prompt preview tooltip no longer uses trusted Markdown.
+- **Storage hang safeguard**: Added a timeout when saving tasks to extension storage to avoid indefinite hangs.
+
 ## [0.9.5] - 2026-02-21
 
 ### Changed
