@@ -76,7 +76,10 @@ export class SchedulerWebview {
           });
         })
         .catch((error) => {
-          logError("[CopilotScheduler] Failed to refresh agents/models:", error);
+          logError(
+            "[CopilotScheduler] Failed to refresh agents/models:",
+            error,
+          );
         });
 
       void this.refreshPromptTemplates(true)

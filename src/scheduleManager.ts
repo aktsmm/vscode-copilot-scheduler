@@ -81,7 +81,7 @@ export class ScheduleManager {
       void this.context.globalState
         .update(DAILY_EXEC_COUNT_KEY, 0)
         .then(undefined, (error: unknown) =>
-            logError(
+          logError(
             "[CopilotScheduler] Failed to reset daily execution count:",
             error,
           ),
@@ -89,7 +89,7 @@ export class ScheduleManager {
       void this.context.globalState
         .update(DAILY_EXEC_DATE_KEY, today)
         .then(undefined, (error: unknown) =>
-            logError(
+          logError(
             "[CopilotScheduler] Failed to reset daily execution date:",
             error,
           ),
@@ -281,10 +281,7 @@ export class ScheduleManager {
     // Save if any changes were made
     if (needsSave) {
       void this.saveTasks().catch((error) =>
-          logError(
-          "[CopilotScheduler] Failed to save migrated tasks:",
-          error,
-        ),
+        logError("[CopilotScheduler] Failed to save migrated tasks:", error),
       );
     }
   }
@@ -305,10 +302,7 @@ export class ScheduleManager {
     const updatePromise = Promise.resolve(updateThenable);
     const guarded = updatePromise.catch((error) => {
       if (timedOut) {
-        logError(
-          "[CopilotScheduler] Task save failed after timeout:",
-          error,
-        );
+        logError("[CopilotScheduler] Task save failed after timeout:", error);
         return;
       }
       throw error;
@@ -770,7 +764,7 @@ export class ScheduleManager {
           const rawMax = config.get<number>("maxDailyExecutions", 24);
           const maxDaily =
             rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100);
-            logDebug(
+          logDebug(
             `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
           );
           const todayKey = getLocalDateKey();
@@ -779,7 +773,7 @@ export class ScheduleManager {
             void this.context.globalState
               .update(DAILY_LIMIT_NOTIFIED_DATE_KEY, todayKey)
               .then(undefined, (error: unknown) =>
-                  logError(
+                logError(
                   "[CopilotScheduler] Failed to persist daily limit notified date:",
                   error,
                 ),
@@ -807,7 +801,7 @@ export class ScheduleManager {
             // Track daily execution count
             await this.incrementDailyExecCount();
           } catch (error) {
-              logError(`Task execution error: ${error}`);
+            logError(`Task execution error: ${error}`);
           }
         }
 
