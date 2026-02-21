@@ -538,11 +538,19 @@ export class ScheduleManager {
       task.model = updates.model;
     }
     if (updates.scope !== undefined) {
-      task.scope = updates.scope;
-      if (updates.scope === "workspace") {
+      const nextScope = updates.scope;
+
+      // Only adjust workspacePath when scope actually changes (or workspacePath is missing).
+      // Webview submits scope on every save; we must not overwrite workspacePath on edits.
+      if (nextScope !== task.scope) {
+        task.scope = nextScope;
+        if (nextScope === "workspace") {
+          task.workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        } else {
+          task.workspacePath = undefined;
+        }
+      } else if (nextScope === "workspace" && !task.workspacePath) {
         task.workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      } else {
-        task.workspacePath = undefined;
       }
     }
     if (updates.promptSource !== undefined) {
