@@ -282,7 +282,10 @@ export class ScheduleManager {
     // Save if any changes were made
     if (needsSave) {
       void this.saveTasks().catch((error) =>
-        console.error("[CopilotScheduler] Failed to save migrated tasks:", error),
+        console.error(
+          "[CopilotScheduler] Failed to save migrated tasks:",
+          error,
+        ),
       );
     }
   }
@@ -296,11 +299,17 @@ export class ScheduleManager {
     const timeoutMs = 10000;
     let timedOut = false;
 
-    const updateThenable = this.context.globalState.update(STORAGE_KEY, tasksArray);
+    const updateThenable = this.context.globalState.update(
+      STORAGE_KEY,
+      tasksArray,
+    );
     const updatePromise = Promise.resolve(updateThenable);
     const guarded = updatePromise.catch((error) => {
       if (timedOut) {
-        console.error("[CopilotScheduler] Task save failed after timeout:", error);
+        console.error(
+          "[CopilotScheduler] Task save failed after timeout:",
+          error,
+        );
         return;
       }
       throw error;
