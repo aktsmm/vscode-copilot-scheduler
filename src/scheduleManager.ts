@@ -75,8 +75,22 @@ export class ScheduleManager {
       // New day, reset counter
       this.dailyExecCount = 0;
       this.dailyExecDate = today;
-      void this.context.globalState.update(DAILY_EXEC_COUNT_KEY, 0);
-      void this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+      void this.context.globalState
+        .update(DAILY_EXEC_COUNT_KEY, 0)
+        .then(undefined, (error: unknown) =>
+          console.error(
+            "[CopilotScheduler] Failed to reset daily execution count:",
+            error,
+          ),
+        );
+      void this.context.globalState
+        .update(DAILY_EXEC_DATE_KEY, today)
+        .then(undefined, (error: unknown) =>
+          console.error(
+            "[CopilotScheduler] Failed to reset daily execution date:",
+            error,
+          ),
+        );
     }
     this.dailyExecDate = today;
   }
@@ -139,6 +153,7 @@ export class ScheduleManager {
     const jitterMs = Math.floor(Math.random() * maxJitterSeconds * 1000);
     const jitterSec = Math.round(jitterMs / 1000);
     if (jitterSec > 0) {
+      const config = vscode.workspace.getConfiguration("copilotScheduler");
       const logLevel = config.get<string>("logLevel", "info");
       if (logLevel === "debug") {
         console.log(`[CopilotScheduler] Jitter: waiting ${jitterSec}s`);
@@ -266,7 +281,9 @@ export class ScheduleManager {
 
     // Save if any changes were made
     if (needsSave) {
-      void this.saveTasks();
+      void this.saveTasks().catch((error) =>
+        console.error("[CopilotScheduler] Failed to save migrated tasks:", error),
+      );
     }
   }
 
@@ -275,7 +292,33 @@ export class ScheduleManager {
    */
   private async saveTasks(): Promise<void> {
     const tasksArray = Array.from(this.tasks.values());
-    await this.context.globalState.update(STORAGE_KEY, tasksArray);
+
+    const timeoutMs = 10000;
+    let timedOut = false;
+
+    const updateThenable = this.context.globalState.update(STORAGE_KEY, tasksArray);
+    const updatePromise = Promise.resolve(updateThenable);
+    const guarded = updatePromise.catch((error) => {
+      if (timedOut) {
+        console.error("[CopilotScheduler] Task save failed after timeout:", error);
+        return;
+      }
+      throw error;
+    });
+
+    const result = await Promise.race([
+      guarded.then(() => "ok" as const),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), timeoutMs),
+      ),
+    ]);
+
+    if (result === "timeout") {
+      timedOut = true;
+      void updatePromise.catch(() => undefined);
+      throw new Error(messages.storageWriteTimeout());
+    }
+
     this.notifyTasksChanged();
   }
 
@@ -357,6 +400,13 @@ export class ScheduleManager {
    * Create a new task
    */
   async createTask(input: CreateTaskInput): Promise<ScheduledTask> {
+    if (!input.name || !input.name.trim()) {
+      throw new Error(messages.taskNameRequired());
+    }
+    if (!input.prompt || !input.prompt.trim()) {
+      throw new Error(messages.promptRequired());
+    }
+
     // Validate cron expression
     this.validateCronExpression(input.cronExpression);
 
@@ -442,8 +492,15 @@ export class ScheduleManager {
       return undefined;
     }
 
-    // Validate cron expression if being updated
-    if (updates.cronExpression) {
+    if (updates.name !== undefined && !updates.name.trim()) {
+      throw new Error(messages.taskNameRequired());
+    }
+    if (updates.prompt !== undefined && !updates.prompt.trim()) {
+      throw new Error(messages.promptRequired());
+    }
+
+    // Validate cron expression if being updated (including empty string)
+    if (updates.cronExpression !== undefined) {
       this.validateCronExpression(updates.cronExpression);
     }
 
@@ -697,10 +754,14 @@ export class ScheduleManager {
           const todayKey = getLocalDateKey();
           if (this.dailyLimitNotifiedDate !== todayKey) {
             this.dailyLimitNotifiedDate = todayKey;
-            void this.context.globalState.update(
-              DAILY_LIMIT_NOTIFIED_DATE_KEY,
-              todayKey,
-            );
+            void this.context.globalState
+              .update(DAILY_LIMIT_NOTIFIED_DATE_KEY, todayKey)
+              .then(undefined, (error: unknown) =>
+                console.error(
+                  "[CopilotScheduler] Failed to persist daily limit notified date:",
+                  error,
+                ),
+              );
             void vscode.window.showInformationMessage(
               messages.dailyLimitReached(maxDaily),
             );

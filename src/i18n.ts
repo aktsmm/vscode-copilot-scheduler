@@ -268,6 +268,11 @@ export const messages = {
       `Daily execution limit (${limit}) reached. No more automatic executions today. You can increase this limit in settings.`,
       `1日の実行回数上限（${limit}回）に達しました。本日はこれ以上の自動実行は行われません。設定で上限を変更できます。`,
     ),
+  storageWriteTimeout: () =>
+    t(
+      "Timed out while saving tasks. Your environment may be blocking VS Code extension storage.",
+      "タスクの保存がタイムアウトしました。環境により VS Code の拡張ストレージがブロックされている可能性があります。",
+    ),
   jitterApplied: (seconds: number) =>
     t(
       `Applying ${seconds}s random delay to reduce detection risk...`,

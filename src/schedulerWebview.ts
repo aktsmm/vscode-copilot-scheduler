@@ -53,14 +53,55 @@ export class SchedulerWebview {
     this.onTaskActionCallback = onTaskAction;
     this.onTestPromptCallback = onTestPrompt;
 
-    // Refresh agents and models
-    await this.refreshAgentsAndModels();
-    await this.refreshPromptTemplates();
+    // Ensure we have baseline data for the first render (do not block the UI)
+    if (this.cachedAgents.length === 0) {
+      this.cachedAgents = CopilotExecutor.getBuiltInAgents();
+    }
+    if (this.cachedModels.length === 0) {
+      this.cachedModels = CopilotExecutor.getFallbackModels();
+    }
+
+    const refreshInBackground = (): void => {
+      void this.refreshAgentsAndModels(true)
+        .then(() => {
+          if (!this.panel) return;
+          void this.panel.webview.postMessage({
+            type: "updateAgents",
+            agents: this.cachedAgents,
+          });
+          void this.panel.webview.postMessage({
+            type: "updateModels",
+            models: this.cachedModels,
+          });
+        })
+        .catch((error) => {
+          console.error(
+            "[CopilotScheduler] Failed to refresh agents/models:",
+            error,
+          );
+        });
+
+      void this.refreshPromptTemplates(true)
+        .then(() => {
+          if (!this.panel) return;
+          void this.panel.webview.postMessage({
+            type: "updatePromptTemplates",
+            templates: this.cachedPromptTemplates,
+          });
+        })
+        .catch((error) => {
+          console.error(
+            "[CopilotScheduler] Failed to refresh prompt templates:",
+            error,
+          );
+        });
+    };
 
     if (this.panel) {
       // Reveal existing panel
       this.panel.reveal(vscode.ViewColumn.One);
       this.updateTasks(tasks);
+      refreshInBackground();
     } else {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
@@ -102,6 +143,8 @@ export class SchedulerWebview {
       this.panel.onDidDispose(() => {
         this.panel = undefined;
       });
+
+      refreshInBackground();
     }
   }
 
@@ -354,17 +397,17 @@ export class SchedulerWebview {
     if (workspaceRoot) {
       const localPromptDir = path.join(workspaceRoot, ".github", "prompts");
       try {
-        if (fs.existsSync(localPromptDir)) {
-          const files = fs.readdirSync(localPromptDir);
-          for (const file of files) {
-            if (file.endsWith(".md")) {
-              templates.push({
-                path: path.join(localPromptDir, file),
-                name: file.replace(".md", ""),
-                source: "local",
-              });
-            }
-          }
+        const entries = await vscode.workspace.fs.readDirectory(
+          vscode.Uri.file(localPromptDir),
+        );
+        for (const [file, fileType] of entries) {
+          if (fileType !== vscode.FileType.File) continue;
+          if (!file.endsWith(".md")) continue;
+          templates.push({
+            path: path.join(localPromptDir, file),
+            name: file.replace(".md", ""),
+            source: "local",
+          });
         }
       } catch {
         // Ignore errors
@@ -375,15 +418,17 @@ export class SchedulerWebview {
     const globalPath = this.getGlobalPromptsPath();
     if (globalPath) {
       try {
-        const files = fs.readdirSync(globalPath);
-        for (const file of files) {
-          if (file.endsWith(".md")) {
-            templates.push({
-              path: path.join(globalPath, file),
-              name: file.replace(".md", ""),
-              source: "global",
-            });
-          }
+        const entries = await vscode.workspace.fs.readDirectory(
+          vscode.Uri.file(globalPath),
+        );
+        for (const [file, fileType] of entries) {
+          if (fileType !== vscode.FileType.File) continue;
+          if (!file.endsWith(".md")) continue;
+          templates.push({
+            path: path.join(globalPath, file),
+            name: file.replace(".md", ""),
+            source: "global",
+          });
         }
       } catch {
         // Ignore errors
@@ -501,6 +546,9 @@ export class SchedulerWebview {
       placeholderPrompt: messages.placeholderPrompt(),
       placeholderCron: messages.placeholderCron(),
       invalidCronExpression: messages.invalidCronExpression(),
+      taskNameRequired: messages.taskNameRequired(),
+      promptRequired: messages.promptRequired(),
+      cronExpressionRequired: messages.cronExpressionRequired(),
       actionCreate: messages.actionCreate(),
       actionSave: messages.actionSave(),
       actionTestRun: messages.actionTestRun(),
@@ -931,6 +979,7 @@ export class SchedulerWebview {
   
   <div id="create-tab" class="tab-content active">
     <form id="task-form">
+      <div id="form-error" style="display:none; background:var(--vscode-inputValidation-errorBackground); color:var(--vscode-inputValidation-errorForeground); padding:8px 12px; border-radius:4px; margin-bottom:12px; font-size:13px;"></div>
       <input type="hidden" id="edit-task-id" value="">
       
       <div class="form-group">
@@ -965,7 +1014,7 @@ export class SchedulerWebview {
       
       <div class="form-group" id="prompt-group">
         <label for="prompt-text">${strings.labelPrompt}</label>
-        <textarea id="prompt-text" placeholder="${strings.placeholderPrompt}"></textarea>
+        <textarea id="prompt-text" placeholder="${strings.placeholderPrompt}" required></textarea>
       </div>
       
       <div class="form-group">
@@ -976,7 +1025,7 @@ export class SchedulerWebview {
             ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtmlAttr(p.name)}</option>`).join("")}
           </select>
         </div>
-        <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}">
+        <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required>
         <div class="cron-preview">
           <strong>${strings.labelFriendlyPreview}:</strong>
           <span id="cron-preview-text">${strings.labelFriendlyFallback}</span>
@@ -1095,6 +1144,26 @@ export class SchedulerWebview {
 
   <script nonce="${nonce}">
     (function() {
+      // Global error handler for debugging (kept minimal to avoid breaking the UI)
+      window.onerror = function(msg, url, line, col, error) {
+        var errDiv = document.getElementById('form-error');
+        if (errDiv) {
+          var isJa = document.documentElement && document.documentElement.lang === 'ja';
+          errDiv.textContent = isJa
+            ? ('スクリプトエラー: ' + msg + ' (line ' + line + ')')
+            : ('Script error: ' + msg + ' (line ' + line + ')');
+          errDiv.style.display = 'block';
+        }
+      };
+
+      window.onunhandledrejection = function(ev) {
+        var errDiv = document.getElementById('form-error');
+        if (errDiv) {
+          var isJa = document.documentElement && document.documentElement.lang === 'ja';
+          errDiv.textContent = (isJa ? '未処理のエラー: ' : 'Unhandled error: ') + (ev && ev.reason ? String(ev.reason) : 'unknown');
+          errDiv.style.display = 'block';
+        }
+      };
       var vscode = acquireVsCodeApi();
       
       // Initial data (JSON from inline script tag)
@@ -1115,6 +1184,7 @@ export class SchedulerWebview {
         ? initialData.promptTemplates
         : [];
       var editingTaskId = null;
+      var pendingSubmit = false;
 
       var strings = initialData.strings || {};
       var lastRenderedTasksHtml = '';
@@ -1237,6 +1307,11 @@ export class SchedulerWebview {
       if (taskForm) {
         taskForm.addEventListener('submit', function(e) {
           e.preventDefault();
+
+          var formErr = document.getElementById('form-error');
+          if (formErr) {
+            formErr.style.display = 'none';
+          }
           
           var taskNameEl = document.getElementById('task-name');
           var promptTextEl = document.getElementById('prompt-text');
@@ -1260,11 +1335,35 @@ export class SchedulerWebview {
             enabled: true
           };
 
-          var cronValue = (taskData.cronExpression || '').trim();
-          if (!cronValue) {
-            window.alert(strings.invalidCronExpression || 'Invalid cron expression');
+          var nameValue = (taskData.name || '').trim();
+          if (!nameValue) {
+            if (formErr) {
+              formErr.textContent = strings.taskNameRequired || 'Task name is required';
+              formErr.style.display = 'block';
+            }
             return;
           }
+
+          var promptValue = (taskData.prompt || '').trim();
+          if (!promptValue) {
+            if (formErr) {
+              formErr.textContent = strings.promptRequired || 'Prompt is required';
+              formErr.style.display = 'block';
+            }
+            return;
+          }
+
+          var cronValue = (taskData.cronExpression || '').trim();
+          if (!cronValue) {
+            if (formErr) {
+              formErr.textContent = strings.cronExpressionRequired || strings.invalidCronExpression || 'Cron expression is required';
+              formErr.style.display = 'block';
+            }
+            return;
+          }
+
+          pendingSubmit = true;
+          if (submitBtn) submitBtn.disabled = true;
           
           if (editingTaskId) {
             vscode.postMessage({
@@ -1278,10 +1377,6 @@ export class SchedulerWebview {
               data: taskData
             });
           }
-          
-          // Reset form and switch to list tab
-          resetForm();
-          switchTab('list');
         });
       }
       
@@ -1843,6 +1938,9 @@ export class SchedulerWebview {
             if (promptTextEl) promptTextEl.value = message.content;
             break;
           case 'switchToList':
+            pendingSubmit = false;
+            if (submitBtn) submitBtn.disabled = false;
+            resetForm();
             switchTab('list');
             break;
           case 'focusTask':
@@ -1854,7 +1952,15 @@ export class SchedulerWebview {
             break;
           case 'showError':
             if (message.text) {
-              window.alert(message.text);
+              var errDiv = document.getElementById('form-error');
+              if (errDiv) {
+                errDiv.textContent = message.text;
+                errDiv.style.display = 'block';
+                pendingSubmit = false;
+                if (submitBtn) submitBtn.disabled = false;
+                switchTab('create');
+                setTimeout(function() { errDiv.style.display = 'none'; }, 8000);
+              }
             }
             break;
         }

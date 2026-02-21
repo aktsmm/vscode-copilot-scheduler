@@ -51,10 +51,14 @@ async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
 async function maybeShowDisclaimerOnce(task: ScheduledTask): Promise<void> {
   if (!task.enabled) return;
   if (scheduleManager.isDisclaimerAccepted()) return;
-  await vscode.window.showInformationMessage(
+  const choice = await vscode.window.showInformationMessage(
     messages.disclaimerMessage(),
     messages.disclaimerAccept(),
+    messages.disclaimerDecline(),
   );
+  if (choice !== messages.disclaimerAccept()) {
+    return;
+  }
   await scheduleManager.setDisclaimerAccepted(true);
 }
 
@@ -167,10 +171,17 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Sync prompt templates to tasks (startup and daily)
-  void syncPromptTemplatesIfNeeded(context, true);
+  void syncPromptTemplatesIfNeeded(context, true).catch((error) =>
+    console.error("[CopilotScheduler] Prompt template sync failed:", error),
+  );
   setInterval(
     () => {
-      void syncPromptTemplatesIfNeeded(context, false);
+      void syncPromptTemplatesIfNeeded(context, false).catch((error) =>
+        console.error(
+          "[CopilotScheduler] Prompt template daily sync failed:",
+          error,
+        ),
+      );
     },
     24 * 60 * 60 * 1000,
   );

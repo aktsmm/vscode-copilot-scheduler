@@ -82,7 +82,7 @@ export class ScheduledTaskItem extends vscode.TreeItem {
 
   private createTooltip(): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
+    md.isTrusted = false;
 
     const task = this.task;
     const ja = isJapanese();
@@ -138,7 +138,8 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       task.prompt.length > 100
         ? task.prompt.substring(0, 100) + "..."
         : task.prompt;
-    md.appendMarkdown(`**${promptLabel}:**\n\`\`\`\n${promptPreview}\n\`\`\``);
+    md.appendMarkdown(`**${promptLabel}:**\n\n`);
+    md.appendCodeblock(promptPreview);
 
     return md;
   }
