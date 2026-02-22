@@ -213,6 +213,21 @@ export class ScheduleManager {
     this.dailyExecDate = today;
   }
 
+  private incrementDailyExecCountInMemory(date = new Date()): void {
+    const today = getLocalDateKey(date);
+    if (this.dailyExecDate !== today) {
+      this.dailyExecCount = 0;
+      this.dailyExecDate = today;
+    }
+    this.dailyExecCount++;
+  }
+
+  private async persistDailyExecCount(): Promise<void> {
+    const today = this.dailyExecDate || getLocalDateKey();
+    await this.context.globalState.update(DAILY_EXEC_COUNT_KEY, this.dailyExecCount);
+    await this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+  }
+
   /**
    * Increment daily execution count
    */
@@ -223,11 +238,38 @@ export class ScheduleManager {
       this.dailyExecDate = today;
     }
     this.dailyExecCount++;
-    await this.context.globalState.update(
-      DAILY_EXEC_COUNT_KEY,
-      this.dailyExecCount,
-    );
-    await this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+    await this.persistDailyExecCount();
+  }
+
+  /**
+   * Bulk update task prompts (used by template sync) and save once.
+   */
+  async updateTaskPrompts(updates: Array<{ id: string; prompt: string }>): Promise<number> {
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return 0;
+    }
+
+    const now = new Date();
+    let changed = 0;
+
+    for (const item of updates) {
+      if (!item || typeof item.id !== "string") continue;
+      const nextPrompt = typeof item.prompt === "string" ? item.prompt : "";
+      if (!nextPrompt.trim()) continue;
+
+      const task = this.tasks.get(item.id);
+      if (!task) continue;
+      if (task.prompt === nextPrompt) continue;
+      task.prompt = nextPrompt;
+      task.updatedAt = now;
+      changed++;
+    }
+
+    if (changed > 0) {
+      await this.saveTasks();
+    }
+
+    return changed;
   }
 
   /**
@@ -949,6 +991,9 @@ export class ScheduleManager {
       now.getMinutes(),
     );
 
+    let needsSave = false;
+    let executedCount = 0;
+
     for (const task of this.tasks.values()) {
       if (!task.enabled || !task.nextRun) {
         continue;
@@ -996,7 +1041,7 @@ export class ScheduleManager {
           }
           // Still advance nextRun so it doesn't keep retrying
           task.nextRun = this.getNextRun(task.cronExpression, now);
-          await this.saveTasks();
+          needsSave = true;
           continue;
         }
 
@@ -1011,17 +1056,32 @@ export class ScheduleManager {
           try {
             await this.onExecuteCallback(task);
             // Track daily execution count
-            await this.incrementDailyExecCount();
+            this.incrementDailyExecCountInMemory(new Date());
+            executedCount++;
           } catch (error) {
             logError(`Task execution error: ${error}`);
           }
         }
 
         // Update lastRun and nextRun
-        task.lastRun = now;
-        task.nextRun = this.getNextRun(task.cronExpression, now);
-        await this.saveTasks();
+        const executedAt = new Date();
+        task.lastRun = executedAt;
+        task.nextRun = this.getNextRun(task.cronExpression, executedAt);
+        needsSave = true;
       }
+    }
+
+    // Persist once per tick to reduce I/O overhead.
+    if (executedCount > 0) {
+      try {
+        await this.persistDailyExecCount();
+      } catch (error) {
+        logError("[CopilotScheduler] Failed to persist daily execution count:", error);
+      }
+    }
+
+    if (needsSave) {
+      await this.saveTasks();
     }
   }
 

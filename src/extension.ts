@@ -78,7 +78,7 @@ async function syncPromptTemplatesIfNeeded(
   }
 
   const tasks = scheduleManager.getAllTasks();
-  let updated = false;
+  const promptUpdates: Array<{ id: string; prompt: string }> = [];
 
   for (const task of tasks) {
     if (task.promptSource === "inline") continue;
@@ -86,13 +86,20 @@ async function syncPromptTemplatesIfNeeded(
     try {
       const latest = await resolvePromptText(task);
       if (latest && latest !== task.prompt) {
-        await scheduleManager.updateTask(task.id, { prompt: latest });
-        updated = true;
+        // Avoid syncing empty prompts (would break validation and UX)
+        if (latest.trim()) {
+          promptUpdates.push({ id: task.id, prompt: latest });
+        }
       }
     } catch (error) {
       logError(`Prompt sync failed for task ${task.name}: ${error}`);
     }
   }
+
+  const updated =
+    promptUpdates.length > 0
+      ? (await scheduleManager.updateTaskPrompts(promptUpdates)) > 0
+      : false;
 
   if (updated) {
     SchedulerWebview.updateTasks(scheduleManager.getAllTasks());

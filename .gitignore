@@ -7,6 +7,9 @@ dist/
 Thumbs.db
 *.log
 
+# Local output artifacts
+output_sessions/
+
 # Development files
 .github/temp/
 .github/agents/
