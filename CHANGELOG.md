@@ -5,6 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] - 2026-02-22
+
+### Fixed
+
+- **Task persistence fallback**: Tasks are now persisted to a JSON file under the extension's `globalStorage` as a fallback, so saves still succeed even if `globalState` storage is blocked or stalls.
+- **Save responsiveness**: When file persistence succeeds, the UI no longer waits on slow/blocked `globalState.update()` calls (globalState sync is done in the background).
+
 ## [0.9.7] - 2026-02-22
 
 ### Fixed
