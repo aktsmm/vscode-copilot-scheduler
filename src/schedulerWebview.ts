@@ -494,7 +494,55 @@ export class SchedulerWebview {
     source: PromptSource,
   ): Promise<void> {
     try {
-      const content = fs.readFileSync(templatePath, "utf-8");
+      if (!templatePath || typeof templatePath !== "string") {
+        throw new Error("Invalid template path");
+      }
+
+      if (!templatePath.toLowerCase().endsWith(".md")) {
+        throw new Error("Template must be a .md file");
+      }
+
+      if (source !== "local" && source !== "global") {
+        throw new Error("Invalid template source");
+      }
+
+      // Only allow paths from our cached template list to prevent arbitrary file reads
+      const resolvedTarget = path.resolve(templatePath);
+      const cached = this.cachedPromptTemplates.find(
+        (t) => t.source === source && path.resolve(t.path) === resolvedTarget,
+      );
+      if (!cached) {
+        throw new Error("Template not found in cache");
+      }
+
+      // Enforce allowed root directories (defense in depth)
+      const normalize = (p: string): string => {
+        const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
+        return process.platform === "win32" ? n.toLowerCase() : n;
+      };
+
+      const isInside = (baseDir: string, target: string): boolean => {
+        const base = normalize(baseDir);
+        const tgt = normalize(target);
+        return tgt === base || tgt.startsWith(base + path.sep);
+      };
+
+      const baseDir =
+        source === "local"
+          ? (() => {
+              const workspaceRoot =
+                vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+              return workspaceRoot
+                ? path.join(workspaceRoot, ".github", "prompts")
+                : undefined;
+            })()
+          : this.getGlobalPromptsPath();
+
+      if (!baseDir || !isInside(baseDir, templatePath)) {
+        throw new Error("Template path not allowed");
+      }
+
+      const content = await fs.promises.readFile(templatePath, "utf-8");
       if (this.panel) {
         this.panel.webview.postMessage({
           type: "promptTemplateLoaded",
@@ -518,6 +566,24 @@ export class SchedulerWebview {
       text += possible.charAt(Math.floor(Math.random() * possible.length));
     }
     return text;
+  }
+
+  private static serializeForWebview(value: unknown): string {
+    const json = JSON.stringify(value ?? null) ?? "null";
+    // Escape < and U+2028/U+2029 to avoid breaking the surrounding <script>
+    return json
+      .replace(/</g, "\\u003c")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  }
+
+  private static escapeHtmlAttr(str: string): string {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   /**
@@ -657,24 +723,8 @@ export class SchedulerWebview {
 
     const allPresets = presets.concat(extraPresets);
 
-    const serializeForWebview = (value: unknown): string => {
-      const json = JSON.stringify(value ?? null) ?? "null";
-      // Escape < and U+2028/U+2029 to avoid breaking the surrounding <script> via document.write
-      return json
-        .replace(/</g, "\\u003c")
-        .replace(/\u2028/g, "\\u2028")
-        .replace(/\u2029/g, "\\u2029");
-    };
-
-    // Helper to escape HTML attributes
-    const escapeHtmlAttr = (str: string): string => {
-      return str
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    };
+    const serializeForWebview = this.serializeForWebview;
+    const escapeHtmlAttr = this.escapeHtmlAttr;
 
     const initialData = {
       tasks: initialTasks,

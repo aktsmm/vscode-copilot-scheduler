@@ -134,6 +134,7 @@ export function notifyError(message: string, timeoutMs = 6000): void {
 let scheduleManager: ScheduleManager;
 let copilotExecutor: CopilotExecutor;
 let treeProvider: ScheduledTaskTreeProvider;
+let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Extension activation
@@ -184,7 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void syncPromptTemplatesIfNeeded(context, true).catch((error) =>
     logError("[CopilotScheduler] Prompt template sync failed:", error),
   );
-  setInterval(
+  promptSyncInterval = setInterval(
     () => {
       void syncPromptTemplatesIfNeeded(context, false).catch((error) =>
         logError(
@@ -195,6 +196,15 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     24 * 60 * 60 * 1000,
   );
+
+  context.subscriptions.push({
+    dispose: () => {
+      if (promptSyncInterval) {
+        clearInterval(promptSyncInterval);
+        promptSyncInterval = undefined;
+      }
+    },
+  });
 
   // Show activation message
   const config = vscode.workspace.getConfiguration("copilotScheduler");
@@ -243,6 +253,10 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 export function deactivate(): void {
   scheduleManager?.stopScheduler();
+  if (promptSyncInterval) {
+    clearInterval(promptSyncInterval);
+    promptSyncInterval = undefined;
+  }
 }
 
 /**
@@ -469,7 +483,8 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
       case "copy": {
         const copyTask = scheduleManager.getTask(action.taskId);
         if (copyTask) {
-          await vscode.env.clipboard.writeText(copyTask.prompt);
+          const promptText = await resolvePromptText(copyTask);
+          await vscode.env.clipboard.writeText(promptText);
           notifyInfo(messages.promptCopied());
         }
         break;

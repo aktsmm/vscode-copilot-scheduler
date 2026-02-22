@@ -23,10 +23,18 @@ declare const console: {
 
 const STORAGE_KEY = "scheduledTasks";
 const STORAGE_FILE_NAME = "scheduledTasks.json";
+const STORAGE_META_FILE_NAME = "scheduledTasks.meta.json";
+const STORAGE_REVISION_KEY = "scheduledTasksRevision";
+const STORAGE_SAVED_AT_KEY = "scheduledTasksSavedAt";
 const DAILY_EXEC_COUNT_KEY = "dailyExecCount";
 const DAILY_EXEC_DATE_KEY = "dailyExecDate";
 const DAILY_LIMIT_NOTIFIED_DATE_KEY = "dailyLimitNotifiedDate";
 const DISCLAIMER_ACCEPTED_KEY = "disclaimerAccepted";
+
+type TaskStorageMeta = {
+  revision: number;
+  savedAt: string; // ISO string
+};
 
 function getLocalDateKey(date = new Date()): string {
   const y = date.getFullYear();
@@ -44,6 +52,7 @@ export class ScheduleManager {
   private schedulerTimeout: ReturnType<typeof setTimeout> | undefined;
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
+  private storageMetaFilePath: string;
   private onTasksChangedCallback: (() => void) | undefined;
   private onExecuteCallback:
     | ((task: ScheduledTask) => Promise<void>)
@@ -52,11 +61,18 @@ export class ScheduleManager {
   private dailyExecDate = "";
   private dailyLimitNotifiedDate = "";
 
+  private storageRevision = 0;
+  private saveQueue: Promise<void> = Promise.resolve();
+
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.storageFilePath = path.join(
       this.context.globalStorageUri.fsPath,
       STORAGE_FILE_NAME,
+    );
+    this.storageMetaFilePath = path.join(
+      this.context.globalStorageUri.fsPath,
+      STORAGE_META_FILE_NAME,
     );
     this.loadDailyExecCount();
     this.dailyLimitNotifiedDate = this.context.globalState.get<string>(
@@ -66,18 +82,60 @@ export class ScheduleManager {
     this.loadTasks();
   }
 
-  private loadTasksFromFile(): ScheduledTask[] {
+  private normalizeFsPath(fsPath: string | undefined): string {
+    if (!fsPath) return "";
+    const normalized = path.normalize(path.resolve(fsPath)).replace(/[\\/]+$/, "");
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  }
+
+  private loadMetaFromFile(): TaskStorageMeta | undefined {
     try {
-      if (!this.storageFilePath) return [];
-      if (!fs.existsSync(this.storageFilePath)) return [];
+      if (!this.storageMetaFilePath) return undefined;
+      if (!fs.existsSync(this.storageMetaFilePath)) return undefined;
+      const raw = fs.readFileSync(this.storageMetaFilePath, "utf8");
+      if (!raw.trim()) return undefined;
+      const parsed = JSON.parse(raw) as Partial<TaskStorageMeta>;
+      const revision = typeof parsed.revision === "number" ? parsed.revision : 0;
+      const savedAt = typeof parsed.savedAt === "string" ? parsed.savedAt : "";
+      return { revision, savedAt };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private loadMetaFromGlobalState(): TaskStorageMeta {
+    const revision = this.context.globalState.get<number>(STORAGE_REVISION_KEY, 0);
+    const savedAt = this.context.globalState.get<string>(STORAGE_SAVED_AT_KEY, "");
+    return { revision: typeof revision === "number" ? revision : 0, savedAt };
+  }
+
+  private async saveMetaToFile(meta: TaskStorageMeta): Promise<void> {
+    const dir = path.dirname(this.storageMetaFilePath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(
+      this.storageMetaFilePath,
+      JSON.stringify(meta),
+      "utf8",
+    );
+  }
+
+  private async saveMetaToGlobalState(meta: TaskStorageMeta): Promise<void> {
+    await this.context.globalState.update(STORAGE_REVISION_KEY, meta.revision);
+    await this.context.globalState.update(STORAGE_SAVED_AT_KEY, meta.savedAt);
+  }
+
+  private loadTasksFromFile(): { tasks: ScheduledTask[]; ok: boolean } {
+    try {
+      if (!this.storageFilePath) return { tasks: [], ok: false };
+      if (!fs.existsSync(this.storageFilePath)) return { tasks: [], ok: false };
       const raw = fs.readFileSync(this.storageFilePath, "utf8");
-      if (!raw.trim()) return [];
+      if (!raw.trim()) return { tasks: [], ok: true };
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed as ScheduledTask[];
+      if (!Array.isArray(parsed)) return { tasks: [], ok: false };
+      return { tasks: parsed as ScheduledTask[], ok: true };
     } catch (error) {
       logDebug("[CopilotScheduler] Failed to load tasks from file:", error);
-      return [];
+      return { tasks: [], ok: false };
     }
   }
 
@@ -284,17 +342,55 @@ export class ScheduleManager {
    * Load tasks from globalState
    */
   private loadTasks(): void {
-    const savedTasks = this.context.globalState.get<ScheduledTask[]>(
-      STORAGE_KEY,
-      [],
-    );
+    const savedTasks = this.context.globalState.get<ScheduledTask[]>(STORAGE_KEY, []);
+    const fileLoad = this.loadTasksFromFile();
+    const fileTasks = fileLoad.tasks;
 
-    const fileTasks =
-      savedTasks.length === 0
-        ? this.loadTasksFromFile()
-        : ([] as ScheduledTask[]);
+    const globalMeta = this.loadMetaFromGlobalState();
+    const fileMeta = this.loadMetaFromFile() || { revision: 0, savedAt: "" };
 
-    const tasksToLoad = savedTasks.length > 0 ? savedTasks : fileTasks;
+    const effectiveFileRevision = fileLoad.ok ? fileMeta.revision : -1;
+
+    const globalStoreExists =
+      (Array.isArray(savedTasks) && savedTasks.length > 0) ||
+      (typeof globalMeta.revision === "number" && globalMeta.revision > 0);
+
+    const fileStoreExists =
+      fileLoad.ok ||
+      fs.existsSync(this.storageMetaFilePath) ||
+      (typeof fileMeta.revision === "number" && fileMeta.revision > 0);
+
+    // Choose newer store by revision (handles deletes correctly).
+    // IMPORTANT: an empty task array can still be the newest state (e.g., deleting the last task).
+    let tasksToLoad: ScheduledTask[] = [];
+    let chosenMeta: TaskStorageMeta = { revision: 0, savedAt: "" };
+
+    if (globalStoreExists && fileStoreExists) {
+      if (globalMeta.revision > effectiveFileRevision) {
+        tasksToLoad = savedTasks;
+        chosenMeta = globalMeta;
+      } else if (effectiveFileRevision > globalMeta.revision) {
+        tasksToLoad = fileTasks;
+        chosenMeta = fileMeta;
+      } else {
+        // Same revision (or both legacy): prefer file if it parsed successfully.
+        if (fileLoad.ok) {
+          tasksToLoad = fileTasks;
+          chosenMeta = fileMeta;
+        } else {
+          tasksToLoad = savedTasks;
+          chosenMeta = globalMeta;
+        }
+      }
+    } else if (fileStoreExists) {
+      tasksToLoad = fileTasks;
+      chosenMeta = fileMeta;
+    } else if (globalStoreExists) {
+      tasksToLoad = savedTasks;
+      chosenMeta = globalMeta;
+    }
+
+    this.storageRevision = chosenMeta.revision || 0;
 
     let needsSave = false;
 
@@ -347,31 +443,62 @@ export class ScheduleManager {
       void this.saveTasks().catch((error) =>
         logError("[CopilotScheduler] Failed to save migrated tasks:", error),
       );
+    } else {
+      // Heal the other store if revisions differ (best effort, do not bump revision)
+      const shouldSyncToGlobal = fileMeta.revision > globalMeta.revision;
+      const shouldSyncToFile = globalMeta.revision > fileMeta.revision;
+      if (shouldSyncToGlobal || shouldSyncToFile) {
+        void this.saveTasks({ bumpRevision: false }).catch((error) =>
+          logDebug("[CopilotScheduler] Failed to sync task stores:", error),
+        );
+      }
     }
   }
 
   /**
    * Save tasks to globalState
    */
-  private async saveTasks(): Promise<void> {
+  private async saveTasks(options?: { bumpRevision?: boolean }): Promise<void> {
+    // Serialize saves to avoid last-write-wins races across concurrent callers.
+    this.saveQueue = this.saveQueue.then(() => this.saveTasksInternal(options));
+    return this.saveQueue;
+  }
+
+  private async saveTasksInternal(options?: { bumpRevision?: boolean }): Promise<void> {
+    const bumpRevision = options?.bumpRevision !== false;
     const tasksArray = Array.from(this.tasks.values());
+
+    const nextRevision = bumpRevision ? this.storageRevision + 1 : this.storageRevision;
+    const meta: TaskStorageMeta = {
+      revision: nextRevision,
+      savedAt: new Date().toISOString(),
+    };
 
     // Prefer file persistence for responsiveness and reliability.
     // If file save succeeds, return immediately and sync globalState in background.
     try {
       await this.saveTasksToFile(tasksArray);
-      void this.saveTasksToGlobalState(tasksArray).catch((error) =>
+      await this.saveMetaToFile(meta);
+      this.storageRevision = meta.revision;
+
+      void Promise.all([
+        this.saveTasksToGlobalState(tasksArray),
+        this.saveMetaToGlobalState(meta),
+      ]).catch((error) =>
         logDebug(
           "[CopilotScheduler] Task save to globalState failed (file succeeded):",
           error,
         ),
       );
+
       this.notifyTasksChanged();
       return;
     } catch (fileError) {
       // If file persistence fails, fall back to globalState (await so at least one store succeeds).
       try {
         await this.saveTasksToGlobalState(tasksArray);
+        await this.saveMetaToGlobalState(meta);
+        this.storageRevision = meta.revision;
       } catch (globalStateError) {
         throw globalStateError instanceof Error
           ? globalStateError
@@ -379,7 +506,10 @@ export class ScheduleManager {
       }
 
       // Best-effort background file sync for future reliability.
-      void this.saveTasksToFile(tasksArray).catch((error) =>
+      void Promise.all([
+        this.saveTasksToFile(tasksArray),
+        this.saveMetaToFile(meta),
+      ]).catch((error) =>
         logDebug(
           "[CopilotScheduler] Task save to file failed (globalState succeeded):",
           { fileError, error },
@@ -752,7 +882,9 @@ export class ScheduleManager {
       return false;
     }
 
-    return task.workspacePath === currentWorkspace;
+    const a = this.normalizeFsPath(task.workspacePath);
+    const b = this.normalizeFsPath(currentWorkspace);
+    return a !== "" && a === b;
   }
 
   /**
