@@ -132,7 +132,7 @@ Initial release:
 
 ## 📄 License
 
-[CC-BY-NC-SA-4.0](LICENSE) © [yamapan](https://github.com/aktsmm)
+[CC-BY-NC-SA-4.0](LICENSE) © [aktsmm](https://github.com/aktsmm)
 
 ---
 

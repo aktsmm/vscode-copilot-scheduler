@@ -119,7 +119,7 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 
 ## 📄 ライセンス
 
-[CC-BY-NC-SA-4.0](LICENSE) © [yamapan](https://github.com/aktsmm)
+[CC-BY-NC-SA-4.0](LICENSE) © [aktsmm](https://github.com/aktsmm)
 
 ---
 
