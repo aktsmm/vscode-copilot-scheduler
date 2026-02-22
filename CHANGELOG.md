@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9] - 2026-02-22
+
+### Fixed
+
+- **Scheduler stability**: Prevent overlapping scheduler ticks to avoid duplicate executions when a tick runs long.
+- **Webview robustness**: Safely restore prompt template selection without CSS selector edge cases.
+- **Webview localization**: Localize titles and placeholder strings instead of hard-coded English.
+- **Multi-root workspace**: Workspace-scoped tasks now match against any open folder.
+- **Extension host responsiveness**: Avoid blocking sync file I/O during agent discovery.
+- **Diagnostics**: Improve error logging and show a webview error when message handling fails.
+
 ## [0.9.8] - 2026-02-22
 
 ### Fixed
