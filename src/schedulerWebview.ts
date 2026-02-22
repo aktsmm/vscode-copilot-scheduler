@@ -2079,8 +2079,9 @@ export class SchedulerWebview {
       // Handle messages from extension
       window.addEventListener('message', function(event) {
         var message = event.data;
-        
-        switch (message.type) {
+
+        try {
+          switch (message.type) {
           case 'updateTasks':
             renderTaskList(message.tasks);
             break;
@@ -2089,9 +2090,13 @@ export class SchedulerWebview {
               var currentAgentValue = pendingAgentValue || (agentSelect ? agentSelect.value : '');
               agents = Array.isArray(message.agents) ? message.agents : [];
               updateAgentOptions();
-              if (agentSelect && currentAgentValue && agentSelect.querySelector('option[value="' + currentAgentValue + '"]')) {
+              if (agentSelect && currentAgentValue) {
                 agentSelect.value = currentAgentValue;
-                pendingAgentValue = '';
+                if (agentSelect.value === currentAgentValue) {
+                  pendingAgentValue = '';
+                } else {
+                  pendingAgentValue = currentAgentValue;
+                }
               }
             }
             break;
@@ -2100,9 +2105,13 @@ export class SchedulerWebview {
               var currentModelValue = pendingModelValue || (modelSelect ? modelSelect.value : '');
               models = Array.isArray(message.models) ? message.models : [];
               updateModelOptions();
-              if (modelSelect && currentModelValue && modelSelect.querySelector('option[value="' + currentModelValue + '"]')) {
+              if (modelSelect && currentModelValue) {
                 modelSelect.value = currentModelValue;
-                pendingModelValue = '';
+                if (modelSelect.value === currentModelValue) {
+                  pendingModelValue = '';
+                } else {
+                  pendingModelValue = currentModelValue;
+                }
               }
             }
             break;
@@ -2113,13 +2122,12 @@ export class SchedulerWebview {
               var currentSource = sourceElement ? sourceElement.value : 'inline';
               var currentTemplateValue = pendingTemplatePath || (templateSelect ? templateSelect.value : '');
               updateTemplateOptions(currentSource, currentTemplateValue);
-              if (
-                templateSelect &&
-                currentTemplateValue &&
-                templateSelect.querySelector('option[value="' + currentTemplateValue + '"]')
-              ) {
-                templateSelect.value = currentTemplateValue;
-                pendingTemplatePath = '';
+              if (templateSelect && currentTemplateValue) {
+                if (templateSelect.value === currentTemplateValue) {
+                  pendingTemplatePath = '';
+                } else {
+                  pendingTemplatePath = currentTemplateValue;
+                }
               }
               if (currentSource === 'local' || currentSource === 'global') {
                 if (templateSelectGroup) templateSelectGroup.style.display = 'block';
@@ -2151,7 +2159,15 @@ export class SchedulerWebview {
           case 'focusTask':
             switchTab('list');
             setTimeout(function() {
-              var card = document.querySelector('.task-card[data-id="' + message.taskId + '"]');
+              var list = document.querySelectorAll('.task-card');
+              var card = null;
+              for (var i = 0; i < list.length; i++) {
+                var el = list[i];
+                if (el && el.getAttribute && el.getAttribute('data-id') === message.taskId) {
+                  card = el;
+                  break;
+                }
+              }
               if (card) card.scrollIntoView({ behavior: 'smooth' });
             }, 100);
             break;
@@ -2168,6 +2184,16 @@ export class SchedulerWebview {
               }
             }
             break;
+          }
+        } catch (e) {
+          var errDiv = document.getElementById('form-error');
+          if (errDiv) {
+            var isJa = document.documentElement && document.documentElement.lang === 'ja';
+            errDiv.textContent = (isJa ? '画面処理でエラーが発生しました: ' : 'Webview error: ') + String(e && e.message ? e.message : e);
+            errDiv.style.display = 'block';
+          }
+          pendingSubmit = false;
+          if (submitBtn) submitBtn.disabled = false;
         }
       });
       
