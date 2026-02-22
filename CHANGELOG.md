@@ -5,6 +5,20 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11] - 2026-02-22
+
+### Improved
+
+- **Scheduler performance**: Config is now read once per tick instead of 3× in the hot loop, eliminating variable shadowing and redundant I/O.
+- **Timer resource leak**: `saveTasksToGlobalState` timeout timer is now cleared on success, preventing a 10 s resource leak per save.
+- **Webview panel reveal**: Re-opening the scheduler panel no longer triggers a full background re-scan — cached data is sent instantly for snappier UX.
+- **Prompt execution speed**: Hardcoded delays reduced from 600 ms to 300 ms total for faster prompt submission.
+- **Dead code removal**: Unused `taskName` variable and orphan `setDefaultScope` message type removed.
+
+### Fixed
+
+- **Integration tests on Windows**: Tests no longer fail with "Code is currently being updated" by patching the downloaded VS Code's `product.json` to disable the Inno Setup mutex check.
+
 ## [0.9.10] - 2026-02-22
 
 ### Fixed
