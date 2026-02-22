@@ -171,12 +171,17 @@ export class ScheduleManager {
     );
     const updatePromise = Promise.resolve(updateThenable);
 
+    let timerId: NodeJS.Timeout | undefined;
     const result = await Promise.race([
       updatePromise.then(() => "ok" as const),
-      new Promise<"timeout">((resolve) =>
-        setTimeout(() => resolve("timeout"), timeoutMs),
-      ),
+      new Promise<"timeout">((resolve) => {
+        timerId = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
     ]);
+
+    if (timerId !== undefined) {
+      clearTimeout(timerId);
+    }
 
     if (result === "timeout") {
       void updatePromise.catch(() => undefined);
@@ -1036,6 +1041,12 @@ export class ScheduleManager {
       now.getMinutes(),
     );
 
+    // Read config values once per tick (avoid redundant reads inside the loop)
+    const rawMaxDaily = config.get<number>("maxDailyExecutions", 24);
+    const maxDailyLimit =
+      rawMaxDaily === 0 ? 0 : Math.min(Math.max(rawMaxDaily, 1), 100);
+    const defaultJitterSeconds = config.get<number>("jitterSeconds", 0);
+
     let needsSave = false;
     let executedCount = 0;
 
@@ -1062,12 +1073,8 @@ export class ScheduleManager {
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached()) {
-          const config = vscode.workspace.getConfiguration("copilotScheduler");
-          const rawMax = config.get<number>("maxDailyExecutions", 24);
-          const maxDaily =
-            rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100);
           logDebug(
-            `[CopilotScheduler] Daily limit (${maxDaily}) reached, skipping task: ${task.name}`,
+            `[CopilotScheduler] Daily limit (${maxDailyLimit}) reached, skipping task: ${task.name}`,
           );
           const todayKey = getLocalDateKey();
           if (this.dailyLimitNotifiedDate !== todayKey) {
@@ -1081,7 +1088,7 @@ export class ScheduleManager {
                 ),
               );
             void vscode.window.showInformationMessage(
-              messages.dailyLimitReached(maxDaily),
+              messages.dailyLimitReached(maxDailyLimit),
             );
           }
           // Still advance nextRun so it doesn't keep retrying
@@ -1091,9 +1098,8 @@ export class ScheduleManager {
         }
 
         // Safety: Apply jitter (random delay)
-        const config = vscode.workspace.getConfiguration("copilotScheduler");
         const maxJitterSeconds =
-          task.jitterSeconds ?? config.get<number>("jitterSeconds", 0);
+          task.jitterSeconds ?? defaultJitterSeconds;
         await this.applyJitter(maxJitterSeconds ?? 0);
 
         // Execute

@@ -838,11 +838,9 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
     "copilotScheduler.duplicateTask",
     async (item?: ScheduledTaskItem) => {
       let taskId: string | undefined;
-      let taskName: string | undefined;
 
       if (item instanceof ScheduledTaskItem) {
         taskId = item.task.id;
-        taskName = item.task.name;
       } else {
         // Show quick pick to select task
         const tasks = scheduleManager.getAllTasks();
@@ -856,14 +854,12 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
             label: t.name,
             description: t.cronExpression,
             id: t.id,
-            name: t.name,
           })),
           { placeHolder: messages.selectTask() },
         );
 
         if (!selected) return;
         taskId = selected.id;
-        taskName = selected.name;
       }
 
       const duplicated = await scheduleManager.duplicateTask(taskId);

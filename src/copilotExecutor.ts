@@ -67,7 +67,7 @@ export class CopilotExecutor {
       await vscode.commands.executeCommand(
         "workbench.panel.chat.view.copilot.focus",
       );
-      await this.delay(300);
+      await this.delay(150);
 
       // Try to set model if specified
       if (options?.model && options.model !== "") {
@@ -80,7 +80,7 @@ export class CopilotExecutor {
             options.model,
           );
           logDebug(`[CopilotScheduler] Model selection result:`, result);
-          await this.delay(200);
+          await this.delay(100);
         } catch (error) {
           logError(`[CopilotScheduler] Model selection failed:`, error);
           // Model selection may not be available, continue without it
@@ -91,7 +91,7 @@ export class CopilotExecutor {
 
       // Type the prompt using the type command
       await vscode.commands.executeCommand("type", { text: fullPrompt });
-      await this.delay(100);
+      await this.delay(50);
 
       // Submit the prompt
       await vscode.commands.executeCommand("workbench.action.chat.submit");

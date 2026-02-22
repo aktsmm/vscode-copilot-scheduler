@@ -290,7 +290,6 @@ export type WebviewToExtensionMessage =
   | { type: "runTask"; taskId: string }
   | { type: "toggleTask"; taskId: string }
   | { type: "deleteTask"; taskId: string }
-  | { type: "setDefaultScope"; scope: TaskScope }
   | { type: "loadPromptTemplate"; path: string; source: PromptSource }
   | { type: "webviewReady" };
 

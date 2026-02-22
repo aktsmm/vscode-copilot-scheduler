@@ -99,10 +99,24 @@ export class SchedulerWebview {
     };
 
     if (this.panel) {
-      // Reveal existing panel
+      // Reveal existing panel — send cached data only (no heavy re-scan)
       this.panel.reveal(vscode.ViewColumn.One);
       this.updateTasks(tasks);
-      refreshInBackground();
+      // Send already-cached agents/models/templates without rescanning
+      if (this.panel) {
+        void this.panel.webview.postMessage({
+          type: "updateAgents",
+          agents: this.cachedAgents,
+        });
+        void this.panel.webview.postMessage({
+          type: "updateModels",
+          models: this.cachedModels,
+        });
+        void this.panel.webview.postMessage({
+          type: "updatePromptTemplates",
+          templates: this.cachedPromptTemplates,
+        });
+      }
     } else {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
