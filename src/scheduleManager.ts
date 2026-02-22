@@ -481,31 +481,35 @@ export class ScheduleManager {
     const now = new Date();
     const id = this.generateId();
 
-    // Calculate next run
-    let nextRun: Date | undefined;
-    if (input.runFirstInOneMinute) {
-      // Run in 1 minute
-      nextRun = new Date(now.getTime() + 60 * 1000);
-    } else {
-      nextRun = this.getNextRun(input.cronExpression, now);
-    }
-
-    // Get default scope from configuration
+    // Get defaults from configuration
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
     const defaultJitter = config.get<number>("jitterSeconds", 600);
+
+    const enabled = input.enabled !== false;
+    const effectiveScope = input.scope || defaultScope;
+
+    // Calculate next run (disabled tasks must not keep nextRun)
+    let nextRun: Date | undefined;
+    if (enabled) {
+      if (input.runFirstInOneMinute) {
+        nextRun = new Date(now.getTime() + 60 * 1000);
+      } else {
+        nextRun = this.getNextRun(input.cronExpression, now);
+      }
+    }
 
     const task: ScheduledTask = {
       id,
       name: input.name,
       cronExpression: input.cronExpression,
       prompt: input.prompt,
-      enabled: input.enabled !== false,
+      enabled,
       agent: input.agent,
       model: input.model,
-      scope: input.scope || defaultScope,
+      scope: effectiveScope,
       workspacePath:
-        input.scope === "workspace"
+        effectiveScope === "workspace"
           ? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
           : undefined,
       promptSource: input.promptSource || "inline",
@@ -573,7 +577,8 @@ export class ScheduleManager {
     }
 
     const now = new Date();
-    let nextRunWasSet = false;
+    const enabledBefore = task.enabled;
+    let cronChanged = false;
 
     // Apply updates
     if (updates.name !== undefined) {
@@ -581,8 +586,7 @@ export class ScheduleManager {
     }
     if (updates.cronExpression !== undefined) {
       task.cronExpression = updates.cronExpression;
-      task.nextRun = this.getNextRun(updates.cronExpression, now);
-      nextRunWasSet = true;
+      cronChanged = true;
     }
     if (updates.prompt !== undefined) {
       task.prompt = updates.prompt;
@@ -623,15 +627,21 @@ export class ScheduleManager {
       task.jitterSeconds = updates.jitterSeconds;
     }
 
-    // One-time immediate scheduling on update
-    if (updates.runFirstInOneMinute) {
-      task.nextRun = new Date(now.getTime() + 60 * 1000);
-      nextRunWasSet = true;
-    }
+    const enabledAfter = task.enabled;
 
-    // Ensure nextRun exists after updates that didn't set it
-    if (!nextRunWasSet && !task.nextRun) {
-      task.nextRun = this.getNextRun(task.cronExpression, now);
+    // Keep nextRun consistent with enabled state
+    if (!enabledAfter) {
+      task.nextRun = undefined;
+    } else {
+      // One-time immediate scheduling on update (only for enabled tasks)
+      if (updates.runFirstInOneMinute) {
+        task.nextRun = new Date(now.getTime() + 60 * 1000);
+      } else if (cronChanged || (!enabledBefore && enabledAfter)) {
+        task.nextRun = this.getNextRun(task.cronExpression, now);
+      } else if (!task.nextRun) {
+        // Ensure nextRun exists for enabled tasks
+        task.nextRun = this.getNextRun(task.cronExpression, now);
+      }
     }
 
     task.updatedAt = now;
@@ -664,9 +674,11 @@ export class ScheduleManager {
     task.enabled = !task.enabled;
     task.updatedAt = new Date();
 
-    // Recalculate nextRun if being enabled
+    // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRun(task.cronExpression);
+      task.nextRun = this.getNextRun(task.cronExpression, new Date());
+    } else {
+      task.nextRun = undefined;
     }
 
     await this.saveTasks();
@@ -689,9 +701,11 @@ export class ScheduleManager {
     task.enabled = enabled;
     task.updatedAt = new Date();
 
-    // Recalculate nextRun if being enabled
+    // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRun(task.cronExpression);
+      task.nextRun = this.getNextRun(task.cronExpression, new Date());
+    } else {
+      task.nextRun = undefined;
     }
 
     await this.saveTasks();

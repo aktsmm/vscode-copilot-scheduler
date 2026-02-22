@@ -385,35 +385,51 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
       case "toggle": {
         const task = await scheduleManager.toggleTask(action.taskId);
-        if (task) {
-          notifyInfo(
-            task.enabled
-              ? messages.taskEnabled(task.name)
-              : messages.taskDisabled(task.name),
-          );
-          if (task.enabled) {
-            await maybeShowDisclaimerOnce(task);
-          }
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        if (!task) {
+          const msg = messages.taskNotFound();
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
+          break;
         }
+
+        notifyInfo(
+          task.enabled
+            ? messages.taskEnabled(task.name)
+            : messages.taskDisabled(task.name),
+        );
+        if (task.enabled) {
+          await maybeShowDisclaimerOnce(task);
+        }
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         break;
       }
 
       case "delete": {
         const deleteTask = scheduleManager.getTask(action.taskId);
-        if (deleteTask) {
-          // Show confirmation dialog
-          const confirm = await vscode.window.showWarningMessage(
-            messages.confirmDelete(deleteTask.name),
-            { modal: true },
-            messages.confirmDeleteYes(),
-          );
+        if (!deleteTask) {
+          const msg = messages.taskNotFound();
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
+          break;
+        }
 
-          if (confirm === messages.confirmDeleteYes()) {
-            await scheduleManager.deleteTask(action.taskId);
-            notifyInfo(messages.taskDeleted(deleteTask.name));
-            SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        // Show confirmation dialog
+        const confirm = await vscode.window.showWarningMessage(
+          messages.confirmDelete(deleteTask.name),
+          { modal: true },
+          messages.confirmDeleteYes(),
+        );
+
+        if (confirm === messages.confirmDeleteYes()) {
+          const deleted = await scheduleManager.deleteTask(action.taskId);
+          if (!deleted) {
+            const msg = messages.taskNotFound();
+            notifyError(msg);
+            SchedulerWebview.showError(msg);
+            break;
           }
+          notifyInfo(messages.taskDeleted(deleteTask.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         }
         break;
       }
@@ -435,12 +451,16 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             action.taskId,
             action.data,
           );
-          if (task) {
-            const updatedMsg = messages.taskUpdated(task.name);
-            notifyInfo(updatedMsg);
-            SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-            SchedulerWebview.switchToList(updatedMsg);
+          if (!task) {
+            const msg = messages.taskNotFound();
+            notifyError(msg);
+            SchedulerWebview.showError(msg);
+            break;
           }
+          const updatedMsg = messages.taskUpdated(task.name);
+          notifyInfo(updatedMsg);
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+          SchedulerWebview.switchToList(updatedMsg);
         }
         break;
       }

@@ -254,11 +254,6 @@ export class SchedulerWebview {
     switch (message.type) {
       case "createTask":
         if (this.onTaskActionCallback) {
-          const action: TaskAction = {
-            action: "edit",
-            taskId: "",
-            data: message.data,
-          };
           // Use a special action for create
           this.onTaskActionCallback({
             action: "edit",
