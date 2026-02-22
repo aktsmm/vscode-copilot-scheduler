@@ -4,6 +4,8 @@
  */
 
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
 import { parseExpression } from "cron-parser";
 import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
 import { messages } from "./i18n";
@@ -20,6 +22,7 @@ declare const console: {
 };
 
 const STORAGE_KEY = "scheduledTasks";
+const STORAGE_FILE_NAME = "scheduledTasks.json";
 const DAILY_EXEC_COUNT_KEY = "dailyExecCount";
 const DAILY_EXEC_DATE_KEY = "dailyExecDate";
 const DAILY_LIMIT_NOTIFIED_DATE_KEY = "dailyLimitNotifiedDate";
@@ -40,6 +43,7 @@ export class ScheduleManager {
   private schedulerInterval: ReturnType<typeof setInterval> | undefined;
   private schedulerTimeout: ReturnType<typeof setTimeout> | undefined;
   private context: vscode.ExtensionContext;
+  private storageFilePath: string;
   private onTasksChangedCallback: (() => void) | undefined;
   private onExecuteCallback:
     | ((task: ScheduledTask) => Promise<void>)
@@ -50,12 +54,65 @@ export class ScheduleManager {
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    this.storageFilePath = path.join(
+      this.context.globalStorageUri.fsPath,
+      STORAGE_FILE_NAME,
+    );
     this.loadDailyExecCount();
     this.dailyLimitNotifiedDate = this.context.globalState.get<string>(
       DAILY_LIMIT_NOTIFIED_DATE_KEY,
       "",
     );
     this.loadTasks();
+  }
+
+  private loadTasksFromFile(): ScheduledTask[] {
+    try {
+      if (!this.storageFilePath) return [];
+      if (!fs.existsSync(this.storageFilePath)) return [];
+      const raw = fs.readFileSync(this.storageFilePath, "utf8");
+      if (!raw.trim()) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed as ScheduledTask[];
+    } catch (error) {
+      logDebug("[CopilotScheduler] Failed to load tasks from file:", error);
+      return [];
+    }
+  }
+
+  private async saveTasksToFile(tasksArray: ScheduledTask[]): Promise<void> {
+    const dir = path.dirname(this.storageFilePath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(
+      this.storageFilePath,
+      JSON.stringify(tasksArray),
+      "utf8",
+    );
+  }
+
+  private async saveTasksToGlobalState(
+    tasksArray: ScheduledTask[],
+  ): Promise<void> {
+    const timeoutMs = 10000;
+
+    const updateThenable = this.context.globalState.update(
+      STORAGE_KEY,
+      tasksArray,
+    );
+    const updatePromise = Promise.resolve(updateThenable);
+
+    const result = await Promise.race([
+      updatePromise.then(() => "ok" as const),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), timeoutMs),
+      ),
+    ]);
+
+    if (result === "timeout") {
+      void updatePromise.catch(() => undefined);
+      throw new Error(messages.storageWriteTimeout());
+    }
   }
 
   // ==================== Safety: Daily Execution Limit ====================
@@ -232,9 +289,16 @@ export class ScheduleManager {
       [],
     );
 
+    const fileTasks =
+      savedTasks.length === 0
+        ? this.loadTasksFromFile()
+        : ([] as ScheduledTask[]);
+
+    const tasksToLoad = savedTasks.length > 0 ? savedTasks : fileTasks;
+
     let needsSave = false;
 
-    for (const task of savedTasks) {
+    for (const task of tasksToLoad) {
       // Restore Date objects from JSON serialization
       task.createdAt = new Date(task.createdAt);
       task.updatedAt = new Date(task.updatedAt);
@@ -292,33 +356,35 @@ export class ScheduleManager {
   private async saveTasks(): Promise<void> {
     const tasksArray = Array.from(this.tasks.values());
 
-    const timeoutMs = 10000;
-    let timedOut = false;
-
-    const updateThenable = this.context.globalState.update(
-      STORAGE_KEY,
-      tasksArray,
-    );
-    const updatePromise = Promise.resolve(updateThenable);
-    const guarded = updatePromise.catch((error) => {
-      if (timedOut) {
-        logError("[CopilotScheduler] Task save failed after timeout:", error);
-        return;
+    // Prefer file persistence for responsiveness and reliability.
+    // If file save succeeds, return immediately and sync globalState in background.
+    try {
+      await this.saveTasksToFile(tasksArray);
+      void this.saveTasksToGlobalState(tasksArray).catch((error) =>
+        logDebug(
+          "[CopilotScheduler] Task save to globalState failed (file succeeded):",
+          error,
+        ),
+      );
+      this.notifyTasksChanged();
+      return;
+    } catch (fileError) {
+      // If file persistence fails, fall back to globalState (await so at least one store succeeds).
+      try {
+        await this.saveTasksToGlobalState(tasksArray);
+      } catch (globalStateError) {
+        throw globalStateError instanceof Error
+          ? globalStateError
+          : new Error(String(globalStateError ?? ""));
       }
-      throw error;
-    });
 
-    const result = await Promise.race([
-      guarded.then(() => "ok" as const),
-      new Promise<"timeout">((resolve) =>
-        setTimeout(() => resolve("timeout"), timeoutMs),
-      ),
-    ]);
-
-    if (result === "timeout") {
-      timedOut = true;
-      void updatePromise.catch(() => undefined);
-      throw new Error(messages.storageWriteTimeout());
+      // Best-effort background file sync for future reliability.
+      void this.saveTasksToFile(tasksArray).catch((error) =>
+        logDebug(
+          "[CopilotScheduler] Task save to file failed (globalState succeeded):",
+          { fileError, error },
+        ),
+      );
     }
 
     this.notifyTasksChanged();
