@@ -22,3 +22,8 @@ FULL_SPECIFICATION.md
 # Copilot Orchestrator temporary files
 .orchestrator/
 .worktrees/
+
+# Copilot agent artifacts (keep local in public repos)
+/research/
+/.github/skills/
+/output_sessions/
