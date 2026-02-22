@@ -45,7 +45,8 @@ async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
   if (!enabled) return;
   const warning = scheduleManager.checkMinimumInterval(cronExpression);
   if (warning) {
-    await vscode.window.showInformationMessage(warning);
+    // Non-blocking warning: do not stall create/update until the user dismisses
+    void vscode.window.showInformationMessage(warning);
   }
 }
 
