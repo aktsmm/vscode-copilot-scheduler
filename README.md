@@ -14,7 +14,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## 🎬 Demo
 
-![Copilot Scheduler Demo](images/demo-animated.gif)
+![Copilot Scheduler Demo](images/demo-static.png)
 
 ## ✨ Features
 

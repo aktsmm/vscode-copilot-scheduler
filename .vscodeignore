@@ -14,3 +14,10 @@ node_modules/**
 FULL_SPECIFICATION.md
 AGENTS.md
 .github/**
+
+# Dev-only artifacts
+output_sessions/**
+session/**
+
+# Large demo asset (use static PNG in README)
+images/demo-animated.gif

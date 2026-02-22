@@ -14,7 +14,7 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 
 ## 🎬 デモ
 
-![Copilot Scheduler Demo](images/demo-animated.gif)
+![Copilot Scheduler Demo](images/demo-static.png)
 
 ## ✨ 機能
 
