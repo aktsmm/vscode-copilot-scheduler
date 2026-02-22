@@ -107,7 +107,7 @@ export class SchedulerWebview {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
         "copilotScheduler",
-        "Copilot Scheduler",
+        messages.webviewTitle(),
         vscode.ViewColumn.One,
         {
           enableScripts: true,
@@ -136,7 +136,19 @@ export class SchedulerWebview {
       // Handle messages from webview
       this.panel.webview.onDidReceiveMessage(
         async (message: WebviewToExtensionMessage) => {
-          await this.handleMessage(message);
+          try {
+            await this.handleMessage(message);
+          } catch (error) {
+            const details =
+              error instanceof Error
+                ? error.stack || error.message
+                : String(error ?? "");
+            logError("[CopilotScheduler] Webview message handling failed:", {
+              type: (message as { type?: unknown } | undefined)?.type,
+              error: details,
+            });
+            this.showError(messages.webviewMessageHandlingFailed(details));
+          }
         },
       );
 
@@ -610,6 +622,7 @@ export class SchedulerWebview {
 
     // Localized strings
     const strings = {
+      title: messages.webviewTitle(),
       tabCreate: messages.tabCreate(),
       tabList: messages.tabList(),
       labelTaskName: messages.labelTaskName(),
@@ -690,6 +703,11 @@ export class SchedulerWebview {
       labelDayOfMonth: isJa ? "実行日" : "Day of month",
       labelDayOfWeek: isJa ? "曜日" : "Day of week",
       labelOpenInGuru: isJa ? "crontab.guruを開く" : "Open in crontab.guru",
+      placeholderSelectAgent: messages.webviewSelectAgentPlaceholder(),
+      placeholderNoAgents: messages.webviewNoAgentsAvailable(),
+      placeholderSelectModel: messages.webviewSelectModelPlaceholder(),
+      placeholderNoModels: messages.webviewNoModelsAvailable(),
+      placeholderSelectTemplate: messages.webviewSelectTemplatePlaceholder(),
     };
 
     const extraPresets: CronPreset[] = [
@@ -740,7 +758,7 @@ export class SchedulerWebview {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} https:; font-src ${webview.cspSource};">
-  <title>Copilot Scheduler</title>
+  <title>${escapeHtmlAttr(strings.title)}</title>
   <style>
     :root {
       --vscode-font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
@@ -1875,9 +1893,11 @@ export class SchedulerWebview {
         if (!agentSelect) return;
         var items = Array.isArray(agents) ? agents : [];
         if (items.length === 0) {
-          agentSelect.innerHTML = '<option value="">-- No agents available --</option>';
+          var noText = strings.placeholderNoAgents || '-- No agents available --';
+          agentSelect.innerHTML = '<option value="">' + escapeHtml(noText) + '</option>';
         } else {
-          var placeholder = '<option value="">-- Select Agent --</option>';
+          var selectText = strings.placeholderSelectAgent || '-- Select Agent --';
+          var placeholder = '<option value="">' + escapeHtml(selectText) + '</option>';
           agentSelect.innerHTML = placeholder + items.map(function(a) { 
             return '<option value="' + escapeAttr(a.id) + '">' + escapeHtml(a.name) + '</option>';
           }).join('');
@@ -1888,9 +1908,11 @@ export class SchedulerWebview {
         if (!modelSelect) return;
         var items = Array.isArray(models) ? models : [];
         if (items.length === 0) {
-          modelSelect.innerHTML = '<option value="">-- No models available --</option>';
+          var noText = strings.placeholderNoModels || '-- No models available --';
+          modelSelect.innerHTML = '<option value="">' + escapeHtml(noText) + '</option>';
         } else {
-          var placeholder = '<option value="">-- Select Model --</option>';
+          var selectText = strings.placeholderSelectModel || '-- Select Model --';
+          var placeholder = '<option value="">' + escapeHtml(selectText) + '</option>';
           modelSelect.innerHTML = placeholder + items.map(function(m) { 
             return '<option value="' + escapeAttr(m.id) + '">' + escapeHtml(m.name) + '</option>';
           }).join('');
@@ -1902,13 +1924,18 @@ export class SchedulerWebview {
         selectedPath = selectedPath || '';
         var templates = Array.isArray(promptTemplates) ? promptTemplates : [];
         var filtered = templates.filter(function(t) { return t.source === source; });
-        var placeholder = '<option value="">-- Select Template --</option>';
+        var selectText = strings.placeholderSelectTemplate || '-- Select Template --';
+        var placeholder = '<option value="">' + escapeHtml(selectText) + '</option>';
         templateSelect.innerHTML = placeholder +
           filtered.map(function(t) { return '<option value="' + escapeAttr(t.path) + '">' + escapeHtml(t.name) + '</option>'; }).join('');
 
-        if (selectedPath && templateSelect.querySelector('option[value="' + selectedPath + '"]')) {
-          templateSelect.value = selectedPath;
-        } else {
+        if (!selectedPath) {
+          templateSelect.value = '';
+          return;
+        }
+
+        templateSelect.value = selectedPath;
+        if (templateSelect.value !== selectedPath) {
           templateSelect.value = '';
         }
       }

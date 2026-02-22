@@ -262,7 +262,8 @@ export class CopilotExecutor {
 
     for (const file of agentsMdFiles) {
       try {
-        const content = fs.readFileSync(file.fsPath, "utf-8");
+        const bytes = await vscode.workspace.fs.readFile(file);
+        const content = Buffer.from(bytes).toString("utf8");
         const agentMatches = content.matchAll(
           /<agent>\s*<name>([^<]+)<\/name>/g,
         );
@@ -292,7 +293,7 @@ export class CopilotExecutor {
   /**
    * Get global agents from VS Code User prompts folder
    */
-  static getGlobalAgents(): AgentInfo[] {
+  static async getGlobalAgents(): Promise<AgentInfo[]> {
     const agents: AgentInfo[] = [];
 
     // Get global agents path from settings or default
@@ -303,15 +304,19 @@ export class CopilotExecutor {
       : "";
 
     const globalPath = customPath || defaultPath;
-    if (!globalPath || !fs.existsSync(globalPath)) {
-      return agents;
-    }
-
     try {
-      const files = fs.readdirSync(globalPath);
-      for (const file of files) {
-        if (file.endsWith(".agent.md")) {
-          const agentName = file.replace(".agent.md", "");
+      if (!globalPath) {
+        return agents;
+      }
+
+      const entries = await fs.promises.readdir(globalPath, {
+        withFileTypes: true,
+      });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const fileName = entry.name;
+        if (fileName.endsWith(".agent.md")) {
+          const agentName = fileName.replace(".agent.md", "");
           agents.push({
             id: agentName,
             name: agentName,
@@ -319,7 +324,7 @@ export class CopilotExecutor {
               ? "グローバルエージェント"
               : "Global agent",
             isCustom: true,
-            filePath: path.join(globalPath, file),
+            filePath: path.join(globalPath, fileName),
           });
         }
       }
@@ -336,7 +341,7 @@ export class CopilotExecutor {
   static async getAllAgents(): Promise<AgentInfo[]> {
     const builtIn = CopilotExecutor.getBuiltInAgents();
     const custom = await CopilotExecutor.getCustomAgents();
-    const global = CopilotExecutor.getGlobalAgents();
+    const global = await CopilotExecutor.getGlobalAgents();
     return [...builtIn, ...custom, ...global];
   }
 

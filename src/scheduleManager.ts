@@ -50,6 +50,8 @@ export class ScheduleManager {
   private tasks: Map<string, ScheduledTask> = new Map();
   private schedulerInterval: ReturnType<typeof setInterval> | undefined;
   private schedulerTimeout: ReturnType<typeof setTimeout> | undefined;
+  private schedulerTickInProgress = false;
+  private schedulerTickPending = false;
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
@@ -84,7 +86,9 @@ export class ScheduleManager {
 
   private normalizeFsPath(fsPath: string | undefined): string {
     if (!fsPath) return "";
-    const normalized = path.normalize(path.resolve(fsPath)).replace(/[\\/]+$/, "");
+    const normalized = path
+      .normalize(path.resolve(fsPath))
+      .replace(/[\\/]+$/, "");
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   }
 
@@ -95,7 +99,8 @@ export class ScheduleManager {
       const raw = fs.readFileSync(this.storageMetaFilePath, "utf8");
       if (!raw.trim()) return undefined;
       const parsed = JSON.parse(raw) as Partial<TaskStorageMeta>;
-      const revision = typeof parsed.revision === "number" ? parsed.revision : 0;
+      const revision =
+        typeof parsed.revision === "number" ? parsed.revision : 0;
       const savedAt = typeof parsed.savedAt === "string" ? parsed.savedAt : "";
       return { revision, savedAt };
     } catch {
@@ -104,8 +109,14 @@ export class ScheduleManager {
   }
 
   private loadMetaFromGlobalState(): TaskStorageMeta {
-    const revision = this.context.globalState.get<number>(STORAGE_REVISION_KEY, 0);
-    const savedAt = this.context.globalState.get<string>(STORAGE_SAVED_AT_KEY, "");
+    const revision = this.context.globalState.get<number>(
+      STORAGE_REVISION_KEY,
+      0,
+    );
+    const savedAt = this.context.globalState.get<string>(
+      STORAGE_SAVED_AT_KEY,
+      "",
+    );
     return { revision: typeof revision === "number" ? revision : 0, savedAt };
   }
 
@@ -224,7 +235,10 @@ export class ScheduleManager {
 
   private async persistDailyExecCount(): Promise<void> {
     const today = this.dailyExecDate || getLocalDateKey();
-    await this.context.globalState.update(DAILY_EXEC_COUNT_KEY, this.dailyExecCount);
+    await this.context.globalState.update(
+      DAILY_EXEC_COUNT_KEY,
+      this.dailyExecCount,
+    );
     await this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
   }
 
@@ -244,7 +258,9 @@ export class ScheduleManager {
   /**
    * Bulk update task prompts (used by template sync) and save once.
    */
-  async updateTaskPrompts(updates: Array<{ id: string; prompt: string }>): Promise<number> {
+  async updateTaskPrompts(
+    updates: Array<{ id: string; prompt: string }>,
+  ): Promise<number> {
     if (!Array.isArray(updates) || updates.length === 0) {
       return 0;
     }
@@ -384,7 +400,10 @@ export class ScheduleManager {
    * Load tasks from globalState
    */
   private loadTasks(): void {
-    const savedTasks = this.context.globalState.get<ScheduledTask[]>(STORAGE_KEY, []);
+    const savedTasks = this.context.globalState.get<ScheduledTask[]>(
+      STORAGE_KEY,
+      [],
+    );
     const fileLoad = this.loadTasksFromFile();
     const fileTasks = fileLoad.tasks;
 
@@ -506,11 +525,15 @@ export class ScheduleManager {
     return this.saveQueue;
   }
 
-  private async saveTasksInternal(options?: { bumpRevision?: boolean }): Promise<void> {
+  private async saveTasksInternal(options?: {
+    bumpRevision?: boolean;
+  }): Promise<void> {
     const bumpRevision = options?.bumpRevision !== false;
     const tasksArray = Array.from(this.tasks.values());
 
-    const nextRevision = bumpRevision ? this.storageRevision + 1 : this.storageRevision;
+    const nextRevision = bumpRevision
+      ? this.storageRevision + 1
+      : this.storageRevision;
     const meta: TaskStorageMeta = {
       revision: nextRevision,
       savedAt: new Date().toISOString(),
@@ -919,14 +942,16 @@ export class ScheduleManager {
     }
 
     // Workspace-specific tasks only run in their workspace
-    const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!currentWorkspace) {
+    const workspacePaths = (vscode.workspace.workspaceFolders || [])
+      .map((f) => f.uri.fsPath)
+      .filter(Boolean);
+    if (workspacePaths.length === 0) {
       return false;
     }
 
     const a = this.normalizeFsPath(task.workspacePath);
-    const b = this.normalizeFsPath(currentWorkspace);
-    return a !== "" && a === b;
+    if (a === "") return false;
+    return workspacePaths.some((p) => this.normalizeFsPath(p) === a);
   }
 
   /**
@@ -947,13 +972,32 @@ export class ScheduleManager {
     this.schedulerTimeout = setTimeout(() => {
       this.schedulerTimeout = undefined;
       // Execute immediately on first aligned minute
-      this.checkAndExecuteTasks();
+      void this.runSchedulerTick();
 
       // Then run every minute
       this.schedulerInterval = setInterval(() => {
-        this.checkAndExecuteTasks();
+        void this.runSchedulerTick();
       }, 60 * 1000);
     }, msToNextMinute);
+  }
+
+  private async runSchedulerTick(): Promise<void> {
+    if (this.schedulerTickInProgress) {
+      this.schedulerTickPending = true;
+      return;
+    }
+
+    this.schedulerTickInProgress = true;
+    try {
+      do {
+        this.schedulerTickPending = false;
+        await this.checkAndExecuteTasks();
+      } while (this.schedulerTickPending);
+    } catch (error) {
+      logError("[CopilotScheduler] Scheduler tick failed:", error);
+    } finally {
+      this.schedulerTickInProgress = false;
+    }
   }
 
   /**
@@ -968,6 +1012,7 @@ export class ScheduleManager {
       clearInterval(this.schedulerInterval);
       this.schedulerInterval = undefined;
     }
+    this.schedulerTickPending = false;
   }
 
   /**
@@ -1059,7 +1104,15 @@ export class ScheduleManager {
             this.incrementDailyExecCountInMemory(new Date());
             executedCount++;
           } catch (error) {
-            logError(`Task execution error: ${error}`);
+            const details =
+              error instanceof Error
+                ? error.stack || error.message
+                : String(error ?? "");
+            logError("[CopilotScheduler] Task execution error:", {
+              taskId: task.id,
+              taskName: task.name,
+              error: details,
+            });
           }
         }
 
@@ -1076,7 +1129,10 @@ export class ScheduleManager {
       try {
         await this.persistDailyExecCount();
       } catch (error) {
-        logError("[CopilotScheduler] Failed to persist daily execution count:", error);
+        logError(
+          "[CopilotScheduler] Failed to persist daily execution count:",
+          error,
+        );
       }
     }
 

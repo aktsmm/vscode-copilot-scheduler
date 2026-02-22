@@ -110,7 +110,7 @@
       }
     ],
     "configuration": {
-      "title": "Copilot Scheduler",
+      "title": "%extension.title%",
       "properties": {
         "copilotScheduler.enabled": {
           "type": "boolean",
@@ -239,7 +239,7 @@
       "activitybar": [
         {
           "id": "copilotScheduler",
-          "title": "Copilot Scheduler",
+          "title": "%extension.title%",
           "icon": "images/scheduler-icon.svg"
         }
       ]

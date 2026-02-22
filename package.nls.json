@@ -1,4 +1,5 @@
 {
+  "extension.title": "Copilot Scheduler",
   "command.createTask": "Create Scheduled Prompt",
   "command.createTaskGui": "Create Scheduled Prompt (GUI)",
   "command.listTasks": "List Scheduled Tasks",

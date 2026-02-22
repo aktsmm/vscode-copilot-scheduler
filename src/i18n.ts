@@ -35,6 +35,7 @@ function t(en: string, ja: string): string {
  */
 export const messages = {
   // ==================== General ====================
+  webviewTitle: () => t("Copilot Scheduler", "Copilot Scheduler"),
   extensionActive: () =>
     t(
       "Copilot Scheduler is now active",
@@ -117,6 +118,18 @@ export const messages = {
   actionCreate: () => t("Create", "作成"),
   actionRefresh: () => t("Refresh", "更新"),
 
+  // ==================== Webview Placeholders ====================
+  webviewSelectAgentPlaceholder: () =>
+    t("-- Select Agent --", "-- エージェントを選択 --"),
+  webviewNoAgentsAvailable: () =>
+    t("-- No agents available --", "-- 利用可能なエージェントがありません --"),
+  webviewSelectModelPlaceholder: () =>
+    t("-- Select Model --", "-- モデルを選択 --"),
+  webviewNoModelsAvailable: () =>
+    t("-- No models available --", "-- 利用可能なモデルがありません --"),
+  webviewSelectTemplatePlaceholder: () =>
+    t("-- Select Template --", "-- テンプレートを選択 --"),
+
   // ==================== Confirmations ====================
   confirmDelete: (name: string) =>
     t(
@@ -148,6 +161,12 @@ export const messages = {
   // ==================== Webview UI ====================
   tabCreate: () => t("Create Task", "タスク作成"),
   tabList: () => t("Task List", "タスク一覧"),
+
+  webviewMessageHandlingFailed: (error: string) =>
+    t(
+      `Failed to handle the requested action: ${error}`,
+      `操作の処理に失敗しました: ${error}`,
+    ),
 
   labelTaskName: () => t("Task Name", "タスク名"),
   labelPromptType: () => t("Prompt Type", "プロンプト種別"),

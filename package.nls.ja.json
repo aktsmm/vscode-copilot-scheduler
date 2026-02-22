@@ -1,4 +1,5 @@
 {
+  "extension.title": "Copilot Scheduler",
   "command.createTask": "スケジュールプロンプトを作成",
   "command.createTaskGui": "スケジュールプロンプトを作成 (GUI)",
   "command.listTasks": "スケジュールタスク一覧",
