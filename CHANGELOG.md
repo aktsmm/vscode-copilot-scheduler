@@ -5,6 +5,14 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12] - 2026-02-22
+
+### Improved
+
+- **Scope clarity (Tree/Webview)**: Workspace-scoped tasks now show their target workspace and whether they apply to the current workspace.
+- **One-click move to current workspace**: Added a move action for workspace-scoped tasks (Webview + TreeView context menu + inline button).
+- **Manual run safety**: Running a workspace-scoped task from a different workspace now prompts for confirmation to prevent accidental execution.
+
 ## [0.9.11] - 2026-02-22
 
 ### Improved
