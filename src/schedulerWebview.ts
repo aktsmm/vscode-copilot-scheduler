@@ -374,6 +374,15 @@ export class SchedulerWebview {
         }
         break;
 
+      case "moveTaskToCurrentWorkspace":
+        if (this.onTaskActionCallback) {
+          this.onTaskActionCallback({
+            action: "moveToCurrentWorkspace",
+            taskId: message.taskId,
+          });
+        }
+        break;
+
       case "loadPromptTemplate":
         await this.loadPromptTemplateContent(message.path, message.source);
         break;
@@ -681,6 +690,7 @@ export class SchedulerWebview {
       actionRefresh: messages.actionRefresh(),
       actionCopyPrompt: messages.actionCopyPrompt(),
       actionDuplicate: messages.actionDuplicate(),
+      actionMoveToCurrentWorkspace: messages.actionMoveToCurrentWorkspace(),
       noTasksFound: messages.noTasksFound(),
       confirmDeleteTemplate: messages.confirmDelete("{name}"),
       labelAdvanced: messages.labelAdvanced(),
@@ -722,6 +732,9 @@ export class SchedulerWebview {
       placeholderSelectModel: messages.webviewSelectModelPlaceholder(),
       placeholderNoModels: messages.webviewNoModelsAvailable(),
       placeholderSelectTemplate: messages.webviewSelectTemplatePlaceholder(),
+
+      labelThisWorkspaceShort: messages.labelThisWorkspaceShort(),
+      labelOtherWorkspaceShort: messages.labelOtherWorkspaceShort(),
     };
 
     const extraPresets: CronPreset[] = [
@@ -763,6 +776,9 @@ export class SchedulerWebview {
       agents: initialAgents,
       models: initialModels,
       promptTemplates: initialTemplates,
+      workspacePaths: (vscode.workspace.workspaceFolders || [])
+        .map((f) => f.uri.fsPath)
+        .filter(Boolean),
       strings,
     };
 
@@ -1296,6 +1312,9 @@ export class SchedulerWebview {
       var promptTemplates = Array.isArray(initialData.promptTemplates)
         ? initialData.promptTemplates
         : [];
+      var workspacePaths = Array.isArray(initialData.workspacePaths)
+        ? initialData.workspacePaths
+        : [];
       var editingTaskId = null;
       var pendingAgentValue = '';
       var pendingModelValue = '';
@@ -1599,6 +1618,7 @@ export class SchedulerWebview {
           edit: window.editTask,
           copy: window.copyPrompt,
           duplicate: window.duplicateTask,
+          move: window.moveTaskToCurrentWorkspace,
           delete: window.deleteTask
         };
 
@@ -1623,6 +1643,18 @@ export class SchedulerWebview {
         var taskItems = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
         var renderedTasks = '';
 
+        function normalizePath(p) {
+          if (!p) return '';
+          return String(p).replace(/\\/g, '/').toLowerCase();
+        }
+
+        function basename(p) {
+          if (!p) return '';
+          var s = String(p);
+          var parts = s.split(/[/\\]+/);
+          return parts.length ? (parts[parts.length - 1] || '') : s;
+        }
+
         if (taskItems.length === 0) {
           renderedTasks = '<div class="empty-state">' + strings.noTasksFound + '</div>';
         } else {
@@ -1642,8 +1674,42 @@ export class SchedulerWebview {
             var cronText = escapeHtml(task.cronExpression || '');
             var taskName = escapeHtml(task.name || '');
 
+            var scopeValue = task.scope || 'workspace';
+            var scopeLabel = scopeValue === 'global'
+              ? (strings.labelScopeGlobal || 'Global')
+              : (strings.labelScopeWorkspace || 'Workspace');
+            var wsPath = scopeValue === 'workspace' ? (task.workspacePath || '') : '';
+            var wsName = wsPath ? basename(wsPath) : '';
+            var inThisWorkspace = scopeValue === 'global'
+              ? true
+              : (!!wsPath && (workspacePaths || []).some(function(p) {
+                  return normalizePath(p) === normalizePath(wsPath);
+                }));
+            var otherWsLabel = strings.labelOtherWorkspaceShort || (strings.labelOtherWorkspace || 'Other workspace');
+            var thisWsLabel = strings.labelThisWorkspaceShort || (strings.labelThisWorkspace || 'This workspace');
+            var scopeInfo = (scopeValue === 'global'
+              ? ('🌐 ' + escapeHtml(scopeLabel))
+              : ('📁 ' + escapeHtml(scopeLabel) + (wsName ? (' • ' + escapeHtml(wsName)) : ''))
+            );
+            if (scopeValue === 'workspace') {
+              scopeInfo += ' • ' + escapeHtml(inThisWorkspace ? thisWsLabel : otherWsLabel);
+            }
+
             // Escape for HTML attributes to avoid broken inline handlers
             var taskIdEscaped = escapeAttr(task.id || '');
+
+            var actionsHtml =
+              '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' + taskIdEscaped + '" title="' + toggleTitle + '">' + toggleIcon + '</button>' +
+              '<button class="btn-secondary btn-icon" data-action="run" data-id="' + taskIdEscaped + '" title="' + strings.actionRun + '">🚀</button>' +
+              '<button class="btn-secondary btn-icon" data-action="edit" data-id="' + taskIdEscaped + '" title="' + strings.actionEdit + '">✏️</button>' +
+              '<button class="btn-secondary btn-icon" data-action="copy" data-id="' + taskIdEscaped + '" title="' + strings.actionCopyPrompt + '">📋</button>' +
+              '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' + taskIdEscaped + '" title="' + strings.actionDuplicate + '">📄</button>';
+
+            if (scopeValue === 'workspace' && !inThisWorkspace) {
+              actionsHtml += '<button class="btn-secondary btn-icon" data-action="move" data-id="' + taskIdEscaped + '" title="' + escapeAttr(strings.actionMoveToCurrentWorkspace || 'Move') + '">📌</button>';
+            }
+
+            actionsHtml += '<button class="btn-danger btn-icon" data-action="delete" data-id="' + taskIdEscaped + '" title="' + strings.actionDelete + '">🗑️</button>';
 
             return '<div class="task-card ' + (enabled ? '' : 'disabled') + '" data-id="' + taskIdEscaped + '">' +
               '<div class="task-header">' +
@@ -1653,15 +1719,11 @@ export class SchedulerWebview {
               '<div class="task-info">' +
                 '<span>⏰ ' + cronText + '</span>' +
                 '<span>' + strings.labelNextRun + ': ' + nextRun + '</span>' +
+                '<span>' + scopeInfo + '</span>' +
               '</div>' +
               '<div class="task-prompt">' + escapeHtml(promptPreview) + '</div>' +
               '<div class="task-actions">' +
-                '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' + taskIdEscaped + '" title="' + toggleTitle + '">' + toggleIcon + '</button>' +
-                '<button class="btn-secondary btn-icon" data-action="run" data-id="' + taskIdEscaped + '" title="' + strings.actionRun + '">🚀</button>' +
-                '<button class="btn-secondary btn-icon" data-action="edit" data-id="' + taskIdEscaped + '" title="' + strings.actionEdit + '">✏️</button>' +
-                '<button class="btn-secondary btn-icon" data-action="copy" data-id="' + taskIdEscaped + '" title="' + strings.actionCopyPrompt + '">📋</button>' +
-                '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' + taskIdEscaped + '" title="' + strings.actionDuplicate + '">📄</button>' +
-                '<button class="btn-danger btn-icon" data-action="delete" data-id="' + taskIdEscaped + '" title="' + strings.actionDelete + '">🗑️</button>' +
+                actionsHtml +
               '</div>' +
             '</div>';
           }).filter(Boolean).join('');
@@ -2074,6 +2136,10 @@ export class SchedulerWebview {
 
       window.duplicateTask = function(id) {
         vscode.postMessage({ type: 'duplicateTask', taskId: id });
+      };
+
+      window.moveTaskToCurrentWorkspace = function(id) {
+        vscode.postMessage({ type: 'moveTaskToCurrentWorkspace', taskId: id });
       };
       
       window.toggleTask = function(id) {

@@ -938,6 +938,32 @@ export class ScheduleManager {
   }
 
   /**
+   * Move a workspace-scoped task to the current workspace (updates workspacePath).
+   */
+  async moveTaskToCurrentWorkspace(
+    id: string,
+  ): Promise<ScheduledTask | undefined> {
+    const task = this.tasks.get(id);
+    if (!task) {
+      return undefined;
+    }
+
+    if (task.scope !== "workspace") {
+      throw new Error(messages.moveOnlyWorkspaceTasks());
+    }
+
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      throw new Error(messages.noWorkspaceOpen());
+    }
+
+    task.workspacePath = workspaceRoot;
+    task.updatedAt = new Date();
+    await this.saveTasks();
+    return task;
+  }
+
+  /**
    * Check if task should run in current workspace
    */
   shouldTaskRunInCurrentWorkspace(task: ScheduledTask): boolean {
@@ -1098,8 +1124,7 @@ export class ScheduleManager {
         }
 
         // Safety: Apply jitter (random delay)
-        const maxJitterSeconds =
-          task.jitterSeconds ?? defaultJitterSeconds;
+        const maxJitterSeconds = task.jitterSeconds ?? defaultJitterSeconds;
         await this.applyJitter(maxJitterSeconds ?? 0);
 
         // Execute

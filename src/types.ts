@@ -214,7 +214,14 @@ export interface CronPreset {
  */
 export interface TaskAction {
   /** Action type */
-  action: "run" | "toggle" | "delete" | "edit" | "copy" | "duplicate";
+  action:
+    | "run"
+    | "toggle"
+    | "delete"
+    | "edit"
+    | "copy"
+    | "duplicate"
+    | "moveToCurrentWorkspace";
 
   /** Task ID */
   taskId: string;
@@ -290,6 +297,7 @@ export type WebviewToExtensionMessage =
   | { type: "runTask"; taskId: string }
   | { type: "toggleTask"; taskId: string }
   | { type: "deleteTask"; taskId: string }
+  | { type: "moveTaskToCurrentWorkspace"; taskId: string }
   | { type: "loadPromptTemplate"; path: string; source: PromptSource }
   | { type: "webviewReady" };
 
@@ -301,4 +309,9 @@ export type TreeNodeType = "scopeGroup" | "task";
 /**
  * TreeView context values
  */
-export type TreeContextValue = "scopeGroup" | "enabledTask" | "disabledTask";
+export type TreeContextValue =
+  | "scopeGroup"
+  | "enabledTask"
+  | "disabledTask"
+  | "enabledWorkspaceTask"
+  | "disabledWorkspaceTask";

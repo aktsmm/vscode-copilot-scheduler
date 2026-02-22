@@ -4,6 +4,7 @@
  */
 
 import * as vscode from "vscode";
+import * as path from "path";
 import type { ScheduledTask, TaskScope, TreeContextValue } from "./types";
 import { ScheduleManager } from "./scheduleManager";
 import { messages, formatCronForDisplay, isJapanese } from "./i18n";
@@ -38,14 +39,22 @@ export class ScopeGroupItem extends vscode.TreeItem {
  */
 export class ScheduledTaskItem extends vscode.TreeItem {
   public readonly task: ScheduledTask;
+  private readonly inThisWorkspace: boolean;
 
-  constructor(task: ScheduledTask) {
+  constructor(task: ScheduledTask, inThisWorkspace: boolean) {
     super(task.name, vscode.TreeItemCollapsibleState.None);
 
     this.task = task;
+    this.inThisWorkspace = inThisWorkspace;
 
     // Set context value based on enabled state
-    this.contextValue = task.enabled ? "enabledTask" : "disabledTask";
+    if (task.scope === "workspace") {
+      this.contextValue = task.enabled
+        ? "enabledWorkspaceTask"
+        : "disabledWorkspaceTask";
+    } else {
+      this.contextValue = task.enabled ? "enabledTask" : "disabledTask";
+    }
 
     // Set description with cron and next run
     const cronDisplay = formatCronForDisplay(task.cronExpression);
@@ -54,6 +63,17 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       this.description = `${cronDisplay} → ${nextRunStr}`;
     } else {
       this.description = cronDisplay;
+    }
+
+    if (task.scope === "workspace") {
+      const wsName = task.workspacePath
+        ? path.basename(task.workspacePath)
+        : "";
+      const wsHint = inThisWorkspace
+        ? messages.labelThisWorkspaceShort()
+        : messages.labelOtherWorkspaceShort();
+      const wsPart = wsName ? `${wsName} (${wsHint})` : `(${wsHint})`;
+      this.description = `${this.description} • ${wsPart}`;
     }
 
     // Set tooltip with detailed info
@@ -103,6 +123,35 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     // Schedule
     const scheduleLabel = ja ? "スケジュール" : "Schedule";
     md.appendMarkdown(`**${scheduleLabel}:** \`${task.cronExpression}\`\n\n`);
+
+    // Scope / workspace
+    const scopeLabel = ja ? "スコープ" : "Scope";
+    const scopeValue =
+      task.scope === "global"
+        ? ja
+          ? "🌐 グローバル"
+          : "🌐 Global"
+        : ja
+          ? "📁 ワークスペースのみ"
+          : "📁 Workspace only";
+    md.appendMarkdown(`**${scopeLabel}:** ${scopeValue}\n\n`);
+
+    if (task.scope === "workspace") {
+      const workspaceLabel = ja ? "対象ワークスペース" : "Workspace";
+      const wsPath = task.workspacePath || "";
+      md.appendMarkdown(`**${workspaceLabel}:**\n\n`);
+      if (wsPath) {
+        md.appendCodeblock(wsPath);
+      } else {
+        md.appendMarkdown(ja ? "(未設定)\n\n" : "(not set)\n\n");
+      }
+
+      const appliesLabel = ja ? "このワークスペース" : "Applies here";
+      const appliesValue = this.inThisWorkspace
+        ? messages.labelThisWorkspaceShort()
+        : messages.labelOtherWorkspaceShort();
+      md.appendMarkdown(`**${appliesLabel}:** ${appliesValue}\n\n`);
+    }
 
     // Next run
     if (task.nextRun && task.enabled) {
@@ -237,7 +286,13 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
     // Sort by name
     tasks.sort((a, b) => a.name.localeCompare(b.name));
 
-    return tasks.map((task) => new ScheduledTaskItem(task));
+    return tasks.map(
+      (task) =>
+        new ScheduledTaskItem(
+          task,
+          this.scheduleManager.shouldTaskRunInCurrentWorkspace(task),
+        ),
+    );
   }
 
   /**

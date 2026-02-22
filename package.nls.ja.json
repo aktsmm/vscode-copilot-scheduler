@@ -11,6 +11,7 @@
   "command.copyPrompt": "プロンプトをクリップボードにコピー",
   "command.editTask": "タスクを編集",
   "command.duplicateTask": "タスクを複製",
+  "command.moveToCurrentWorkspace": "タスクを現在のワークスペースへ移動",
   "command.openSettings": "設定を開く",
   "command.showVersion": "バージョン情報を表示",
   "config.enabled": "スケジュール実行の有効/無効",

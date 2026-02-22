@@ -97,6 +97,12 @@
         "category": "Copilot Scheduler"
       },
       {
+        "command": "copilotScheduler.moveToCurrentWorkspace",
+        "title": "%command.moveToCurrentWorkspace%",
+        "category": "Copilot Scheduler",
+        "icon": "$(pin)"
+      },
+      {
         "command": "copilotScheduler.openSettings",
         "title": "%command.openSettings%",
         "category": "Copilot Scheduler",
@@ -273,12 +279,12 @@
       "view/item/context": [
         {
           "command": "copilotScheduler.disableTask",
-          "when": "view == copilotSchedulerTasks && viewItem == enabledTask",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledTask || viewItem == enabledWorkspaceTask)",
           "group": "inline@1"
         },
         {
           "command": "copilotScheduler.enableTask",
-          "when": "view == copilotSchedulerTasks && viewItem == disabledTask",
+          "when": "view == copilotSchedulerTasks && (viewItem == disabledTask || viewItem == disabledWorkspaceTask)",
           "group": "inline@1"
         },
         {
@@ -295,6 +301,11 @@
           "command": "copilotScheduler.editTask",
           "when": "view == copilotSchedulerTasks && viewItem =~ /Task$/",
           "group": "inline@4"
+        },
+        {
+          "command": "copilotScheduler.moveToCurrentWorkspace",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
+          "group": "inline@4.5"
         },
         {
           "command": "copilotScheduler.deleteTask",
@@ -320,6 +331,11 @@
           "command": "copilotScheduler.duplicateTask",
           "when": "view == copilotSchedulerTasks && viewItem =~ /Task$/",
           "group": "2_edit@2"
+        },
+        {
+          "command": "copilotScheduler.moveToCurrentWorkspace",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
+          "group": "2_edit@3"
         },
         {
           "command": "copilotScheduler.deleteTask",

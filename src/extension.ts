@@ -171,6 +171,7 @@ export function activate(context: vscode.ExtensionContext): void {
     registerRunNowCommand(),
     registerCopyPromptCommand(),
     registerDuplicateTaskCommand(),
+    registerMoveToCurrentWorkspaceCommand(),
     registerOpenSettingsCommand(),
     registerShowVersionCommand(context),
   ];
@@ -388,17 +389,45 @@ function handleTaskAction(action: TaskAction): void {
   void handleTaskActionAsync(action);
 }
 
+async function confirmManualRunIfWorkspaceMismatch(
+  task: ScheduledTask,
+): Promise<boolean> {
+  if (task.scope !== "workspace") {
+    return true;
+  }
+  if (scheduleManager.shouldTaskRunInCurrentWorkspace(task)) {
+    return true;
+  }
+  const choice = await vscode.window.showWarningMessage(
+    messages.confirmRunOutsideWorkspace(task.name),
+    { modal: true },
+    messages.confirmRunAnyway(),
+    messages.actionCancel(),
+  );
+  return choice === messages.confirmRunAnyway();
+}
+
 async function handleTaskActionAsync(action: TaskAction): Promise<void> {
   try {
     switch (action.action) {
       case "run": {
+        const runTask = scheduleManager.getTask(action.taskId);
+        if (!runTask) {
+          const msg = messages.taskNotFound();
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
+          break;
+        }
+
+        const confirmed = await confirmManualRunIfWorkspaceMismatch(runTask);
+        if (!confirmed) {
+          break;
+        }
+
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
         const ok = await scheduleManager.runTaskNow(action.taskId);
         if (!ok) {
-          const runTask = scheduleManager.getTask(action.taskId);
-          if (runTask) {
-            await executeTask(runTask);
-          }
+          await executeTask(runTask);
         }
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         treeProvider.refresh();
@@ -502,6 +531,34 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
         if (task) {
           notifyInfo(messages.taskDuplicated(task.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        }
+        break;
+      }
+
+      case "moveToCurrentWorkspace": {
+        const task = scheduleManager.getTask(action.taskId);
+        if (!task) {
+          const msg = messages.taskNotFound();
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
+          break;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+          messages.confirmMoveToCurrentWorkspace(task.name),
+          { modal: true },
+          messages.confirmMoveYes(),
+          messages.actionCancel(),
+        );
+        if (confirm !== messages.confirmMoveYes()) {
+          break;
+        }
+
+        const moved = await scheduleManager.moveTaskToCurrentWorkspace(task.id);
+        if (moved) {
+          notifyInfo(messages.taskMovedToCurrentWorkspace(moved.name));
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+          treeProvider.refresh();
         }
         break;
       }
@@ -786,6 +843,11 @@ function registerRunNowCommand(): vscode.Disposable {
         task = selected.task;
       }
 
+      const confirmed = await confirmManualRunIfWorkspaceMismatch(task);
+      if (!confirmed) {
+        return;
+      }
+
       // Manual run: no jitter / no daily limit. Persist lastRun when possible.
       const ok = await scheduleManager.runTaskNow(task.id);
       if (!ok) {
@@ -866,6 +928,70 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
       if (duplicated) {
         notifyInfo(messages.taskDuplicated(duplicated.name));
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+      }
+    },
+  );
+}
+
+function registerMoveToCurrentWorkspaceCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand(
+    "copilotScheduler.moveToCurrentWorkspace",
+    async (item?: ScheduledTaskItem) => {
+      let task: ScheduledTask | undefined;
+
+      if (item instanceof ScheduledTaskItem) {
+        task = item.task;
+      } else {
+        const tasks = scheduleManager
+          .getAllTasks()
+          .filter((t) => t.scope === "workspace");
+        if (tasks.length === 0) {
+          notifyInfo(messages.noTasksFound());
+          return;
+        }
+
+        const selected = await vscode.window.showQuickPick(
+          tasks.map((t) => ({
+            label: t.name,
+            description: t.workspacePath ? path.basename(t.workspacePath) : "",
+            task: t,
+          })),
+          { placeHolder: messages.selectTask() },
+        );
+
+        if (!selected) return;
+        task = selected.task;
+      }
+
+      try {
+        if (!task) {
+          notifyError(messages.taskNotFound());
+          return;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+          messages.confirmMoveToCurrentWorkspace(task.name),
+          { modal: true },
+          messages.confirmMoveYes(),
+          messages.actionCancel(),
+        );
+        if (confirm !== messages.confirmMoveYes()) {
+          return;
+        }
+
+        const moved = await scheduleManager.moveTaskToCurrentWorkspace(task.id);
+        if (!moved) {
+          notifyError(messages.taskNotFound());
+          return;
+        }
+        notifyInfo(messages.taskMovedToCurrentWorkspace(moved.name));
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        treeProvider.refresh();
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error ?? "");
+        notifyError(errorMessage);
+        SchedulerWebview.showError(errorMessage);
       }
     },
   );

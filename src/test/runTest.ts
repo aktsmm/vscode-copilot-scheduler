@@ -25,7 +25,9 @@ async function disableWin32VersionedUpdateForTests(
 
     // Archive layout: <install>/<commit>/resources/app/product.json
     try {
-      const entries = await fs.promises.readdir(appRoot, { withFileTypes: true });
+      const entries = await fs.promises.readdir(appRoot, {
+        withFileTypes: true,
+      });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         candidateProductJsonPaths.push(

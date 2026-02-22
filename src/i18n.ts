@@ -60,6 +60,11 @@ export const messages = {
     t(`Task "${name}" deleted`, `タスク「${name}」を削除しました`),
   taskDuplicated: (name: string) =>
     t(`Task duplicated as "${name}"`, `タスクを「${name}」として複製しました`),
+  taskMovedToCurrentWorkspace: (name: string) =>
+    t(
+      `Task "${name}" moved to the current workspace`,
+      `タスク「${name}」を現在のワークスペースへ移動しました`,
+    ),
   taskEnabled: (name: string) =>
     t(`Task "${name}" enabled`, `タスク「${name}」を有効にしました`),
   taskDisabled: (name: string) =>
@@ -109,6 +114,8 @@ export const messages = {
   actionEdit: () => t("Edit", "編集"),
   actionDelete: () => t("Delete", "削除"),
   actionDuplicate: () => t("Duplicate", "複製"),
+  actionMoveToCurrentWorkspace: () =>
+    t("Move to Current Workspace", "現在のワークスペースへ移動"),
   actionEnable: () => t("Enable", "有効化"),
   actionDisable: () => t("Disable", "無効化"),
   actionCancel: () => t("Cancel", "キャンセル"),
@@ -138,6 +145,23 @@ export const messages = {
     ),
   confirmDeleteYes: () => t("Yes, delete", "はい、削除します"),
   confirmDeleteNo: () => t("No, keep", "いいえ、残します"),
+
+  confirmMoveToCurrentWorkspace: (name: string) =>
+    t(
+      `Move task "${name}" to the current workspace?`,
+      `タスク「${name}」を現在のワークスペースへ移動しますか？`,
+    ),
+  confirmMoveYes: () => t("Move", "移動する"),
+
+  confirmRunOutsideWorkspace: (name: string) =>
+    t(
+      `Task "${name}" is scoped to a different workspace. Run it here anyway?`,
+      `タスク「${name}」は別のワークスペース用です。このワークスペースで実行しますか？`,
+    ),
+  confirmRunAnyway: () => t("Run anyway", "実行する"),
+
+  labelThisWorkspaceShort: () => t("This workspace", "このWS"),
+  labelOtherWorkspaceShort: () => t("Other workspace", "他のWS"),
 
   // ==================== Clipboard ====================
   promptCopied: () =>
@@ -275,6 +299,11 @@ export const messages = {
   // ==================== Workspace ====================
   noWorkspaceOpen: () =>
     t("No workspace is open", "ワークスペースが開かれていません"),
+  moveOnlyWorkspaceTasks: () =>
+    t(
+      "Only workspace-scoped tasks can be moved",
+      "移動できるのはワークスペーススコープのタスクのみです",
+    ),
   workspaceTaskSkipped: (name: string) =>
     t(
       `Task "${name}" skipped (workspace-specific)`,

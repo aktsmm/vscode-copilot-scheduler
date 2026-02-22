@@ -11,6 +11,7 @@
   "command.copyPrompt": "Copy Prompt to Clipboard",
   "command.editTask": "Edit Task",
   "command.duplicateTask": "Duplicate Task",
+  "command.moveToCurrentWorkspace": "Move Task to Current Workspace",
   "command.openSettings": "Open Settings",
   "command.showVersion": "Show Version",
   "config.enabled": "Enable or disable scheduled execution",
