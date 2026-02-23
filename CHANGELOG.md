@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Edit navigation on Windows**: Replaced unsafe `querySelector('option[value="..."]')` with a safe option-iteration helper (`selectHasOptionValue`) so that editing tasks with Windows-style template paths no longer breaks tab switching or form population.
 - **Type alignment**: Added `editTask`, `showError`, and `switchToList.successMessage` to `ExtensionToWebviewMessage` union to match the actual messages sent from the extension host.
 
+## [1.0.0] - 2026-02-23
+
+### Improved
+
+- **Webview performance & maintainability**: Moved the large webview script to `media/schedulerWebview.js`.
+- **Webview security**: Tightened CSP and restricted `localResourceRoots` to extension `media/` and `images/` only.
+- **Prompt resolution consistency**: Local prompts are now resolved consistently in multi-root workspaces, restricted to `.github/prompts/*.md`.
+- **Task persistence robustness**: Centralized revision-based store selection and healing behavior.
+
+### Added
+
+- **Regression tests** for template load validation, prompt path resolution, and task-store selection.
+
 ## [0.9.12] - 2026-02-22
 
 ### Improved
