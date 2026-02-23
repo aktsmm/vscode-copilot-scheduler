@@ -67,6 +67,8 @@ export class ScheduleManager {
   private storageRevision = 0;
   private saveQueue: Promise<void> = Promise.resolve();
 
+  private static readonly FIRST_RUN_DELAY_MINUTES = 3;
+
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.storageFilePath = path.join(
@@ -460,21 +462,19 @@ export class ScheduleManager {
         task.jitterSeconds = 0;
       }
 
-      // Recalculate nextRun for enabled tasks (always use current time)
+      // Keep persisted nextRun to allow catch-up execution after reload.
+      // Only compute nextRun when it's missing or invalid.
       if (task.enabled) {
-        const newNextRun = this.getNextRun(task.cronExpression);
-        if (
-          newNextRun &&
-          (!task.nextRun || task.nextRun.getTime() !== newNextRun.getTime())
-        ) {
-          task.nextRun = newNextRun;
+        const hasValidNextRun =
+          task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime());
+        if (!hasValidNextRun) {
+          const now = new Date();
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
           needsSave = true;
         }
-      } else {
-        if (task.nextRun !== undefined) {
-          task.nextRun = undefined;
-          needsSave = true;
-        }
+      } else if (task.nextRun !== undefined) {
+        task.nextRun = undefined;
+        needsSave = true;
       }
 
       this.tasks.set(task.id, task);
@@ -613,6 +613,41 @@ export class ScheduleManager {
     }
   }
 
+  private truncateToMinute(date: Date): Date {
+    return new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      date.getHours(),
+      date.getMinutes(),
+    );
+  }
+
+  private getFixedMinuteInterval(cronExpression: string): number | undefined {
+    // Support the simple fixed-interval form: "*/N * * * *" (every N minutes).
+    const parts = (cronExpression || "").trim().split(/\s+/);
+    if (parts.length !== 5) return undefined;
+    const [min, hour, dom, mon, dow] = parts;
+    if (hour !== "*" || dom !== "*" || mon !== "*" || dow !== "*") {
+      return undefined;
+    }
+    const m = /^\*\/(\d+)$/.exec(min);
+    if (!m) return undefined;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || n <= 0) return undefined;
+    return n;
+  }
+
+  private getNextRunForTask(cronExpression: string, baseTime: Date): Date {
+    const fixed = this.getFixedMinuteInterval(cronExpression);
+    if (fixed !== undefined) {
+      const next = new Date(baseTime.getTime() + fixed * 60 * 1000);
+      return this.truncateToMinute(next);
+    }
+
+    return this.getNextRun(cronExpression, baseTime) ?? this.truncateToMinute(baseTime);
+  }
+
   /**
    * Validate cron expression
    * @throws Error if invalid
@@ -671,9 +706,14 @@ export class ScheduleManager {
     let nextRun: Date | undefined;
     if (enabled) {
       if (input.runFirstInOneMinute) {
-        nextRun = new Date(now.getTime() + 60 * 1000);
+        nextRun = this.truncateToMinute(
+          new Date(
+            now.getTime() +
+              ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
+          ),
+        );
       } else {
-        nextRun = this.getNextRun(input.cronExpression, now);
+        nextRun = this.getNextRunForTask(input.cronExpression, now);
       }
     }
 
@@ -813,12 +853,17 @@ export class ScheduleManager {
     } else {
       // One-time immediate scheduling on update (only for enabled tasks)
       if (updates.runFirstInOneMinute) {
-        task.nextRun = new Date(now.getTime() + 60 * 1000);
+        task.nextRun = this.truncateToMinute(
+          new Date(
+            now.getTime() +
+              ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
+          ),
+        );
       } else if (cronChanged || (!enabledBefore && enabledAfter)) {
-        task.nextRun = this.getNextRun(task.cronExpression, now);
+        task.nextRun = this.getNextRunForTask(task.cronExpression, now);
       } else if (!task.nextRun) {
         // Ensure nextRun exists for enabled tasks
-        task.nextRun = this.getNextRun(task.cronExpression, now);
+        task.nextRun = this.getNextRunForTask(task.cronExpression, now);
       }
     }
 
@@ -854,7 +899,7 @@ export class ScheduleManager {
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRun(task.cronExpression, new Date());
+      task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
     } else {
       task.nextRun = undefined;
     }
@@ -881,7 +926,7 @@ export class ScheduleManager {
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRun(task.cronExpression, new Date());
+      task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
     } else {
       task.nextRun = undefined;
     }
@@ -1096,7 +1141,7 @@ export class ScheduleManager {
             );
           }
           // Still advance nextRun so it doesn't keep retrying
-          task.nextRun = this.getNextRun(task.cronExpression, now);
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
           needsSave = true;
           continue;
         }
@@ -1128,7 +1173,7 @@ export class ScheduleManager {
         // Update lastRun and nextRun
         const executedAt = new Date();
         task.lastRun = executedAt;
-        task.nextRun = this.getNextRun(task.cronExpression, executedAt);
+        task.nextRun = this.getNextRunForTask(task.cronExpression, executedAt);
         needsSave = true;
       }
     }
@@ -1162,8 +1207,12 @@ export class ScheduleManager {
     try {
       await this.onExecuteCallback(task);
 
-      // Update lastRun
-      task.lastRun = new Date();
+      // Update lastRun and nextRun (for fixed minute intervals, count from the manual run)
+      const executedAt = new Date();
+      task.lastRun = executedAt;
+      if (task.enabled) {
+        task.nextRun = this.getNextRunForTask(task.cronExpression, executedAt);
+      }
       await this.saveTasks();
 
       return true;

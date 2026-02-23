@@ -47,3 +47,10 @@
 - **Added**: 2026-02-24
 - **Evidence**: `cronBuilder.ts`（ファイル全体）、`types.ts` の `TaskExecutionResult`/`ExtensionConfig`、`i18n.ts` の `getAgentDisplayInfo()`、`logger.ts` の `logInfo()` がエクスポートされていたが、プロジェクト内のどこからも参照されていなかった。計4箇所、約200行のデッドコード。
 - **Action**: 「将来使うかもしれない」コードはエクスポートしない。必要になった時点で追加する（YAGNI）。定期的に `tsc` の `noUnusedLocals` や ESLint の `no-unused-vars` で未使用シンボルを検出する。ファイル単位で完全に未参照の場合は削除を優先する。
+
+### U5: 起動時に nextRun を強制再計算して取りこぼさない
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: タスク読み込み時に `nextRun` を「常に現在時刻基準で再計算」すると、VS Code 再起動/拡張の再読み込みのタイミング次第で、本来実行されるはずだった直近の実行がスキップされ、ユーザーには「時間を過ぎても実行されない」ように見える。
+- **Action**: 永続化されている `nextRun` は基本的に保持し、`nextRun` が欠落/不正な場合のみ補完計算する。取りこぼし防止のため、過去時刻の `nextRun` はスケジューラ側で catch-up 実行できるようにする（もしくはスキップする仕様なら UI で明示する）。

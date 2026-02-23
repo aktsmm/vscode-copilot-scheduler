@@ -105,7 +105,7 @@ export interface CreateTaskInput {
   /** Task scope (default: "workspace") */
   scope?: TaskScope;
 
-  /** Whether to run first execution in 1 minute */
+  /** Whether to run first execution in 3 minutes */
   runFirstInOneMinute?: boolean;
 
   /** Prompt source type (default: "inline") */

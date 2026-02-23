@@ -234,7 +234,7 @@ export const messages = {
   labelLastRun: () => t("Last Run", "前回実行"),
   labelNever: () => t("Never", "なし"),
   labelRunFirstInOneMinute: () =>
-    t("Run first execution in 1 minute", "1分後に初回実行する"),
+    t("Run first execution in 3 minutes", "3分後に初回実行する"),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
 
