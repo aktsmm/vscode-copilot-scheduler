@@ -26,6 +26,7 @@ import type {
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
 
 const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
+const LAST_VERSION_KEY = "lastKnownVersion";
 
 function shouldNotify(): boolean {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
@@ -151,6 +152,28 @@ let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
  * Extension activation
  */
 export function activate(context: vscode.ExtensionContext): void {
+  // Prompt reload when the extension has been updated
+  {
+    const currentVersion =
+      (context.extension.packageJSON as { version?: string }).version ?? "0.0.0";
+    const lastVersion = context.globalState.get<string>(LAST_VERSION_KEY);
+    if (lastVersion && lastVersion !== currentVersion) {
+      void vscode.window
+        .showInformationMessage(
+          messages.reloadAfterUpdate(currentVersion),
+          messages.reloadNow(),
+        )
+        .then((choice) => {
+          if (choice === messages.reloadNow()) {
+            void vscode.commands.executeCommand(
+              "workbench.action.reloadWindow",
+            );
+          }
+        });
+    }
+    void context.globalState.update(LAST_VERSION_KEY, currentVersion);
+  }
+
   // Initialize components
   scheduleManager = new ScheduleManager(context);
   copilotExecutor = new CopilotExecutor();

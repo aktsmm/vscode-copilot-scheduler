@@ -248,6 +248,12 @@ export const messages = {
   // ==================== Version Info ====================
   versionInfo: (version: string) =>
     t(`Copilot Scheduler v${version}`, `Copilot Scheduler v${version}`),
+  reloadAfterUpdate: (version: string) =>
+    t(
+      `Copilot Scheduler has been updated to v${version}. Reload to activate the new version.`,
+      `Copilot Scheduler が v${version} に更新されました。新しいバージョンを有効にするにはリロードしてください。`,
+    ),
+  reloadNow: () => t("Reload Now", "今すぐリロード"),
 
   // ==================== Settings ====================
   openingSettings: () =>
