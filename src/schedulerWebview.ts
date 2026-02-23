@@ -678,9 +678,7 @@ export class SchedulerWebview {
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
       labelModel: messages.labelModel(),
-      labelModelNote: isJa
-        ? "モデルの選択はプレビュー機能で、環境によって反映されない場合があります。Copilot Chat パネルのモデルも確認してください。"
-        : "Model selection is a preview feature and may not apply in all environments. If needed, pick the model directly in the Copilot Chat panel.",
+      labelModelNote: messages.labelModelNote(),
       labelScope: messages.labelScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
       labelScopeWorkspace: messages.labelScopeWorkspace(),
@@ -722,35 +720,51 @@ export class SchedulerWebview {
       labelSelectDays: messages.labelSelectDays(),
       labelSelectTime: messages.labelSelectTime(),
       labelInterval: messages.labelInterval(),
-      daySun: isJa ? "日" : "Sun",
-      dayMon: isJa ? "月" : "Mon",
-      dayTue: isJa ? "火" : "Tue",
-      dayWed: isJa ? "水" : "Wed",
-      dayThu: isJa ? "木" : "Thu",
-      dayFri: isJa ? "金" : "Fri",
-      daySat: isJa ? "土" : "Sat",
-      labelFriendlyBuilder: isJa ? "かんたんCron" : "Friendly cron builder",
-      labelFriendlyGenerate: isJa ? "生成する" : "Generate",
-      labelFriendlyPreview: isJa ? "プレビュー" : "Preview",
-      labelFriendlyFallback: isJa
-        ? "このCronの説明はありません"
-        : "Preview unavailable for this expression",
-      labelFriendlySelect: isJa ? "頻度を選択" : "Select frequency",
-      labelEveryNMinutes: isJa ? "N分ごと" : "Every N minutes",
-      labelHourlyAtMinute: isJa ? "毎時 指定分" : "Hourly at minute",
-      labelDailyAtTime: isJa ? "毎日 時刻" : "Daily at time",
-      labelWeeklyAtTime: isJa ? "毎週 曜日+時刻" : "Weekly at day/time",
-      labelMonthlyAtTime: isJa ? "毎月 日付+時刻" : "Monthly on day/time",
-      labelMinute: isJa ? "分" : "Minute",
-      labelHour: isJa ? "時" : "Hour",
-      labelDayOfMonth: isJa ? "実行日" : "Day of month",
-      labelDayOfWeek: isJa ? "曜日" : "Day of week",
-      labelOpenInGuru: isJa ? "crontab.guruを開く" : "Open in crontab.guru",
+      daySun: messages.daySun(),
+      dayMon: messages.dayMon(),
+      dayTue: messages.dayTue(),
+      dayWed: messages.dayWed(),
+      dayThu: messages.dayThu(),
+      dayFri: messages.dayFri(),
+      daySat: messages.daySat(),
+      labelFriendlyBuilder: messages.labelFriendlyBuilder(),
+      labelFriendlyGenerate: messages.labelFriendlyGenerate(),
+      labelFriendlyPreview: messages.labelFriendlyPreview(),
+      labelFriendlyFallback: messages.labelFriendlyFallback(),
+      labelFriendlySelect: messages.labelFriendlySelect(),
+      labelEveryNMinutes: messages.labelEveryNMinutes(),
+      labelHourlyAtMinute: messages.labelHourlyAtMinute(),
+      labelDailyAtTime: messages.labelDailyAtTime(),
+      labelWeeklyAtTime: messages.labelWeeklyAtTime(),
+      labelMonthlyAtTime: messages.labelMonthlyAtTime(),
+      labelMinute: messages.labelMinute(),
+      labelHour: messages.labelHour(),
+      labelDayOfMonth: messages.labelDayOfMonth(),
+      labelDayOfWeek: messages.labelDayOfWeek(),
+      labelOpenInGuru: messages.labelOpenInGuru(),
+
+      cronPreviewEveryNMinutes: messages.cronPreviewEveryNMinutes(),
+      cronPreviewHourlyAtMinute: messages.cronPreviewHourlyAtMinute(),
+      cronPreviewDailyAt: messages.cronPreviewDailyAt(),
+      cronPreviewWeekdaysAt: messages.cronPreviewWeekdaysAt(),
+      cronPreviewWeeklyOnAt: messages.cronPreviewWeeklyOnAt(),
+      cronPreviewMonthlyOnAt: messages.cronPreviewMonthlyOnAt(),
       placeholderSelectAgent: messages.webviewSelectAgentPlaceholder(),
       placeholderNoAgents: messages.webviewNoAgentsAvailable(),
       placeholderSelectModel: messages.webviewSelectModelPlaceholder(),
       placeholderNoModels: messages.webviewNoModelsAvailable(),
       placeholderSelectTemplate: messages.webviewSelectTemplatePlaceholder(),
+
+      // Webview JS error text
+      webviewScriptErrorPrefix: messages.webviewScriptErrorPrefix(),
+      webviewUnhandledErrorPrefix: messages.webviewUnhandledErrorPrefix(),
+      webviewLinePrefix: messages.webviewLinePrefix(),
+      webviewLineSuffix: messages.webviewLineSuffix(),
+      webviewUnknown: messages.webviewUnknown(),
+      webviewApiUnavailable: messages.webviewApiUnavailable(),
+
+      // Webview notes
+      webviewJitterNote: messages.webviewJitterNote(),
 
       labelThisWorkspaceShort: messages.labelThisWorkspaceShort(),
       labelOtherWorkspaceShort: messages.labelOtherWorkspaceShort(),
@@ -1259,7 +1273,7 @@ export class SchedulerWebview {
       <div class="form-group">
         <label for="jitter-seconds">${strings.labelJitterSeconds}</label>
         <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
-        <p class="note" style="margin-top:4px;">0 ${isJa ? "で無効。値を入れると0〜その秒数でランダム遅延します。" : "disables jitter. Adds a random delay between 0 and the specified seconds before execution."}</p>
+        <p class="note" style="margin-top:4px;">${escapeHtmlAttr(strings.webviewJitterNote)}</p>
       </div>
       
       <div class="button-group">

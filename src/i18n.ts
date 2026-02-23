@@ -126,6 +126,18 @@ export const messages = {
   actionNewTask: () => t("New Task", "新規タスク"),
   actionRefresh: () => t("Refresh", "再読込"),
 
+  // Webview-only runtime strings (used in media/schedulerWebview.js)
+  webviewScriptErrorPrefix: () => t("Script error: ", "スクリプトエラー: "),
+  webviewUnhandledErrorPrefix: () => t("Unhandled error: ", "未処理のエラー: "),
+  webviewLinePrefix: () => t(" (line ", " (line "),
+  webviewLineSuffix: () => t(")", ")"),
+  webviewUnknown: () => t("unknown", "不明"),
+  webviewApiUnavailable: () =>
+    t(
+      "VS Code Webview API (acquireVsCodeApi) is unavailable. Check CSP/initialization.",
+      "VS Code Webview API (acquireVsCodeApi) が利用できません。CSP/初期化を確認してください。",
+    ),
+
   // ==================== Webview Placeholders ====================
   webviewSelectAgentPlaceholder: () =>
     t("-- Select Agent --", "-- エージェントを選択 --"),
@@ -225,6 +237,11 @@ export const messages = {
   labelInterval: () => t("Interval", "間隔"),
   labelAgent: () => t("Agent", "エージェント"),
   labelModel: () => t("Model", "モデル"),
+  labelModelNote: () =>
+    t(
+      "Model selection is a preview feature and may not apply in all environments. If needed, pick the model directly in the Copilot Chat panel.",
+      "モデルの選択はプレビュー機能で、環境によって反映されない場合があります。Copilot Chat パネルのモデルも確認してください。",
+    ),
   labelScope: () => t("Scope", "スコープ"),
   labelScopeGlobal: () =>
     t("Global (All Workspaces)", "グローバル（全ワークスペース）"),
@@ -239,6 +256,46 @@ export const messages = {
     t("Run first execution in 3 minutes", "3分後に初回実行する"),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
+  webviewJitterNote: () =>
+    t(
+      "0 disables jitter. Adds a random delay between 0 and the specified seconds before execution.",
+      "0で無効。値を入れると0〜その秒数でランダム遅延します。",
+    ),
+
+  // Friendly cron builder / day labels
+  daySun: () => t("Sun", "日"),
+  dayMon: () => t("Mon", "月"),
+  dayTue: () => t("Tue", "火"),
+  dayWed: () => t("Wed", "水"),
+  dayThu: () => t("Thu", "木"),
+  dayFri: () => t("Fri", "金"),
+  daySat: () => t("Sat", "土"),
+  labelFriendlyBuilder: () => t("Friendly cron builder", "かんたんCron"),
+  labelFriendlyGenerate: () => t("Generate", "生成する"),
+  labelFriendlyPreview: () => t("Preview", "プレビュー"),
+  labelFriendlyFallback: () =>
+    t("Preview unavailable for this expression", "このCronの説明はありません"),
+  labelFriendlySelect: () => t("Select frequency", "頻度を選択"),
+  labelEveryNMinutes: () => t("Every N minutes", "N分ごと"),
+  labelHourlyAtMinute: () => t("Hourly at minute", "毎時 指定分"),
+  labelDailyAtTime: () => t("Daily at time", "毎日 時刻"),
+  labelWeeklyAtTime: () => t("Weekly at day/time", "毎週 曜日+時刻"),
+  labelMonthlyAtTime: () => t("Monthly on day/time", "毎月 日付+時刻"),
+  labelMinute: () => t("Minute", "分"),
+  labelHour: () => t("Hour", "時"),
+  labelDayOfMonth: () => t("Day of month", "実行日"),
+  labelDayOfWeek: () => t("Day of week", "曜日"),
+  labelOpenInGuru: () => t("Open in crontab.guru", "crontab.guruを開く"),
+
+  // Cron preview templates (used in media/schedulerWebview.js)
+  cronPreviewEveryNMinutes: () => t("Every {n} minutes", "{n}分ごと"),
+  cronPreviewHourlyAtMinute: () => t("Hourly at minute {m}", "毎時 {m}分"),
+  cronPreviewDailyAt: () => t("Daily at {t}", "毎日 {t}"),
+  cronPreviewWeekdaysAt: () => t("Weekdays at {t}", "平日 {t}"),
+  cronPreviewWeeklyOnAt: () =>
+    t("Weekly on {d} at {t}", "毎週 {d} {t}"),
+  cronPreviewMonthlyOnAt: () =>
+    t("Monthly on day {dom} at {t}", "毎月{dom}日 {t}"),
 
   placeholderTaskName: () => t("Enter task name...", "タスク名を入力..."),
   placeholderPrompt: () =>

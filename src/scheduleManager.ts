@@ -673,7 +673,10 @@ export class ScheduleManager {
       return this.truncateToMinute(next);
     }
 
-    return this.getNextRun(cronExpression, baseTime) ?? this.truncateToMinute(baseTime);
+    return (
+      this.getNextRun(cronExpression, baseTime) ??
+      this.truncateToMinute(baseTime)
+    );
   }
 
   /**
@@ -741,8 +744,7 @@ export class ScheduleManager {
       if (input.runFirstInOneMinute) {
         nextRun = this.truncateToMinute(
           new Date(
-            now.getTime() +
-              ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
+            now.getTime() + ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
           ),
         );
       } else {
@@ -888,8 +890,7 @@ export class ScheduleManager {
       if (updates.runFirstInOneMinute) {
         task.nextRun = this.truncateToMinute(
           new Date(
-            now.getTime() +
-              ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
+            now.getTime() + ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
           ),
         );
       } else if (cronChanged || (!enabledBefore && enabledAfter)) {

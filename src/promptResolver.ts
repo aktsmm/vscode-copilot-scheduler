@@ -66,10 +66,7 @@ export function resolveLocalPromptPath(
     // Absolute path case: just validate containment.
     if (path.isAbsolute(promptPath)) {
       const resolvedAbs = path.resolve(promptPath);
-      if (
-        isInsideDir(promptsDir, resolvedAbs) &&
-        isMarkdownFile(resolvedAbs)
-      ) {
+      if (isInsideDir(promptsDir, resolvedAbs) && isMarkdownFile(resolvedAbs)) {
         return resolvedAbs;
       }
       continue;

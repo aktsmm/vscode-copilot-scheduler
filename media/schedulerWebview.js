@@ -1,44 +1,6 @@
 (function () {
-  // Global error handler for debugging (kept minimal to avoid breaking the UI)
-  window.onerror = function (msg, url, line, col, error) {
-    var errDiv = document.getElementById("form-error");
-    if (errDiv) {
-      var isJa =
-        document.documentElement && document.documentElement.lang === "ja";
-      errDiv.textContent = isJa
-        ? "スクリプトエラー: " + msg + " (line " + line + ")"
-        : "Script error: " + msg + " (line " + line + ")";
-      errDiv.style.display = "block";
-    }
-  };
-
-  window.onunhandledrejection = function (ev) {
-    var errDiv = document.getElementById("form-error");
-    if (errDiv) {
-      var isJa =
-        document.documentElement && document.documentElement.lang === "ja";
-      errDiv.textContent =
-        (isJa ? "未処理のエラー: " : "Unhandled error: ") +
-        (ev && ev.reason ? String(ev.reason) : "unknown");
-      errDiv.style.display = "block";
-    }
-  };
   var vscode = null;
-  if (typeof acquireVsCodeApi === "function") {
-    vscode = acquireVsCodeApi();
-  } else {
-    // Keep UI usable even if VS Code API is unavailable
-    vscode = { postMessage: function () {} };
-    var errDiv = document.getElementById("form-error");
-    if (errDiv) {
-      var isJa =
-        document.documentElement && document.documentElement.lang === "ja";
-      errDiv.textContent = isJa
-        ? "VS Code Webview API (acquireVsCodeApi) が利用できません。CSP/初期化を確認してください。"
-        : "VS Code Webview API (acquireVsCodeApi) is unavailable. Check CSP/initialization.";
-      errDiv.style.display = "block";
-    }
-  }
+  var strings = {};
 
   // Initial data (JSON from inline script tag)
   var initialData = {};
@@ -49,6 +11,41 @@
     }
   } catch (e) {
     initialData = {};
+  }
+
+  strings = initialData.strings || {};
+
+  // Global error handler for debugging (kept minimal to avoid breaking the UI)
+  window.onerror = function (msg, url, line, col, error) {
+    var errDiv = document.getElementById("form-error");
+    if (!errDiv) return;
+    var prefix = strings.webviewScriptErrorPrefix || "";
+    var linePrefix = strings.webviewLinePrefix || "";
+    var lineSuffix = strings.webviewLineSuffix || "";
+    errDiv.textContent = prefix + String(msg) + linePrefix + String(line) + lineSuffix;
+    errDiv.style.display = "block";
+  };
+
+  window.onunhandledrejection = function (ev) {
+    var errDiv = document.getElementById("form-error");
+    if (!errDiv) return;
+    var prefix = strings.webviewUnhandledErrorPrefix || "";
+    var unknown = strings.webviewUnknown || "";
+    errDiv.textContent =
+      prefix + (ev && ev.reason ? String(ev.reason) : unknown);
+    errDiv.style.display = "block";
+  };
+
+  if (typeof acquireVsCodeApi === "function") {
+    vscode = acquireVsCodeApi();
+  } else {
+    // Keep UI usable even if VS Code API is unavailable
+    vscode = { postMessage: function () {} };
+    var errDiv = document.getElementById("form-error");
+    if (errDiv) {
+      errDiv.textContent = strings.webviewApiUnavailable || "";
+      errDiv.style.display = "block";
+    }
   }
 
   var tasks = Array.isArray(initialData.tasks) ? initialData.tasks : [];
@@ -67,7 +64,6 @@
   var editingTaskEnabled = true;
   var pendingSubmit = false;
 
-  var strings = initialData.strings || {};
   var defaultJitterSeconds =
     typeof initialData.defaultJitterSeconds === "number" &&
     isFinite(initialData.defaultJitterSeconds)
@@ -109,7 +105,9 @@
   function setCreateTabLabel(isEditing) {
     var btn = getCreateTabButton();
     if (!btn) return;
-    var label = isEditing ? strings.tabEdit || strings.tabCreate : strings.tabCreate;
+    var label = isEditing
+      ? strings.tabEdit || strings.tabCreate
+      : strings.tabCreate;
     if (label) btn.textContent = label;
   }
 
@@ -119,9 +117,8 @@
     setCreateTabLabel(!!editingTaskId);
 
     if (submitBtn) {
-      submitBtn.textContent = editingTaskId
-        ? strings.actionSave || "Update"
-        : strings.actionCreate || "Create";
+      var label = editingTaskId ? strings.actionSave : strings.actionCreate;
+      if (label) submitBtn.textContent = label;
     }
     if (newTaskBtn) {
       newTaskBtn.style.display = editingTaskId ? "inline-flex" : "none";
@@ -321,8 +318,7 @@
       var nameValue = (taskData.name || "").trim();
       if (!nameValue) {
         if (formErr) {
-          formErr.textContent =
-            strings.taskNameRequired || "Task name is required";
+          formErr.textContent = strings.taskNameRequired || "";
           formErr.style.display = "block";
         }
         return;
@@ -331,7 +327,7 @@
       var promptValue = (taskData.prompt || "").trim();
       if (!promptValue) {
         if (formErr) {
-          formErr.textContent = strings.promptRequired || "Prompt is required";
+          formErr.textContent = strings.promptRequired || "";
           formErr.style.display = "block";
         }
         return;
@@ -343,7 +339,7 @@
           formErr.textContent =
             strings.cronExpressionRequired ||
             strings.invalidCronExpression ||
-            "Cron expression is required";
+            "";
           formErr.style.display = "block";
         }
         return;
@@ -685,13 +681,13 @@
   }
 
   var dayNames = [
-    strings.daySun || "Sun",
-    strings.dayMon || "Mon",
-    strings.dayTue || "Tue",
-    strings.dayWed || "Wed",
-    strings.dayThu || "Thu",
-    strings.dayFri || "Fri",
-    strings.daySat || "Sat",
+    strings.daySun || "",
+    strings.dayMon || "",
+    strings.dayTue || "",
+    strings.dayWed || "",
+    strings.dayThu || "",
+    strings.dayFri || "",
+    strings.daySat || "",
   ];
 
   function padNumber(value) {
@@ -741,15 +737,13 @@
   }
 
   function getCronSummary(expression) {
-    var fallback =
-      strings.labelFriendlyFallback ||
-      "Preview unavailable for this expression";
+    var fallback = strings.labelFriendlyFallback || "";
     var expr = (expression || "").trim();
     if (!expr) return fallback;
 
     var parts = expr.split(/\s+/);
     if (parts.length !== 5) {
-      return fallback + " (" + expr + ")";
+      return fallback;
     }
 
     var minute = parts[0];
@@ -766,7 +760,10 @@
     var everyN = /^\*\/(\d+)$/.exec(minute);
 
     if (everyN && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
-      return "Every " + everyN[1] + " minutes";
+      var tplEveryN = strings.cronPreviewEveryNMinutes || "";
+      return tplEveryN
+        ? tplEveryN.replace("{n}", String(everyN[1]))
+        : fallback;
     }
 
     if (
@@ -776,7 +773,8 @@
       mon === "*" &&
       dow === "*"
     ) {
-      return "Hourly at minute " + minute;
+      var tplHourly = strings.cronPreviewHourlyAtMinute || "";
+      return tplHourly ? tplHourly.replace("{m}", String(minute)) : fallback;
     }
 
     if (
@@ -786,7 +784,9 @@
       mon === "*" &&
       dow === "*"
     ) {
-      return "Daily at " + formatTime(hour, minute);
+      var tplDaily = strings.cronPreviewDailyAt || "";
+      var t = formatTime(hour, minute);
+      return tplDaily ? tplDaily.replace("{t}", String(t)) : fallback;
     }
 
     if (
@@ -796,7 +796,9 @@
       mon === "*" &&
       isWeekdays
     ) {
-      return "Weekdays at " + formatTime(hour, minute);
+      var tplWeekdays = strings.cronPreviewWeekdaysAt || "";
+      var t = formatTime(hour, minute);
+      return tplWeekdays ? tplWeekdays.replace("{t}", String(t)) : fallback;
     }
 
     var dowValue = normalizeDow(dow);
@@ -807,8 +809,12 @@
       mon === "*" &&
       dowValue !== null
     ) {
-      var dayLabel = dayNames[dowValue] || "Day " + dowValue;
-      return "Weekly on " + dayLabel + " at " + formatTime(hour, minute);
+      var dayLabel = dayNames[dowValue] || String(dowValue);
+      var tplWeekly = strings.cronPreviewWeeklyOnAt || "";
+      var t = formatTime(hour, minute);
+      return tplWeekly
+        ? tplWeekly.replace("{d}", String(dayLabel)).replace("{t}", String(t))
+        : fallback;
     }
 
     if (
@@ -818,10 +824,14 @@
       mon === "*" &&
       dow === "*"
     ) {
-      return "Monthly on day " + dom + " at " + formatTime(hour, minute);
+      var tplMonthly = strings.cronPreviewMonthlyOnAt || "";
+      var t = formatTime(hour, minute);
+      return tplMonthly
+        ? tplMonthly.replace("{dom}", String(dom)).replace("{t}", String(t))
+        : fallback;
     }
 
-    return fallback + " (" + expr + ")";
+    return fallback;
   }
 
   function updateCronPreview() {
@@ -973,7 +983,8 @@
     editingTaskEnabled = true;
     applyPromptSource("inline");
     if (friendlyFrequency) friendlyFrequency.value = "";
-    if (jitterSecondsInput) jitterSecondsInput.value = String(defaultJitterSeconds);
+    if (jitterSecondsInput)
+      jitterSecondsInput.value = String(defaultJitterSeconds);
     updateFriendlyVisibility();
     updateCronPreview();
   }
@@ -982,11 +993,11 @@
     if (!agentSelect) return;
     var items = Array.isArray(agents) ? agents : [];
     if (items.length === 0) {
-      var noText = strings.placeholderNoAgents || "-- No agents available --";
+      var noText = strings.placeholderNoAgents || "";
       agentSelect.innerHTML =
         '<option value="">' + escapeHtml(noText) + "</option>";
     } else {
-      var selectText = strings.placeholderSelectAgent || "-- Select Agent --";
+      var selectText = strings.placeholderSelectAgent || "";
       var placeholder =
         '<option value="">' + escapeHtml(selectText) + "</option>";
       agentSelect.innerHTML =
@@ -1009,11 +1020,11 @@
     if (!modelSelect) return;
     var items = Array.isArray(models) ? models : [];
     if (items.length === 0) {
-      var noText = strings.placeholderNoModels || "-- No models available --";
+      var noText = strings.placeholderNoModels || "";
       modelSelect.innerHTML =
         '<option value="">' + escapeHtml(noText) + "</option>";
     } else {
-      var selectText = strings.placeholderSelectModel || "-- Select Model --";
+      var selectText = strings.placeholderSelectModel || "";
       var placeholder =
         '<option value="">' + escapeHtml(selectText) + "</option>";
       modelSelect.innerHTML =
@@ -1039,8 +1050,7 @@
     var filtered = templates.filter(function (t) {
       return t.source === source;
     });
-    var selectText =
-      strings.placeholderSelectTemplate || "-- Select Template --";
+    var selectText = strings.placeholderSelectTemplate || "";
     var placeholder =
       '<option value="">' + escapeHtml(selectText) + "</option>";
     templateSelect.innerHTML =
@@ -1195,7 +1205,9 @@
     }
 
     if (jitterSecondsInput) {
-      jitterSecondsInput.value = String(task.jitterSeconds ?? defaultJitterSeconds);
+      jitterSecondsInput.value = String(
+        task.jitterSeconds ?? defaultJitterSeconds,
+      );
     }
 
     // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
