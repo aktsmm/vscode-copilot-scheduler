@@ -23,6 +23,8 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { messages, isJapanese, getCronPresets } from "./i18n";
 import { logError } from "./logger";
 
+type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
+
 /**
  * Manages the Webview panel for task management
  */
@@ -39,6 +41,43 @@ export class SchedulerWebview {
     | undefined;
   private static extensionUri: vscode.Uri;
   private static currentTasks: ScheduledTask[] = [];
+  private static webviewReady = false;
+  private static pendingMessages: OutgoingWebviewMessage[] = [];
+
+  private static resetWebviewReadyState(): void {
+    this.webviewReady = false;
+    this.pendingMessages = [];
+  }
+
+  private static enqueueMessage(message: OutgoingWebviewMessage): void {
+    const existingIndex = this.pendingMessages.findIndex(
+      (m) => m.type === message.type,
+    );
+    if (existingIndex >= 0) {
+      this.pendingMessages[existingIndex] = message;
+      return;
+    }
+    this.pendingMessages.push(message);
+  }
+
+  private static postMessage(message: OutgoingWebviewMessage): void {
+    if (!this.panel) return;
+    if (!this.webviewReady) {
+      this.enqueueMessage(message);
+      return;
+    }
+    void this.panel.webview.postMessage(message);
+  }
+
+  private static flushPendingMessages(): void {
+    if (!this.panel || !this.webviewReady) return;
+    if (this.pendingMessages.length === 0) return;
+    const queue = this.pendingMessages;
+    this.pendingMessages = [];
+    for (const message of queue) {
+      void this.panel.webview.postMessage(message);
+    }
+  }
 
   /**
    * Show or reveal the webview panel
@@ -65,12 +104,11 @@ export class SchedulerWebview {
     const refreshInBackground = (): void => {
       void this.refreshAgentsAndModels(true)
         .then(() => {
-          if (!this.panel) return;
-          void this.panel.webview.postMessage({
+          this.postMessage({
             type: "updateAgents",
             agents: this.cachedAgents,
           });
-          void this.panel.webview.postMessage({
+          this.postMessage({
             type: "updateModels",
             models: this.cachedModels,
           });
@@ -84,8 +122,7 @@ export class SchedulerWebview {
 
       void this.refreshPromptTemplates(true)
         .then(() => {
-          if (!this.panel) return;
-          void this.panel.webview.postMessage({
+          this.postMessage({
             type: "updatePromptTemplates",
             templates: this.cachedPromptTemplates,
           });
@@ -103,20 +140,18 @@ export class SchedulerWebview {
       this.panel.reveal(vscode.ViewColumn.One);
       this.updateTasks(tasks);
       // Send already-cached agents/models/templates without rescanning
-      if (this.panel) {
-        void this.panel.webview.postMessage({
-          type: "updateAgents",
-          agents: this.cachedAgents,
-        });
-        void this.panel.webview.postMessage({
-          type: "updateModels",
-          models: this.cachedModels,
-        });
-        void this.panel.webview.postMessage({
-          type: "updatePromptTemplates",
-          templates: this.cachedPromptTemplates,
-        });
-      }
+      this.postMessage({
+        type: "updateAgents",
+        agents: this.cachedAgents,
+      });
+      this.postMessage({
+        type: "updateModels",
+        models: this.cachedModels,
+      });
+      this.postMessage({
+        type: "updatePromptTemplates",
+        templates: this.cachedPromptTemplates,
+      });
     } else {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
@@ -129,6 +164,9 @@ export class SchedulerWebview {
           localResourceRoots: [extensionUri],
         },
       );
+
+      // New webview instance (or re-created panel) starts as not-ready.
+      this.resetWebviewReadyState();
 
       // Set icon
       this.panel.iconPath = {
@@ -145,9 +183,7 @@ export class SchedulerWebview {
         this.cachedPromptTemplates,
       );
 
-      this.panel.webview.html = htmlContent;
-
-      // Handle messages from webview
+      // Handle messages from webview (register before setting HTML to avoid races)
       this.panel.webview.onDidReceiveMessage(
         async (message: WebviewToExtensionMessage) => {
           try {
@@ -166,9 +202,13 @@ export class SchedulerWebview {
         },
       );
 
+      // Set HTML content
+      this.panel.webview.html = htmlContent;
+
       // Handle panel disposal
       this.panel.onDidDispose(() => {
         this.panel = undefined;
+        this.resetWebviewReadyState();
       });
 
       refreshInBackground();
@@ -180,24 +220,20 @@ export class SchedulerWebview {
    */
   static updateTasks(tasks: ScheduledTask[]): void {
     this.currentTasks = tasks;
-    if (this.panel) {
-      this.panel.webview.postMessage({
-        type: "updateTasks",
-        tasks: tasks,
-      });
-    }
+    this.postMessage({
+      type: "updateTasks",
+      tasks: tasks,
+    });
   }
 
   /**
    * Show an error message inside the webview
    */
   static showError(errorMessage: string): void {
-    if (this.panel) {
-      this.panel.webview.postMessage({
-        type: "showError",
-        text: errorMessage,
-      });
-    }
+    this.postMessage({
+      type: "showError",
+      text: errorMessage,
+    });
   }
 
   /**
@@ -205,6 +241,8 @@ export class SchedulerWebview {
    */
   static refreshLanguage(tasks: ScheduledTask[]): void {
     if (this.panel) {
+      // Re-rendering HTML resets the webview context; wait for the new instance to become ready.
+      this.resetWebviewReadyState();
       // Regenerate HTML with new language
       this.panel.webview.html = this.getWebviewContent(
         this.panel.webview,
@@ -213,6 +251,20 @@ export class SchedulerWebview {
         this.cachedModels,
         this.cachedPromptTemplates,
       );
+
+      // Re-send cached data once the webview is ready again.
+      this.postMessage({
+        type: "updateAgents",
+        agents: this.cachedAgents,
+      });
+      this.postMessage({
+        type: "updateModels",
+        models: this.cachedModels,
+      });
+      this.postMessage({
+        type: "updatePromptTemplates",
+        templates: this.cachedPromptTemplates,
+      });
     }
   }
 
@@ -236,15 +288,15 @@ export class SchedulerWebview {
 
     if (!this.panel) return;
 
-    this.panel.webview.postMessage({
+    this.postMessage({
       type: "updateAgents",
       agents: this.cachedAgents,
     });
-    this.panel.webview.postMessage({
+    this.postMessage({
       type: "updateModels",
       models: this.cachedModels,
     });
-    this.panel.webview.postMessage({
+    this.postMessage({
       type: "updatePromptTemplates",
       templates: this.cachedPromptTemplates,
     });
@@ -254,21 +306,29 @@ export class SchedulerWebview {
    * Switch to the list tab, optionally showing a success toast
    */
   static switchToList(successMessage?: string): void {
-    if (this.panel) {
-      this.panel.webview.postMessage({ type: "switchToList", successMessage });
-    }
+    this.postMessage({ type: "switchToList", successMessage });
   }
 
   /**
    * Focus on a specific task
    */
   static focusTask(taskId: string): void {
-    if (this.panel) {
-      this.panel.webview.postMessage({
-        type: "focusTask",
-        taskId: taskId,
-      });
-    }
+    if (!taskId) return;
+    this.postMessage({
+      type: "focusTask",
+      taskId: taskId,
+    });
+  }
+
+  /**
+   * Start editing a specific task (opens edit mode in the webview)
+   */
+  static editTask(taskId?: string): void {
+    if (!taskId) return;
+    this.postMessage({
+      type: "editTask",
+      taskId: taskId,
+    });
   }
 
   /**
@@ -388,21 +448,21 @@ export class SchedulerWebview {
         break;
 
       case "webviewReady":
+        this.webviewReady = true;
         // Send initial data
-        if (this.panel) {
-          this.panel.webview.postMessage({
-            type: "updateAgents",
-            agents: this.cachedAgents,
-          });
-          this.panel.webview.postMessage({
-            type: "updateModels",
-            models: this.cachedModels,
-          });
-          this.panel.webview.postMessage({
-            type: "updatePromptTemplates",
-            templates: this.cachedPromptTemplates,
-          });
-        }
+        this.postMessage({
+          type: "updateAgents",
+          agents: this.cachedAgents,
+        });
+        this.postMessage({
+          type: "updateModels",
+          models: this.cachedModels,
+        });
+        this.postMessage({
+          type: "updatePromptTemplates",
+          templates: this.cachedPromptTemplates,
+        });
+        this.flushPendingMessages();
         break;
     }
   }
@@ -458,9 +518,9 @@ export class SchedulerWebview {
     const templates: PromptTemplate[] = [];
 
     // Get local templates (.github/prompts/*.md)
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceRoot) {
-      const localPromptDir = path.join(workspaceRoot, ".github", "prompts");
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    for (const folder of workspaceFolders) {
+      const localPromptDir = path.join(folder.uri.fsPath, ".github", "prompts");
       try {
         const entries = await vscode.workspace.fs.readDirectory(
           vscode.Uri.file(localPromptDir),
@@ -562,29 +622,29 @@ export class SchedulerWebview {
         return tgt === base || tgt.startsWith(base + path.sep);
       };
 
-      const baseDir =
+      const baseDirs =
         source === "local"
-          ? (() => {
-              const workspaceRoot =
-                vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-              return workspaceRoot
-                ? path.join(workspaceRoot, ".github", "prompts")
-                : undefined;
-            })()
-          : this.getGlobalPromptsPath();
+          ? (vscode.workspace.workspaceFolders ?? []).map((folder) =>
+              path.join(folder.uri.fsPath, ".github", "prompts"),
+            )
+          : (() => {
+              const globalBase = this.getGlobalPromptsPath();
+              return globalBase ? [globalBase] : [];
+            })();
 
-      if (!baseDir || !isInside(baseDir, templatePath)) {
+      if (
+        baseDirs.length === 0 ||
+        !baseDirs.some((d) => isInside(d, templatePath))
+      ) {
         throw new Error("Template path not allowed");
       }
 
       const content = await fs.promises.readFile(templatePath, "utf-8");
-      if (this.panel) {
-        this.panel.webview.postMessage({
-          type: "promptTemplateLoaded",
-          content: content,
-          path: templatePath,
-        });
-      }
+      this.postMessage({
+        type: "promptTemplateLoaded",
+        content: content,
+        path: templatePath,
+      });
     } catch {
       notifyError(messages.templateLoadError());
     }
@@ -787,7 +847,7 @@ export class SchedulerWebview {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} https:; font-src ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; img-src ${webview.cspSource} https:; font-src ${webview.cspSource};">
   <title>${escapeHtmlAttr(strings.title)}</title>
   <style>
     :root {
@@ -1269,7 +1329,7 @@ export class SchedulerWebview {
     </div>
   </div>
   
-  <script id="initial-data" type="application/json">${serializeForWebview(initialData)}</script>
+  <script nonce="${nonce}" id="initial-data" type="application/json">${serializeForWebview(initialData)}</script>
 
   <script nonce="${nonce}">
     (function() {
@@ -1293,7 +1353,21 @@ export class SchedulerWebview {
           errDiv.style.display = 'block';
         }
       };
-      var vscode = acquireVsCodeApi();
+      var vscode = null;
+      if (typeof acquireVsCodeApi === 'function') {
+        vscode = acquireVsCodeApi();
+      } else {
+        // Keep UI usable even if VS Code API is unavailable
+        vscode = { postMessage: function() {} };
+        var errDiv = document.getElementById('form-error');
+        if (errDiv) {
+          var isJa = document.documentElement && document.documentElement.lang === 'ja';
+          errDiv.textContent = isJa
+            ? 'VS Code Webview API (acquireVsCodeApi) が利用できません。CSP/初期化を確認してください。'
+            : 'VS Code Webview API (acquireVsCodeApi) is unavailable. Check CSP/initialization.';
+          errDiv.style.display = 'block';
+        }
+      }
       
       // Initial data (JSON from inline script tag)
       var initialData = {};
@@ -1381,16 +1455,26 @@ export class SchedulerWebview {
         });
       }
       
-      // Use event delegation for tab buttons (more reliable)
-      document.addEventListener('click', function(e) {
-        var target = e.target;
-        if (target && target.classList && target.classList.contains('tab-button')) {
-          e.preventDefault();
-          e.stopPropagation();
-          var tabName = target.getAttribute('data-tab');
-          if (tabName) {
-            switchTab(tabName);
+      // Use event delegation for tab buttons (works even when clicking text/child nodes)
+      function resolveTabButton(node) {
+        var el = node && node.nodeType === 3 ? node.parentElement : node;
+        while (el && el !== document.body) {
+          if (el.classList && el.classList.contains('tab-button')) {
+            return el;
           }
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      document.addEventListener('click', function(e) {
+        var button = resolveTabButton(e.target);
+        if (!button) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var tabName = button.getAttribute('data-tab');
+        if (tabName) {
+          switchTab(tabName);
         }
       });
       
@@ -1422,6 +1506,21 @@ export class SchedulerWebview {
           updateFriendlyVisibility();
         });
       }
+
+      // Some environments may miss direct events on the select; keep it in sync via delegation.
+      document.addEventListener('change', function(e) {
+        var target = e && e.target;
+        if (target && target.id === 'friendly-frequency') {
+          updateFriendlyVisibility();
+        }
+      });
+
+      document.addEventListener('input', function(e) {
+        var target = e && e.target;
+        if (target && target.id === 'friendly-frequency') {
+          updateFriendlyVisibility();
+        }
+      });
 
       if (friendlyGenerate) {
         friendlyGenerate.addEventListener('click', function() {
@@ -1891,15 +1990,18 @@ export class SchedulerWebview {
         }
 
         var friendlyFields = document.querySelectorAll('.friendly-field');
-        friendlyFields.forEach(function(el) {
-          if (!el || !el.getAttribute) return;
+        for (var i = 0; i < friendlyFields.length; i++) {
+          var el = friendlyFields[i];
+          if (!el || !el.getAttribute) continue;
           var fieldName = el.getAttribute('data-field');
           if (fields.indexOf(fieldName) !== -1) {
-            el.classList.add('visible');
+            if (el.classList) el.classList.add('visible');
+            if (el.style) el.style.display = 'block';
           } else {
-            el.classList.remove('visible');
+            if (el.classList) el.classList.remove('visible');
+            if (el.style) el.style.display = 'none';
           }
-        });
+        }
       }
 
       function generateCronFromFriendly() {
@@ -2052,6 +2154,17 @@ export class SchedulerWebview {
       window.runTask = function(id) {
         vscode.postMessage({ type: 'runTask', taskId: id });
       };
+
+      function selectHasOptionValue(selectEl, value) {
+        if (!selectEl || !value) return false;
+        var opts = selectEl.options;
+        if (!opts || typeof opts.length !== 'number') return false;
+        for (var i = 0; i < opts.length; i++) {
+          var opt = opts[i];
+          if (opt && opt.value === value) return true;
+        }
+        return false;
+      }
       
       window.editTask = function(id) {
         var taskListArray = Array.isArray(tasks) ? tasks : [];
@@ -2071,7 +2184,7 @@ export class SchedulerWebview {
         pendingAgentValue = task.agent || '';
         pendingModelValue = task.model || '';
         if (agentSelect) {
-          if (pendingAgentValue && agentSelect.querySelector('option[value="' + pendingAgentValue + '"]')) {
+          if (pendingAgentValue && selectHasOptionValue(agentSelect, pendingAgentValue)) {
             agentSelect.value = pendingAgentValue;
             pendingAgentValue = '';
           } else if (pendingAgentValue) {
@@ -2080,7 +2193,7 @@ export class SchedulerWebview {
           }
         }
         if (modelSelect) {
-          if (pendingModelValue && modelSelect.querySelector('option[value="' + pendingModelValue + '"]')) {
+          if (pendingModelValue && selectHasOptionValue(modelSelect, pendingModelValue)) {
             modelSelect.value = pendingModelValue;
             pendingModelValue = '';
           } else if (pendingModelValue) {
@@ -2104,7 +2217,7 @@ export class SchedulerWebview {
         if (templateSelect) {
           if (
             pendingTemplatePath &&
-            templateSelect.querySelector('option[value="' + pendingTemplatePath + '"]')
+            selectHasOptionValue(templateSelect, pendingTemplatePath)
           ) {
             templateSelect.value = pendingTemplatePath;
             pendingTemplatePath = '';
@@ -2250,6 +2363,11 @@ export class SchedulerWebview {
               }
               if (card) card.scrollIntoView({ behavior: 'smooth' });
             }, 100);
+            break;
+          case 'editTask':
+            if (message.taskId && typeof window.editTask === 'function') {
+              window.editTask(message.taskId);
+            }
             break;
           case 'showError':
             if (message.text) {

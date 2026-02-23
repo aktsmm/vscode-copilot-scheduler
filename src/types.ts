@@ -279,8 +279,10 @@ export type ExtensionToWebviewMessage =
   | { type: "updateModels"; models: ModelInfo[] }
   | { type: "updatePromptTemplates"; templates: PromptTemplate[] }
   | { type: "promptTemplateLoaded"; content: string; path: string }
-  | { type: "switchToList" }
+  | { type: "switchToList"; successMessage?: string }
   | { type: "focusTask"; taskId: string }
+  | { type: "editTask"; taskId: string }
+  | { type: "showError"; text: string }
   | { type: "refreshLanguage" };
 
 /**

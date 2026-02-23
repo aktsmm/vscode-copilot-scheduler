@@ -691,7 +691,7 @@ function registerEditTaskCommand(
         scheduleManager.getAllTasks(),
         handleTaskAction,
       );
-      SchedulerWebview.focusTask(taskId);
+      SchedulerWebview.editTask(taskId);
     },
   );
 }
