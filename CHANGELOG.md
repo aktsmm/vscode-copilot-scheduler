@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prompt resolution**: Consolidated `getGlobalPromptsRoot` logic into `promptResolver.ts`, eliminating duplication between `extension.ts` and `schedulerWebview.ts`.
 - **Webview message safety**: All Webview `postMessage` calls now go through the ready-check queue wrapper.
 
+## [1.0.4] - 2026-02-24
+
+### Improved
+
+- **Workspace task clarity**: Workspace-scoped tasks are grouped into "This workspace" / "Other workspaces" in the TreeView for easier scanning.
+- **Safety**: Workspace-scoped tasks that belong to a different workspace can no longer be deleted from the current workspace (TreeView + Webview + command guard).
+
 ## [1.0.2] - 2026-02-23
 
 ### Added
