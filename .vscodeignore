@@ -18,6 +18,7 @@ AGENTS.md
 # Dev-only artifacts
 output_sessions/**
 session/**
+research/**
 
 # Large demo asset (use static PNG in README)
 images/demo-animated.gif
