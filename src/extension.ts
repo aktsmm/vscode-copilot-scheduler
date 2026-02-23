@@ -12,6 +12,10 @@ import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
 import { logError } from "./logger";
+import {
+  resolveGlobalPromptPath,
+  resolveLocalPromptPath,
+} from "./promptResolver";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -313,9 +317,12 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
   let filePath: string | undefined;
 
   if (task.promptSource === "global") {
-    filePath = resolveGlobalPromptPath(task.promptPath);
+    filePath = resolveGlobalPromptPath(getGlobalPromptsRoot(), task.promptPath);
   } else if (task.promptSource === "local") {
-    filePath = resolveLocalPromptPath(task.promptPath);
+    filePath = resolveLocalPromptPath(
+      getWorkspaceFolderPaths(),
+      task.promptPath,
+    );
   }
 
   if (filePath && fs.existsSync(filePath)) {
@@ -329,10 +336,13 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
   return task.prompt;
 }
 
-/**
- * Resolve global prompt file path
- */
-function resolveGlobalPromptPath(promptPath: string): string | undefined {
+function getWorkspaceFolderPaths(): string[] {
+  return (vscode.workspace.workspaceFolders ?? [])
+    .map((f) => f.uri.fsPath)
+    .filter((p): p is string => typeof p === "string" && p.length > 0);
+}
+
+function getGlobalPromptsRoot(): string | undefined {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   const customPath = config.get<string>("globalPromptsPath", "");
 
@@ -341,45 +351,8 @@ function resolveGlobalPromptPath(promptPath: string): string | undefined {
     : "";
 
   const globalRoot = customPath || defaultRoot;
-
-  if (!globalRoot || !fs.existsSync(globalRoot)) {
-    return undefined;
-  }
-
-  return resolveAllowedPromptPath(globalRoot, promptPath);
-}
-
-/**
- * Resolve local prompt file path
- */
-function resolveLocalPromptPath(promptPath: string): string | undefined {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) {
-    return undefined;
-  }
-
-  return resolveAllowedPromptPath(workspaceRoot, promptPath);
-}
-
-/**
- * Resolve prompt path with security checks
- */
-function resolveAllowedPromptPath(
-  baseDir: string,
-  promptPath: string,
-): string | undefined {
-  // Prevent path traversal attacks
-  const resolvedTarget = path.resolve(baseDir, promptPath);
-  const normalizedBase = path.normalize(baseDir);
-
-  if (
-    resolvedTarget.startsWith(normalizedBase + path.sep) ||
-    resolvedTarget === normalizedBase
-  ) {
-    return resolvedTarget;
-  }
-
-  return undefined;
+  if (!globalRoot) return undefined;
+  return fs.existsSync(globalRoot) ? globalRoot : undefined;
 }
 
 /**

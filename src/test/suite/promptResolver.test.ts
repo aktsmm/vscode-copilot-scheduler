@@ -1,0 +1,58 @@
+import * as assert from "assert";
+import * as path from "path";
+import {
+  resolveAllowedPathInBaseDir,
+  resolveLocalPromptPath,
+  resolveGlobalPromptPath,
+} from "../../promptResolver";
+
+function norm(p: string | undefined): string {
+  if (!p) return "";
+  const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? n.toLowerCase() : n;
+}
+
+suite("Prompt Resolver Tests", () => {
+  test("resolveAllowedPathInBaseDir rejects traversal", () => {
+    const base = path.join("/tmp", "ws");
+    const resolved = resolveAllowedPathInBaseDir(base, "../secret.md");
+    assert.strictEqual(resolved, undefined);
+  });
+
+  test("resolveAllowedPathInBaseDir requires .md", () => {
+    const base = path.join("/tmp", "ws");
+    const resolved = resolveAllowedPathInBaseDir(base, "a.txt");
+    assert.strictEqual(resolved, undefined);
+  });
+
+  test("resolveGlobalPromptPath resolves under global root", () => {
+    const globalRoot = path.join("/tmp", "prompts");
+    const p = resolveGlobalPromptPath(globalRoot, "daily.md");
+    assert.strictEqual(norm(p), norm(path.join(globalRoot, "daily.md")));
+  });
+
+  test("resolveLocalPromptPath supports multi-root absolute paths", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const ws2 = path.join("/tmp", "ws2");
+    const allowed = path.join(ws2, ".github", "prompts", "a.md");
+    const p = resolveLocalPromptPath([ws1, ws2], allowed);
+    assert.strictEqual(norm(p), norm(allowed));
+  });
+
+  test("resolveLocalPromptPath rejects workspace files outside .github/prompts", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const outside = path.join(ws1, "notes.md");
+    const p = resolveLocalPromptPath([ws1], outside);
+    assert.strictEqual(p, undefined);
+  });
+
+  test("resolveLocalPromptPath accepts relative path from workspace root", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const rel = path.join(".github", "prompts", "x.md");
+    const p = resolveLocalPromptPath([ws1], rel);
+    assert.strictEqual(
+      norm(p),
+      norm(path.join(ws1, ".github", "prompts", "x.md")),
+    );
+  });
+});

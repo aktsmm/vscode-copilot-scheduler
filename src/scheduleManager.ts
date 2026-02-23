@@ -10,6 +10,7 @@ import { parseExpression } from "cron-parser";
 import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
+import { selectTaskStore } from "./taskStoreSelection";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -415,8 +416,6 @@ export class ScheduleManager {
     const globalMeta = this.loadMetaFromGlobalState();
     const fileMeta = this.loadMetaFromFile() || { revision: 0, savedAt: "" };
 
-    const effectiveFileRevision = fileLoad.ok ? fileMeta.revision : -1;
-
     const globalStoreExists =
       (Array.isArray(savedTasks) && savedTasks.length > 0) ||
       (typeof globalMeta.revision === "number" && globalMeta.revision > 0);
@@ -426,37 +425,27 @@ export class ScheduleManager {
       fs.existsSync(this.storageMetaFilePath) ||
       (typeof fileMeta.revision === "number" && fileMeta.revision > 0);
 
+    const selection = selectTaskStore<ScheduledTask>(
+      {
+        kind: "globalState",
+        exists: globalStoreExists,
+        ok: true,
+        tasks: savedTasks,
+        revision: globalMeta.revision,
+      },
+      {
+        kind: "file",
+        exists: fileStoreExists,
+        ok: fileLoad.ok,
+        tasks: fileTasks,
+        revision: fileMeta.revision,
+      },
+    );
+
     // Choose newer store by revision (handles deletes correctly).
     // IMPORTANT: an empty task array can still be the newest state (e.g., deleting the last task).
-    let tasksToLoad: ScheduledTask[] = [];
-    let chosenMeta: TaskStorageMeta = { revision: 0, savedAt: "" };
-
-    if (globalStoreExists && fileStoreExists) {
-      if (globalMeta.revision > effectiveFileRevision) {
-        tasksToLoad = savedTasks;
-        chosenMeta = globalMeta;
-      } else if (effectiveFileRevision > globalMeta.revision) {
-        tasksToLoad = fileTasks;
-        chosenMeta = fileMeta;
-      } else {
-        // Same revision (or both legacy): prefer file if it parsed successfully.
-        if (fileLoad.ok) {
-          tasksToLoad = fileTasks;
-          chosenMeta = fileMeta;
-        } else {
-          tasksToLoad = savedTasks;
-          chosenMeta = globalMeta;
-        }
-      }
-    } else if (fileStoreExists) {
-      tasksToLoad = fileTasks;
-      chosenMeta = fileMeta;
-    } else if (globalStoreExists) {
-      tasksToLoad = savedTasks;
-      chosenMeta = globalMeta;
-    }
-
-    this.storageRevision = chosenMeta.revision || 0;
+    const tasksToLoad = selection.chosenTasks;
+    this.storageRevision = selection.chosenRevision || 0;
 
     let needsSave = false;
 
@@ -510,10 +499,8 @@ export class ScheduleManager {
         logError("[CopilotScheduler] Failed to save migrated tasks:", error),
       );
     } else {
-      // Heal the other store if revisions differ (best effort, do not bump revision)
-      const shouldSyncToGlobal = fileMeta.revision > globalMeta.revision;
-      const shouldSyncToFile = globalMeta.revision > fileMeta.revision;
-      if (shouldSyncToGlobal || shouldSyncToFile) {
+      // Heal the other store if needed (best effort, do not bump revision)
+      if (selection.shouldHealFile || selection.shouldHealGlobalState) {
         void this.saveTasks({ bumpRevision: false }).catch((error) =>
           logDebug("[CopilotScheduler] Failed to sync task stores:", error),
         );
