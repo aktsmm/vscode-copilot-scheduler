@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-02-24
+
+### Fixed
+
+- **Missed executions after reload**: Preserve persisted `nextRun` on startup; compute it only when missing/invalid so tasks don't appear to "not run" after a window reload.
+- **Manual run rescheduling**: Manual "Run Now" updates both `lastRun` and `nextRun` so `*/N * * * *` tasks count from the manual execution time.
+
+### Changed
+
+- **First run delay option**: "Run first execution" now schedules the first run in 3 minutes (was 1 minute).
+
 ## [1.0.3] - 2026-02-24
 
 ### Improved
