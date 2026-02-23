@@ -155,7 +155,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // Prompt reload when the extension has been updated
   {
     const currentVersion =
-      (context.extension.packageJSON as { version?: string }).version ?? "0.0.0";
+      (context.extension.packageJSON as { version?: string }).version ??
+      "0.0.0";
     const lastVersion = context.globalState.get<string>(LAST_VERSION_KEY);
     if (lastVersion && lastVersion !== currentVersion) {
       void vscode.window
