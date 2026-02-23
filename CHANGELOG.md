@@ -5,6 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13] - 2026-02-23
+
+### Fixed
+
+- **Edit navigation on Windows**: Replaced unsafe `querySelector('option[value="..."]')` with a safe option-iteration helper (`selectHasOptionValue`) so that editing tasks with Windows-style template paths no longer breaks tab switching or form population.
+- **Type alignment**: Added `editTask`, `showError`, and `switchToList.successMessage` to `ExtensionToWebviewMessage` union to match the actual messages sent from the extension host.
+
 ## [0.9.12] - 2026-02-22
 
 ### Improved
