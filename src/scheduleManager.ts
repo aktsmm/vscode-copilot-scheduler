@@ -211,7 +211,6 @@ export class ScheduleManager {
     } else {
       // New day, reset counter
       this.dailyExecCount = 0;
-      this.dailyExecDate = today;
       void this.context.globalState
         .update(DAILY_EXEC_COUNT_KEY, 0)
         .then(undefined, (error: unknown) =>
@@ -284,22 +283,20 @@ export class ScheduleManager {
   }
 
   /**
-   * Check if daily execution limit has been reached
+   * Check if daily execution limit has been reached.
+   * @param maxDailyLimit - Pre-computed limit (0 = unlimited). Pass from caller to avoid redundant config reads.
    */
-  private isDailyLimitReached(): boolean {
-    const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const rawMax = config.get<number>("maxDailyExecutions", 24);
+  private isDailyLimitReached(maxDailyLimit: number): boolean {
     // 0 = unlimited (no daily limit, use at your own risk)
-    if (rawMax === 0) {
+    if (maxDailyLimit === 0) {
       return false;
     }
-    const maxDaily = Math.min(Math.max(rawMax, 1), 100); // enforce 1–100
     const today = getLocalDateKey();
     if (this.dailyExecDate !== today) {
       this.dailyExecCount = 0;
       this.dailyExecDate = today;
     }
-    return this.dailyExecCount >= maxDaily;
+    return this.dailyExecCount >= maxDailyLimit;
   }
 
   /**
@@ -315,13 +312,21 @@ export class ScheduleManager {
 
   // ==================== Safety: Jitter (Random Delay) ====================
 
+  private clampJitterSeconds(value: unknown): number {
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return 0;
+    const i = Math.floor(n);
+    return Math.min(Math.max(i, 0), 1800);
+  }
+
   /**
    * Apply random jitter delay to reduce machine-like patterns
    */
   private async applyJitter(maxJitterSeconds: number): Promise<void> {
-    if (maxJitterSeconds <= 0) return;
+    const clamped = this.clampJitterSeconds(maxJitterSeconds);
+    if (clamped <= 0) return;
 
-    const jitterMs = Math.floor(Math.random() * maxJitterSeconds * 1000);
+    const jitterMs = Math.floor(Math.random() * clamped * 1000);
     const jitterSec = Math.round(jitterMs / 1000);
     if (jitterSec > 0) {
       logDebug(`[CopilotScheduler] Jitter: waiting ${jitterSec}s`);
@@ -688,27 +693,27 @@ export class ScheduleManager {
       throw new Error(messages.invalidCronExpression());
     }
 
-    try {
-      const currentDate = new Date();
-      const tz = this.getTimeZone();
+    const currentDate = new Date();
+    const tz = this.getTimeZone();
 
-      // First, validate with timezone if configured.
-      try {
-        const options: { currentDate: Date; tz?: string } = { currentDate };
-        if (tz) {
-          options.tz = tz;
-        }
-        parseExpression(expression, options);
-        return true;
-      } catch {
-        // If timezone is invalid, retry without tz.
-        if (tz) {
+    // First, validate with timezone if configured.
+    try {
+      const options: { currentDate: Date; tz?: string } = { currentDate };
+      if (tz) {
+        options.tz = tz;
+      }
+      parseExpression(expression, options);
+      return true;
+    } catch {
+      // If timezone is invalid, retry without tz.
+      if (tz) {
+        try {
           parseExpression(expression, { currentDate });
           return true;
+        } catch {
+          // Fall through to throw
         }
-        throw new Error(messages.invalidCronExpression());
       }
-    } catch {
       throw new Error(messages.invalidCronExpression());
     }
   }
@@ -733,7 +738,9 @@ export class ScheduleManager {
     // Get defaults from configuration
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
-    const defaultJitter = config.get<number>("jitterSeconds", 600);
+    const defaultJitter = this.clampJitterSeconds(
+      config.get<number>("jitterSeconds", 600),
+    );
 
     const enabled = input.enabled !== false;
     const effectiveScope = input.scope || defaultScope;
@@ -769,10 +776,8 @@ export class ScheduleManager {
       promptPath: input.promptPath,
       jitterSeconds:
         input.jitterSeconds !== undefined
-          ? input.jitterSeconds
-          : defaultJitter > 0
-            ? defaultJitter
-            : 0,
+          ? this.clampJitterSeconds(input.jitterSeconds)
+          : defaultJitter,
       nextRun,
       createdAt: now,
       updatedAt: now,
@@ -877,7 +882,7 @@ export class ScheduleManager {
       task.promptPath = updates.promptPath;
     }
     if (updates.jitterSeconds !== undefined) {
-      task.jitterSeconds = updates.jitterSeconds;
+      task.jitterSeconds = this.clampJitterSeconds(updates.jitterSeconds);
     }
 
     const enabledAfter = task.enabled;
@@ -989,6 +994,7 @@ export class ScheduleManager {
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,
+      jitterSeconds: original.jitterSeconds,
     };
 
     return this.createTask(input);
@@ -1155,7 +1161,7 @@ export class ScheduleManager {
       // Check if due
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
         // Safety: Check daily execution limit
-        if (this.isDailyLimitReached()) {
+        if (this.isDailyLimitReached(maxDailyLimit)) {
           logDebug(
             `[CopilotScheduler] Daily limit (${maxDailyLimit}) reached, skipping task: ${task.name}`,
           );
@@ -1191,6 +1197,8 @@ export class ScheduleManager {
             // Track daily execution count
             this.incrementDailyExecCountInMemory(new Date());
             executedCount++;
+            // Only record lastRun on successful execution
+            task.lastRun = new Date();
           } catch (error) {
             const details =
               error instanceof Error
@@ -1204,10 +1212,8 @@ export class ScheduleManager {
           }
         }
 
-        // Update lastRun and nextRun
-        const executedAt = new Date();
-        task.lastRun = executedAt;
-        task.nextRun = this.getNextRunForTask(task.cronExpression, executedAt);
+        // Always advance nextRun to prevent infinite retry loops
+        task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
         needsSave = true;
       }
     }

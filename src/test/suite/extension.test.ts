@@ -31,10 +31,13 @@ suite("Extension Test Suite", () => {
       "copilotScheduler.listTasks",
       "copilotScheduler.deleteTask",
       "copilotScheduler.toggleTask",
+      "copilotScheduler.enableTask",
+      "copilotScheduler.disableTask",
       "copilotScheduler.runNow",
       "copilotScheduler.copyPrompt",
       "copilotScheduler.editTask",
       "copilotScheduler.duplicateTask",
+      "copilotScheduler.moveToCurrentWorkspace",
       "copilotScheduler.openSettings",
       "copilotScheduler.showVersion",
     ];

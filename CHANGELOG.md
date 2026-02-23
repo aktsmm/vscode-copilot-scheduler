@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-02-24
+
+### Fixed
+
+- **Prompt placeholder safety**: Template variables (`{{workspace}}`, `{{file}}`, `{{filepath}}`) now use function replacers to prevent `$&`/`$'`/`` $` `` patterns in workspace/file names from corrupting prompt text.
+- **Last run accuracy**: `lastRun` is now recorded only on successful execution; previously it was set even on failure, misleading users into thinking the task ran normally.
+- **Cross-platform NLS**: Settings descriptions for `globalPromptsPath` / `globalAgentsPath` now list default paths for Windows, macOS, and Linux (was Windows-only).
+
+### Improved
+
+- **Code review hardening**: Tooltip markdown escaping (P4), duplicate field copy (P5), test command coverage (P6), CSS class definitions (P7), cross-platform path resolution (P8) — all addressed per review learnings.
+- **Review learnings**: Added U14 (replace special patterns) and U15 (failed operation timestamps) to `.github/review-learnings.md`.
+
 ## [1.0.6] - 2026-02-24
 
 ### Fixed

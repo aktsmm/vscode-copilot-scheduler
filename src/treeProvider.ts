@@ -100,7 +100,9 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     }
 
     if (task.scope === "workspace" && !inThisWorkspace) {
-      const wsName = task.workspacePath ? path.basename(task.workspacePath) : "";
+      const wsName = task.workspacePath
+        ? path.basename(task.workspacePath)
+        : "";
       this.description = `${this.description} • ${wsName || messages.labelOtherWorkspaceShort()}`;
     }
 
@@ -135,7 +137,8 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     const task = this.task;
     const ja = isJapanese();
 
-    md.appendMarkdown(`### ${task.name}\n\n`);
+    const safeName = task.name.replace(/([\\`*_{}[\]()#+\-.!|>~<])/g, "\\$1");
+    md.appendMarkdown(`### ${safeName}\n\n`);
 
     // Status
     const statusLabel = ja ? "ステータス" : "Status";
@@ -200,13 +203,21 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     // Agent
     if (task.agent) {
       const agentLabel = ja ? "エージェント" : "Agent";
-      md.appendMarkdown(`**${agentLabel}:** ${task.agent}\n\n`);
+      const safeAgent = task.agent.replace(
+        /([\\`*_{}[\]()#+\-.!|>~<])/g,
+        "\\$1",
+      );
+      md.appendMarkdown(`**${agentLabel}:** ${safeAgent}\n\n`);
     }
 
     // Model
     if (task.model) {
       const modelLabel = ja ? "モデル" : "Model";
-      md.appendMarkdown(`**${modelLabel}:** ${task.model}\n\n`);
+      const safeModel = task.model.replace(
+        /([\\`*_{}[\]()#+\-.!|>~<])/g,
+        "\\$1",
+      );
+      md.appendMarkdown(`**${modelLabel}:** ${safeModel}\n\n`);
     }
 
     // Prompt preview
@@ -222,19 +233,15 @@ export class ScheduledTaskItem extends vscode.TreeItem {
   }
 }
 
-/**
- * Union type for tree nodes
- */
-export type TreeNode = ScopeGroupItem | ScheduledTaskItem;
-
-export type WorkspaceTreeNode = ScopeGroupItem | WorkspaceGroupItem | ScheduledTaskItem;
+export type WorkspaceTreeNode =
+  | ScopeGroupItem
+  | WorkspaceGroupItem
+  | ScheduledTaskItem;
 
 /**
  * TreeDataProvider for scheduled tasks
  */
-export class ScheduledTaskTreeProvider
-  implements vscode.TreeDataProvider<WorkspaceTreeNode>
-{
+export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<WorkspaceTreeNode> {
   private _onDidChangeTreeData: vscode.EventEmitter<
     WorkspaceTreeNode | undefined | null | void
   > = new vscode.EventEmitter<WorkspaceTreeNode | undefined | null | void>();
@@ -319,7 +326,9 @@ export class ScheduledTaskTreeProvider
   /**
    * Get tasks for a specific scope
    */
-  private async getTasksForScope(scope: TaskScope): Promise<WorkspaceTreeNode[]> {
+  private async getTasksForScope(
+    scope: TaskScope,
+  ): Promise<WorkspaceTreeNode[]> {
     const tasks = this.scheduleManager.getTasksByScope(scope);
 
     // Sort by name
@@ -381,13 +390,17 @@ export class ScheduledTaskTreeProvider
   /**
    * Get parent of a tree node (required for reveal)
    */
-  getParent(element: WorkspaceTreeNode): vscode.ProviderResult<WorkspaceTreeNode> {
+  getParent(
+    element: WorkspaceTreeNode,
+  ): vscode.ProviderResult<WorkspaceTreeNode> {
     if (element instanceof ScheduledTaskItem) {
       const task = element.task;
 
       if (task.scope === "workspace") {
-        const { thisWorkspace, otherWorkspace } = this.partitionWorkspaceTasks();
-        const inThisWorkspace = this.scheduleManager.shouldTaskRunInCurrentWorkspace(task);
+        const { thisWorkspace, otherWorkspace } =
+          this.partitionWorkspaceTasks();
+        const inThisWorkspace =
+          this.scheduleManager.shouldTaskRunInCurrentWorkspace(task);
         return new WorkspaceGroupItem(
           inThisWorkspace ? "this" : "other",
           inThisWorkspace ? thisWorkspace.length : otherWorkspace.length,

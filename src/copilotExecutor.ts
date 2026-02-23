@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
+import { resolveGlobalPromptsRoot } from "./promptResolver";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -24,6 +25,13 @@ const DELAY_AFTER_FOCUS_MS = 150;
 const DELAY_AFTER_MODEL_SELECT_MS = 100;
 const DELAY_AFTER_TYPE_MS = 50;
 const DELAY_NEW_SESSION_MS = 200;
+
+/** Slash-command agents — prefixed with "/" instead of "@" */
+const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
+  "agent",
+  "ask",
+  "edit",
+]);
 
 /**
  * Executes prompts through GitHub Copilot Chat
@@ -46,7 +54,7 @@ export class CopilotExecutor {
       ) {
         if (options.agent.startsWith("@")) {
           fullPrompt = `${options.agent} ${processedPrompt}`;
-        } else if (["agent", "ask", "edit"].includes(options.agent)) {
+        } else if (SLASH_COMMAND_AGENTS.has(options.agent)) {
           fullPrompt = `/${options.agent} ${processedPrompt}`;
         } else {
           fullPrompt = `@${options.agent} ${processedPrompt}`;
@@ -102,9 +110,9 @@ export class CopilotExecutor {
       // Submit the prompt
       await vscode.commands.executeCommand("workbench.action.chat.submit");
     } catch (error) {
-      // Show error and offer to copy to clipboard
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      // Show error and offer to copy to clipboard (this is the primary
+      // user-facing notification for execution failures — callers should
+      // avoid showing a second notification for the same error).
       const action = await vscode.window.showWarningMessage(
         messages.autoExecuteFailed(),
         messages.actionCopyPrompt(),
@@ -159,15 +167,17 @@ export class CopilotExecutor {
     );
 
     // Replace {{workspace}} with workspace name
+    // Use function replacers to prevent $& / $' / $` interpretation in values
     const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name || "";
-    result = result.replace(/\{\{workspace\}\}/gi, workspaceName);
+    result = result.replace(/\{\{workspace\}\}/gi, () => workspaceName);
 
     // Replace {{file}} with current file name
     const currentFile = vscode.window.activeTextEditor?.document.fileName || "";
-    result = result.replace(/\{\{file\}\}/gi, path.basename(currentFile));
+    const currentFileName = path.basename(currentFile);
+    result = result.replace(/\{\{file\}\}/gi, () => currentFileName);
 
     // Replace {{filepath}} with current file path
-    result = result.replace(/\{\{filepath\}\}/gi, currentFile);
+    result = result.replace(/\{\{filepath\}\}/gi, () => currentFile);
 
     return result;
   }
@@ -247,6 +257,7 @@ export class CopilotExecutor {
     const agentFiles = await vscode.workspace.findFiles(
       "**/*.agent.md",
       "**/node_modules/**",
+      100,
     );
 
     for (const file of agentFiles) {
@@ -302,14 +313,11 @@ export class CopilotExecutor {
   static async getGlobalAgents(): Promise<AgentInfo[]> {
     const agents: AgentInfo[] = [];
 
-    // Get global agents path from settings or default
+    // Reuse resolveGlobalPromptsRoot with the agents-specific setting
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const customPath = config.get<string>("globalAgentsPath", "");
-    const defaultPath = process.env.APPDATA
-      ? path.join(process.env.APPDATA, "Code", "User", "prompts")
-      : "";
-
-    const globalPath = customPath || defaultPath;
+    const globalPath = resolveGlobalPromptsRoot(
+      config.get<string>("globalAgentsPath", ""),
+    );
     try {
       if (!globalPath) {
         return agents;
@@ -342,13 +350,22 @@ export class CopilotExecutor {
   }
 
   /**
-   * Get all agents (built-in + custom + global)
+   * Get all agents (built-in + custom + global), deduplicated by id
    */
   static async getAllAgents(): Promise<AgentInfo[]> {
     const builtIn = CopilotExecutor.getBuiltInAgents();
     const custom = await CopilotExecutor.getCustomAgents();
     const global = await CopilotExecutor.getGlobalAgents();
-    return [...builtIn, ...custom, ...global];
+
+    const seen = new Set<string>();
+    const result: AgentInfo[] = [];
+    for (const agent of [...builtIn, ...custom, ...global]) {
+      const key = agent.id || agent.name;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(agent);
+    }
+    return result;
   }
 
   /**

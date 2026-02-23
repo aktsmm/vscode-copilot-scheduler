@@ -222,21 +222,6 @@ export interface ExecuteOptions {
 }
 
 /**
- * Webview message types (Extension → Webview)
- */
-export type ExtensionToWebviewMessage =
-  | { type: "updateTasks"; tasks: ScheduledTask[] }
-  | { type: "updateAgents"; agents: AgentInfo[] }
-  | { type: "updateModels"; models: ModelInfo[] }
-  | { type: "updatePromptTemplates"; templates: PromptTemplate[] }
-  | { type: "promptTemplateLoaded"; content: string; path: string }
-  | { type: "switchToList"; successMessage?: string }
-  | { type: "focusTask"; taskId: string }
-  | { type: "editTask"; taskId: string }
-  | { type: "showError"; text: string }
-  | { type: "refreshLanguage" };
-
-/**
  * Webview message types (Webview → Extension)
  */
 export type WebviewToExtensionMessage =
@@ -253,11 +238,6 @@ export type WebviewToExtensionMessage =
   | { type: "moveTaskToCurrentWorkspace"; taskId: string }
   | { type: "loadPromptTemplate"; path: string; source: PromptSource }
   | { type: "webviewReady" };
-
-/**
- * TreeView node types
- */
-export type TreeNodeType = "scopeGroup" | "task";
 
 /**
  * TreeView context values

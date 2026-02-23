@@ -321,8 +321,10 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       notifyInfo(messages.taskExecuted(task.name));
     }
   } catch (error) {
+    // executePrompt already shows a warning with copy-to-clipboard option,
+    // so only log the error here to avoid double notification.
     const errorMessage = error instanceof Error ? error.message : String(error);
-    notifyError(messages.taskExecutionFailed(task.name, errorMessage));
+    logError(messages.taskExecutionFailed(task.name, errorMessage));
   }
 }
 
@@ -716,7 +718,8 @@ function registerDeleteTaskCommand(): vscode.Disposable {
           .getAllTasks()
           .filter(
             (t) =>
-              t.scope === "global" || scheduleManager.shouldTaskRunInCurrentWorkspace(t),
+              t.scope === "global" ||
+              scheduleManager.shouldTaskRunInCurrentWorkspace(t),
           );
         if (tasks.length === 0) {
           notifyInfo(messages.noTasksFound());
@@ -796,6 +799,9 @@ function registerToggleTaskCommand(): vscode.Disposable {
             ? messages.taskEnabled(task.name)
             : messages.taskDisabled(task.name),
         );
+        if (task.enabled) {
+          await maybeShowDisclaimerOnce(task);
+        }
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       }
     },
@@ -806,13 +812,36 @@ function registerEnableTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.enableTask",
     async (item?: ScheduledTaskItem) => {
+      let taskId: string | undefined;
+
       if (item instanceof ScheduledTaskItem) {
-        const task = await scheduleManager.setTaskEnabled(item.task.id, true);
-        if (task) {
-          notifyInfo(messages.taskEnabled(task.name));
-          await maybeShowDisclaimerOnce(task);
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        taskId = item.task.id;
+      } else {
+        // Show quick pick to select a disabled task
+        const tasks = scheduleManager.getAllTasks().filter((t) => !t.enabled);
+        if (tasks.length === 0) {
+          notifyInfo(messages.noTasksFound());
+          return;
         }
+
+        const selected = await vscode.window.showQuickPick(
+          tasks.map((t) => ({
+            label: `⏸️ ${t.name}`,
+            description: t.cronExpression,
+            id: t.id,
+          })),
+          { placeHolder: messages.selectTask() },
+        );
+
+        if (!selected) return;
+        taskId = selected.id;
+      }
+
+      const task = await scheduleManager.setTaskEnabled(taskId, true);
+      if (task) {
+        notifyInfo(messages.taskEnabled(task.name));
+        await maybeShowDisclaimerOnce(task);
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       }
     },
   );
@@ -822,12 +851,35 @@ function registerDisableTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.disableTask",
     async (item?: ScheduledTaskItem) => {
+      let taskId: string | undefined;
+
       if (item instanceof ScheduledTaskItem) {
-        const task = await scheduleManager.setTaskEnabled(item.task.id, false);
-        if (task) {
-          notifyInfo(messages.taskDisabled(task.name));
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        taskId = item.task.id;
+      } else {
+        // Show quick pick to select an enabled task
+        const tasks = scheduleManager.getAllTasks().filter((t) => t.enabled);
+        if (tasks.length === 0) {
+          notifyInfo(messages.noTasksFound());
+          return;
         }
+
+        const selected = await vscode.window.showQuickPick(
+          tasks.map((t) => ({
+            label: `✅ ${t.name}`,
+            description: t.cronExpression,
+            id: t.id,
+          })),
+          { placeHolder: messages.selectTask() },
+        );
+
+        if (!selected) return;
+        taskId = selected.id;
+      }
+
+      const task = await scheduleManager.setTaskEnabled(taskId, false);
+      if (task) {
+        notifyInfo(messages.taskDisabled(task.name));
+        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       }
     },
   );
@@ -897,7 +949,10 @@ function registerCopyPromptCommand(): vscode.Disposable {
         const selected = await vscode.window.showQuickPick(
           tasks.map((t) => ({
             label: t.name,
-            description: t.prompt.substring(0, 50) + "...",
+            description:
+              t.prompt.length > 50
+                ? t.prompt.substring(0, 50) + "..."
+                : t.prompt,
             task: t,
           })),
           { placeHolder: messages.selectTask() },

@@ -22,7 +22,8 @@
     var prefix = strings.webviewScriptErrorPrefix || "";
     var linePrefix = strings.webviewLinePrefix || "";
     var lineSuffix = strings.webviewLineSuffix || "";
-    errDiv.textContent = prefix + String(msg) + linePrefix + String(line) + lineSuffix;
+    errDiv.textContent =
+      prefix + String(msg) + linePrefix + String(line) + lineSuffix;
     errDiv.style.display = "block";
   };
 
@@ -491,7 +492,7 @@
 
     if (taskItems.length === 0) {
       renderedTasks =
-        '<div class="empty-state">' + strings.noTasksFound + "</div>";
+        '<div class="empty-state">' + escapeHtml(strings.noTasksFound) + "</div>";
     } else {
       renderedTasks = taskItems
         .map(function (task) {
@@ -505,7 +506,9 @@
             ? strings.labelEnabled
             : strings.labelDisabled;
           var toggleIcon = enabled ? "⏸️" : "▶️";
-          var toggleTitle = enabled ? "Disable" : "Enable";
+          var toggleTitle = enabled
+            ? strings.actionDisable
+            : strings.actionEnable;
           var nextRun = task.nextRun
             ? new Date(task.nextRun).toLocaleString()
             : strings.labelNever;
@@ -558,29 +561,29 @@
             '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' +
             taskIdEscaped +
             '" title="' +
-            toggleTitle +
+            escapeAttr(toggleTitle) +
             '">' +
             toggleIcon +
             "</button>" +
             '<button class="btn-secondary btn-icon" data-action="run" data-id="' +
             taskIdEscaped +
             '" title="' +
-            strings.actionRun +
+            escapeAttr(strings.actionRun) +
             '">🚀</button>' +
             '<button class="btn-secondary btn-icon" data-action="edit" data-id="' +
             taskIdEscaped +
             '" title="' +
-            strings.actionEdit +
+            escapeAttr(strings.actionEdit) +
             '">✏️</button>' +
             '<button class="btn-secondary btn-icon" data-action="copy" data-id="' +
             taskIdEscaped +
             '" title="' +
-            strings.actionCopyPrompt +
+            escapeAttr(strings.actionCopyPrompt) +
             '">📋</button>' +
             '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' +
             taskIdEscaped +
             '" title="' +
-            strings.actionDuplicate +
+            escapeAttr(strings.actionDuplicate) +
             '">📄</button>';
 
           if (scopeValue === "workspace" && !inThisWorkspace) {
@@ -597,7 +600,7 @@
               '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
               taskIdEscaped +
               '" title="' +
-              strings.actionDelete +
+              escapeAttr(strings.actionDelete) +
               '">🗑️</button>';
           }
 
@@ -621,7 +624,7 @@
             '" data-action="toggle" data-id="' +
             taskIdEscaped +
             '">' +
-            statusText +
+            escapeHtml(statusText) +
             "</span>" +
             "</div>" +
             '<div class="task-info">' +
@@ -629,9 +632,9 @@
             cronText +
             "</span>" +
             "<span>" +
-            strings.labelNextRun +
+            escapeHtml(strings.labelNextRun) +
             ": " +
-            nextRun +
+            escapeHtml(nextRun) +
             "</span>" +
             "<span>" +
             scopeInfo +
@@ -651,7 +654,7 @@
 
       if (!renderedTasks) {
         renderedTasks =
-          '<div class="empty-state">' + strings.noTasksFound + "</div>";
+          '<div class="empty-state">' + escapeHtml(strings.noTasksFound) + "</div>";
       }
     }
 
@@ -761,9 +764,7 @@
 
     if (everyN && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
       var tplEveryN = strings.cronPreviewEveryNMinutes || "";
-      return tplEveryN
-        ? tplEveryN.replace("{n}", String(everyN[1]))
-        : fallback;
+      return tplEveryN ? tplEveryN.replace("{n}", String(everyN[1])) : fallback;
     }
 
     if (
@@ -1404,11 +1405,8 @@
     } catch (e) {
       var errDiv = document.getElementById("form-error");
       if (errDiv) {
-        var isJa =
-          document.documentElement && document.documentElement.lang === "ja";
-        errDiv.textContent =
-          (isJa ? "画面処理でエラーが発生しました: " : "Webview error: ") +
-          String(e && e.message ? e.message : e);
+        var prefix = strings.webviewClientErrorPrefix || "";
+        errDiv.textContent = prefix + String(e && e.message ? e.message : e);
         errDiv.style.display = "block";
       }
       pendingSubmit = false;

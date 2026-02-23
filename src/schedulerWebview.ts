@@ -450,19 +450,9 @@ export class SchedulerWebview {
 
       case "webviewReady":
         this.webviewReady = true;
-        // Send initial data
-        this.postMessage({
-          type: "updateAgents",
-          agents: this.cachedAgents,
-        });
-        this.postMessage({
-          type: "updateModels",
-          models: this.cachedModels,
-        });
-        this.postMessage({
-          type: "updatePromptTemplates",
-          templates: this.cachedPromptTemplates,
-        });
+        // Flush any messages that were queued while the webview was not ready.
+        // Cached agents/models/templates are already enqueued by refreshLanguage
+        // or show(), so we only need to flush here to avoid duplicates.
         this.flushPendingMessages();
         break;
     }
@@ -708,6 +698,8 @@ export class SchedulerWebview {
       actionCopyPrompt: messages.actionCopyPrompt(),
       actionDuplicate: messages.actionDuplicate(),
       actionMoveToCurrentWorkspace: messages.actionMoveToCurrentWorkspace(),
+      actionEnable: messages.actionEnable(),
+      actionDisable: messages.actionDisable(),
       noTasksFound: messages.noTasksFound(),
       confirmDeleteTemplate: messages.confirmDelete("{name}"),
       labelAdvanced: messages.labelAdvanced(),
@@ -762,6 +754,7 @@ export class SchedulerWebview {
       webviewLineSuffix: messages.webviewLineSuffix(),
       webviewUnknown: messages.webviewUnknown(),
       webviewApiUnavailable: messages.webviewApiUnavailable(),
+      webviewClientErrorPrefix: messages.webviewClientErrorPrefix(),
 
       // Webview notes
       webviewJitterNote: messages.webviewJitterNote(),
@@ -1118,6 +1111,13 @@ export class SchedulerWebview {
     .cron-preview strong {
       color: var(--vscode-foreground);
     }
+
+    .note {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      margin-top: 4px;
+      margin-bottom: 0;
+    }
   </style>
 </head>
 <body>
@@ -1133,7 +1133,7 @@ export class SchedulerWebview {
       
       <div class="form-group">
         <label for="task-name">${strings.labelTaskName}</label>
-        <input type="text" id="task-name" placeholder="${strings.placeholderTaskName}" required>
+        <input type="text" id="task-name" placeholder="${escapeHtmlAttr(strings.placeholderTaskName)}" required>
       </div>
       
       <div class="form-group">
@@ -1166,7 +1166,7 @@ export class SchedulerWebview {
       
       <div class="form-group" id="prompt-group">
         <label for="prompt-text">${strings.labelPrompt}</label>
-        <textarea id="prompt-text" placeholder="${strings.placeholderPrompt}" required></textarea>
+        <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
       </div>
       
       <div class="form-group">
@@ -1245,7 +1245,7 @@ export class SchedulerWebview {
           <select id="model-select">
             ${initialModels.length > 0 ? `<option value="">${escapeHtmlAttr(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtmlAttr(m.name || "")}</option>`).join("") : `<option value="">${escapeHtmlAttr(strings.placeholderNoModels)}</option>`}
           </select>
-          <p class="note">${strings.labelModelNote}</p>
+          <p class="note">${escapeHtmlAttr(strings.labelModelNote)}</p>
         </div>
       </div>
       

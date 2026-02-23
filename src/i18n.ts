@@ -137,6 +137,8 @@ export const messages = {
       "VS Code Webview API (acquireVsCodeApi) is unavailable. Check CSP/initialization.",
       "VS Code Webview API (acquireVsCodeApi) が利用できません。CSP/初期化を確認してください。",
     ),
+  webviewClientErrorPrefix: () =>
+    t("Webview error: ", "画面処理でエラーが発生しました: "),
 
   // ==================== Webview Placeholders ====================
   webviewSelectAgentPlaceholder: () =>

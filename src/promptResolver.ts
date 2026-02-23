@@ -98,13 +98,31 @@ export function resolveLocalPromptPath(
 /**
  * Resolve the global prompts root directory.
  * Falls back to the default VS Code User/prompts folder.
+ * Supports Windows (APPDATA), macOS (HOME/Library), and Linux (XDG_CONFIG_HOME or HOME).
  */
 export function resolveGlobalPromptsRoot(
   customPath?: string,
 ): string | undefined {
-  const defaultRoot = process.env.APPDATA
-    ? path.join(process.env.APPDATA, "Code", "User", "prompts")
-    : "";
+  let defaultRoot = "";
+  if (process.env.APPDATA) {
+    // Windows
+    defaultRoot = path.join(process.env.APPDATA, "Code", "User", "prompts");
+  } else if (process.platform === "darwin" && process.env.HOME) {
+    // macOS
+    defaultRoot = path.join(
+      process.env.HOME,
+      "Library",
+      "Application Support",
+      "Code",
+      "User",
+      "prompts",
+    );
+  } else if (process.env.HOME) {
+    // Linux (XDG_CONFIG_HOME or ~/.config)
+    const configBase =
+      process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, ".config");
+    defaultRoot = path.join(configBase, "Code", "User", "prompts");
+  }
   const globalRoot = customPath || defaultRoot;
   if (!globalRoot) return undefined;
   return fs.existsSync(globalRoot) ? globalRoot : undefined;

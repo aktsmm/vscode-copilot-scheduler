@@ -101,3 +101,75 @@
 - **Added**: 2026-02-23
 - **Evidence**: グローバルプロンプトのルートディレクトリ解決（設定読み取り + APPDATA フォールバック + existsSync）が2ファイルに同一ロジックとして存在していた。
 - **Action**: パス解決ロジックは `promptResolver.ts` に集約する。設定値の読み取りは呼び出し元で行い、純粋な解決関数にはパラメータとして渡す（テスタビリティ向上）。
+
+### P3: Webview の innerHTML 組み立てでエスケープが不統一
+
+- **Tags**: `セキュリティ` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `media/schedulerWebview.js` のタスクカード描画で、`cronText` や `taskName` は `escapeHtml()` 済みだが、`nextRun`（`toLocaleString()` 結果）は未エスケープだった。また、アクションボタンの `title` 属性も一部のみ `escapeAttr()` 適用で不統一だった。
+- **Action**: `innerHTML` で組み立てるHTMLでは、ユーザー入力・動的値の全箇所に `escapeHtml()` / `escapeAttr()` を適用する。i18n 文字列でも属性コンテキストでは `escapeAttr()` を使う。既存コードに追加する際は、同一テンプレート内の他の値のエスケープ状況も確認する。
+
+### P4: MarkdownString の appendMarkdown にユーザー入力を直接渡さない
+
+- **Tags**: `セキュリティ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: `treeProvider.ts` の `createTooltip()` で `task.name`（ユーザー入力）を `appendMarkdown()` にそのまま埋め込んでおり、`#` `*` `_` 等を含む名前でツールチップのフォーマットが崩れた。`task.agent`/`task.model` も同様に未エスケープだった（カスタムエージェント名は `.agent.md` ファイル名由来で `_` 等を含みうる）。
+- **Action**: `appendMarkdown()` にユーザー入力や外部由来の文字列を埋め込む場合は、マークダウン特殊文字をバックスラッシュエスケープするか、`appendText()` を使う。同一テンプレート内の全動的値を一括確認する。
+
+### P5: duplicateTask でフィールドコピー漏れ
+
+- **Tags**: `バグ` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `scheduleManager.ts` の `duplicateTask()` で `CreateTaskInput` を組み立てる際、`jitterSeconds` がコピーされていなかった。元タスクで jitter=0（無効）に設定していても、複製先はグローバルデフォルト（600秒）になり、ユーザーの意図に反する動作になった。
+- **Action**: `duplicateTask` 等の「既存オブジェクトから入力を組み立てる」パターンでは、元の型の全フィールドが反映されているかレビュー時に確認する。特に後から追加されたフィールド（`jitterSeconds` のようなオプショナルプロパティ）は漏れやすい。
+
+### P6: コマンド追加時にテストの expectedCommands も更新する
+
+- **Tags**: `コード品質` `非機能`
+- **Added**: 2026-02-24
+- **Evidence**: `enableTask`, `disableTask`, `moveToCurrentWorkspace` の3コマンドが `extension.ts` に登録されていたが、`extension.test.ts` の `expectedCommands` 配列に含まれていなかった。テストが不完全なまま通過していた。
+- **Action**: 新しいコマンドを `registerXxxCommand` で追加したら、`extension.test.ts` の `expectedCommands` 配列にも追加する。PR レビュー時にコマンド数の不一致をチェックする。
+
+### P7: Webview CSS で使用する class が定義されているか確認する
+
+- **Tags**: `UI/UX` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `schedulerWebview.ts` の HTML 内で `<p class="note">` を使用していたが、対応する `.note` CSS ルールが `<style>` ブロックに存在しなかった。注記テキストがデフォルトスタイルで表示されていた。
+- **Action**: テンプレートリテラルで HTML を生成する際、使用する CSS クラスがすべてインラインスタイルブロックに定義されているかを確認する。特に後から追加した要素のクラス名は漏れやすい。
+
+### P8: resolveGlobalPromptsRoot のクロスプラットフォーム対応
+
+- **Tags**: `バグ` `非機能`
+- **Added**: 2026-02-24
+- **Evidence**: `resolveGlobalPromptsRoot` が `APPDATA` 環境変数（Windows専用）のみをフォールバックとしていたため、macOS/Linux ではカスタムパスを設定しない限りグローバルテンプレートが一切使えなかった。
+- **Action**: VS Code の設定ディレクトリはプラットフォームごとに異なる（Windows: `%APPDATA%/Code`、macOS: `~/Library/Application Support/Code`、Linux: `$XDG_CONFIG_HOME/Code` or `~/.config/Code`）。デフォルトパスのフォールバックは全対象プラットフォームをカバーする。
+
+## Universal（汎用 — 追加分）
+
+### U13: 二重 try-catch でエラーを再ラップしない
+
+- **Tags**: `コード品質` `バグ`
+- **Added**: 2026-02-24
+- **Evidence**: `validateCronExpression` で内側の catch が `throw new Error(msg)` し、外側の catch がそれを捕まえて同じメッセージで `new Error(msg)` を再 throw していた。エラーメッセージは同じだが、元の `parseExpression` のスタックトレースが消失し、デバッグが困難になる。
+- **Action**: try-catch のネストで同じエラーを再ラップしない。外側の catch が必要なのは「内側で処理しきれないケース」のみ。内側の catch 内で最終的な throw を行うなら、外側の catch は不要。
+
+### U14: String.replace() の第2引数にユーザー由来の値を直接渡さない
+
+- **Tags**: `バグ` `セキュリティ`
+- **Added**: 2026-02-24
+- **Evidence**: `applyPromptCommands` で `result.replace(/\{\{workspace\}\}/gi, workspaceName)` のように外部由来の値を直接渡していた。`$&`, `$'`, `` $` `` を含むワークスペース名やファイルパスがあると、replace の特殊置換パターンとして解釈されプロンプトテキストが破損する。
+- **Action**: `String.prototype.replace()` で置換文字列に外部入力やファイルパスを使う場合は、関数 replacer `() => value` を使い特殊パターン解釈を防ぐ。安全なのは自分で組み立てたリテラル文字列のみ。
+
+### U15: 失敗した操作のタイムスタンプを「成功」として記録しない
+
+- **Tags**: `バグ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: `checkAndExecuteTasks` でタスク実行の try-catch の外（つまり成功・失敗問わず）で `task.lastRun = executedAt` を設定していた。実行が失敗してもユーザーには「最終実行: XX:XX」と表示され、正常に実行されたと誤認される。
+- **Action**: 成功時のみタイムスタンプを記録する（lastRun は try 内）。リトライ防止用のスケジュール進行（nextRun）は常に行う。「最終試行」と「最終成功」を区別する必要がある場合はフィールドを分ける。
+
+### U14: i18n 文字列も HTML コンテキストに応じてエスケープする
+
+- **Tags**: `セキュリティ` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: Webview HTML テンプレート（`schedulerWebview.ts`）で `placeholder` 属性に i18n 文字列を `escapeHtmlAttr()` なしで埋め込んでいた箇所があった（`placeholderTaskName`, `placeholderPrompt`）。同テンプレート内の他の placeholder（`placeholderCron`）はエスケープ済みで不統一だった。同様に `media/schedulerWebview.js` で `strings.noTasksFound` 等のi18n文字列が `escapeHtml()` なしで `innerHTML` に注入されていた。
+- **Action**: i18n 文字列は開発者管理だが、属性コンテキスト（`placeholder=`, `title=` 等）では `escapeHtmlAttr()` を、要素テキストコンテキストで `innerHTML` に挿入する場合は `escapeHtml()` を適用する。修正時は同一テンプレート内のすべての動的値のエスケープ状況を網羅チェックする（1箇所だけ修正して他を放置しない）。
