@@ -29,6 +29,9 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
+      "presentation": {
+        "close": true
+      },
       "group": "build"
     }
   ]

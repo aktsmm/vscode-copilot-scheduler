@@ -31,11 +31,6 @@ export function logDebug(...args: unknown[]): void {
   console.log(...args);
 }
 
-export function logInfo(...args: unknown[]): void {
-  if (!canLog("info")) return;
-  console.log(...args);
-}
-
 export function logError(...args: unknown[]): void {
   if (!canLog("error")) return;
   console.error(...args);

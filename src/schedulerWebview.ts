@@ -23,6 +23,7 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { messages, isJapanese, getCronPresets } from "./i18n";
 import { logError } from "./logger";
 import { validateTemplateLoadRequest } from "./templateValidation";
+import { resolveGlobalPromptsRoot } from "./promptResolver";
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 
@@ -380,26 +381,22 @@ export class SchedulerWebview {
 
       case "refreshAgents":
         await this.refreshAgentsAndModels(true);
-        if (this.panel) {
-          this.panel.webview.postMessage({
-            type: "updateAgents",
-            agents: this.cachedAgents,
-          });
-          this.panel.webview.postMessage({
-            type: "updateModels",
-            models: this.cachedModels,
-          });
-        }
+        this.postMessage({
+          type: "updateAgents",
+          agents: this.cachedAgents,
+        });
+        this.postMessage({
+          type: "updateModels",
+          models: this.cachedModels,
+        });
         break;
 
       case "refreshPrompts":
         await this.refreshPromptTemplates(true);
-        if (this.panel) {
-          this.panel.webview.postMessage({
-            type: "updatePromptTemplates",
-            templates: this.cachedPromptTemplates,
-          });
-        }
+        this.postMessage({
+          type: "updatePromptTemplates",
+          templates: this.cachedPromptTemplates,
+        });
         break;
 
       case "runTask":
@@ -572,17 +569,7 @@ export class SchedulerWebview {
    */
   private static getGlobalPromptsPath(): string | undefined {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const customPath = config.get<string>("globalPromptsPath", "");
-    const defaultPath = process.env.APPDATA
-      ? path.join(process.env.APPDATA, "Code", "User", "prompts")
-      : "";
-
-    const targetPath = customPath || defaultPath;
-    if (!targetPath) {
-      return undefined;
-    }
-
-    return fs.existsSync(targetPath) ? targetPath : undefined;
+    return resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""));
   }
 
   /**
@@ -764,36 +751,7 @@ export class SchedulerWebview {
       labelOtherWorkspaceShort: messages.labelOtherWorkspaceShort(),
     };
 
-    const extraPresets: CronPreset[] = [
-      {
-        id: "extra-hourly-00",
-        expression: "0 * * * *",
-        name: isJa ? "毎時" : "Every hour",
-        description: isJa ? "毎時 00 分" : "Top of every hour",
-      },
-      {
-        id: "extra-daily-9",
-        expression: "0 9 * * *",
-        name: isJa ? "毎日 09:00" : "Daily 09:00",
-        description: isJa ? "毎日 09:00 に実行" : "Run every day at 09:00",
-      },
-      {
-        id: "extra-weekday-9",
-        expression: "0 9 * * 1-5",
-        name: isJa ? "平日 09:00" : "Weekdays 09:00",
-        description: isJa ? "平日 09:00" : "Weekdays at 09:00",
-      },
-      {
-        id: "extra-monthly-1st-9",
-        expression: "0 9 1 * *",
-        name: isJa ? "毎月1日 09:00" : "Monthly 1st 09:00",
-        description: isJa
-          ? "毎月1日に実行"
-          : "Run on the 1st each month at 09:00",
-      },
-    ];
-
-    const allPresets = presets.concat(extraPresets);
+    const allPresets = presets;
 
     const serializeForWebview = this.serializeForWebview;
     const escapeHtmlAttr = this.escapeHtmlAttr;
@@ -813,7 +771,7 @@ export class SchedulerWebview {
       vscode.Uri.joinPath(this.extensionUri, "media", "schedulerWebview.js"),
     );
 
-    const rawHtml = `<!DOCTYPE html
+    const rawHtml = `<!DOCTYPE html>
 <html lang="${isJa ? "ja" : "en"}">
 <head>
   <meta charset="UTF-8">
@@ -1081,6 +1039,17 @@ export class SchedulerWebview {
       flex: 1;
     }
 
+    .template-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .template-row select {
+      flex: 1;
+      min-width: 0;
+    }
+
     .friendly-cron {
       margin-top: 10px;
       padding: 12px;
@@ -1166,9 +1135,12 @@ export class SchedulerWebview {
       
       <div class="form-group" id="template-select-group" style="display: none;">
         <label for="template-select">${strings.labelPrompt}</label>
-        <select id="template-select">
-          <option value="">-- Select Template --</option>
-        </select>
+        <div class="template-row">
+          <select id="template-select">
+            <option value="">-- Select Template --</option>
+          </select>
+          <button type="button" class="btn-secondary" id="template-refresh-btn">${strings.actionRefresh}</button>
+        </div>
       </div>
       
       <div class="form-group" id="prompt-group">

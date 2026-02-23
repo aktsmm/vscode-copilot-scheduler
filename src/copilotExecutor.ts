@@ -19,6 +19,12 @@ import { logDebug, logError } from "./logger";
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
 
+// Timing constants for Copilot Chat interaction delays (ms)
+const DELAY_AFTER_FOCUS_MS = 150;
+const DELAY_AFTER_MODEL_SELECT_MS = 100;
+const DELAY_AFTER_TYPE_MS = 50;
+const DELAY_NEW_SESSION_MS = 200;
+
 /**
  * Executes prompts through GitHub Copilot Chat
  */
@@ -67,7 +73,7 @@ export class CopilotExecutor {
       await vscode.commands.executeCommand(
         "workbench.panel.chat.view.copilot.focus",
       );
-      await this.delay(150);
+      await this.delay(DELAY_AFTER_FOCUS_MS);
 
       // Try to set model if specified
       if (options?.model && options.model !== "") {
@@ -80,7 +86,7 @@ export class CopilotExecutor {
             options.model,
           );
           logDebug(`[CopilotScheduler] Model selection result:`, result);
-          await this.delay(100);
+          await this.delay(DELAY_AFTER_MODEL_SELECT_MS);
         } catch (error) {
           logError(`[CopilotScheduler] Model selection failed:`, error);
           // Model selection may not be available, continue without it
@@ -91,7 +97,7 @@ export class CopilotExecutor {
 
       // Type the prompt using the type command
       await vscode.commands.executeCommand("type", { text: fullPrompt });
-      await this.delay(50);
+      await this.delay(DELAY_AFTER_TYPE_MS);
 
       // Submit the prompt
       await vscode.commands.executeCommand("workbench.action.chat.submit");
@@ -120,7 +126,7 @@ export class CopilotExecutor {
   private async tryCreateNewChatSession(): Promise<boolean> {
     try {
       await vscode.commands.executeCommand("workbench.action.chat.newChat");
-      await this.delay(200);
+      await this.delay(DELAY_NEW_SESSION_MS);
       return true;
     } catch {
       return false;

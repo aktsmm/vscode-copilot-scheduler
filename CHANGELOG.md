@@ -5,6 +5,14 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-02-24
+
+### Improved
+
+- **Dead code removal**: Removed ~400 lines of unused code — `cronBuilder.ts` (entire file), `TaskExecutionResult` / `ExtensionConfig` types, `getAgentDisplayInfo()`, and `logInfo()`.
+- **Prompt resolution**: Consolidated `getGlobalPromptsRoot` logic into `promptResolver.ts`, eliminating duplication between `extension.ts` and `schedulerWebview.ts`.
+- **Webview message safety**: All Webview `postMessage` calls now go through the ready-check queue wrapper.
+
 ## [1.0.2] - 2026-02-23
 
 ### Added

@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 
 function normalizeForCompare(p: string): string {
   const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
@@ -91,4 +92,19 @@ export function resolveLocalPromptPath(
   }
 
   return undefined;
+}
+
+/**
+ * Resolve the global prompts root directory.
+ * Falls back to the default VS Code User/prompts folder.
+ */
+export function resolveGlobalPromptsRoot(
+  customPath?: string,
+): string | undefined {
+  const defaultRoot = process.env.APPDATA
+    ? path.join(process.env.APPDATA, "Code", "User", "prompts")
+    : "";
+  const globalRoot = customPath || defaultRoot;
+  if (!globalRoot) return undefined;
+  return fs.existsSync(globalRoot) ? globalRoot : undefined;
 }

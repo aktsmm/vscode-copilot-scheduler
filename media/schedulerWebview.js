@@ -83,6 +83,7 @@
   var modelSelect = document.getElementById("model-select");
   var templateSelect = document.getElementById("template-select");
   var templateSelectGroup = document.getElementById("template-select-group");
+  var templateRefreshBtn = document.getElementById("template-refresh-btn");
   var promptGroup = document.getElementById("prompt-group");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
   var friendlyFrequency = document.getElementById("friendly-frequency");
@@ -358,6 +359,27 @@
     refreshBtn.addEventListener("click", function () {
       vscode.postMessage({ type: "refreshAgents" });
       vscode.postMessage({ type: "refreshPrompts" });
+    });
+  }
+
+  // Template refresh button (Create tab)
+  if (templateRefreshBtn) {
+    templateRefreshBtn.addEventListener("click", function () {
+      vscode.postMessage({ type: "refreshPrompts" });
+
+      // If a template is currently selected, re-load its content as well.
+      var selectedPath = templateSelect ? templateSelect.value : "";
+      var sourceEl = document.querySelector(
+        'input[name="prompt-source"]:checked',
+      );
+      var source = sourceEl ? sourceEl.value : "inline";
+      if (selectedPath && (source === "local" || source === "global")) {
+        vscode.postMessage({
+          type: "loadPromptTemplate",
+          path: selectedPath,
+          source: source,
+        });
+      }
     });
   }
 
@@ -1181,7 +1203,7 @@
     }
 
     // Send delete request to extension (confirmation will be handled there)
-    vscode.postMessage({ type: "deleteTask", taskId: id, taskName: task.name });
+    vscode.postMessage({ type: "deleteTask", taskId: id });
   };
 
   // Handle messages from extension

@@ -249,19 +249,6 @@ export class ScheduleManager {
   }
 
   /**
-   * Increment daily execution count
-   */
-  private async incrementDailyExecCount(): Promise<void> {
-    const today = getLocalDateKey();
-    if (this.dailyExecDate !== today) {
-      this.dailyExecCount = 0;
-      this.dailyExecDate = today;
-    }
-    this.dailyExecCount++;
-    await this.persistDailyExecCount();
-  }
-
-  /**
    * Bulk update task prompts (used by template sync) and save once.
    */
   async updateTaskPrompts(
@@ -513,8 +500,12 @@ export class ScheduleManager {
    */
   private async saveTasks(options?: { bumpRevision?: boolean }): Promise<void> {
     // Serialize saves to avoid last-write-wins races across concurrent callers.
-    this.saveQueue = this.saveQueue.then(() => this.saveTasksInternal(options));
-    return this.saveQueue;
+    const op = this.saveQueue.then(() => this.saveTasksInternal(options));
+    // Recover the chain so that a failed save does not block all subsequent saves.
+    this.saveQueue = op.catch((error) => {
+      logError("[CopilotScheduler] Save failed (chain recovered):", error);
+    });
+    return op;
   }
 
   private async saveTasksInternal(options?: {
@@ -1176,7 +1167,8 @@ export class ScheduleManager {
       await this.saveTasks();
 
       return true;
-    } catch {
+    } catch (error) {
+      logError("[CopilotScheduler] runTaskNow failed:", error);
       return false;
     }
   }

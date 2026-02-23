@@ -24,6 +24,7 @@ export class ScopeGroupItem extends vscode.TreeItem {
     super(label, vscode.TreeItemCollapsibleState.Expanded);
 
     this.scope = scope;
+    this.id = `scope-${scope}`;
     this.contextValue = "scopeGroup";
     this.description = `(${taskCount})`;
 

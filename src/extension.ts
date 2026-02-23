@@ -15,6 +15,7 @@ import { logError } from "./logger";
 import {
   resolveGlobalPromptPath,
   resolveLocalPromptPath,
+  resolveGlobalPromptsRoot,
 } from "./promptResolver";
 import type {
   ScheduledTask,
@@ -37,7 +38,7 @@ function getNotificationMode(): NotificationMode {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   const mode = config.get<NotificationMode>("notificationMode", "sound");
   // Legacy: if notifications were disabled, honor that as silentStatus
-  if (shouldNotify() === false) {
+  if (config.get<boolean>("showNotifications", true) === false) {
     return "silentStatus";
   }
   return mode || "sound";
@@ -124,7 +125,7 @@ export function notifyInfo(message: string, timeoutMs = 4000): void {
     case "silentToast":
       void vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: message },
-        async () => {},
+        () => new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
       );
       break;
     default:
@@ -351,7 +352,7 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
 
   if (filePath && fs.existsSync(filePath)) {
     try {
-      return fs.readFileSync(filePath, "utf-8");
+      return await fs.promises.readFile(filePath, "utf-8");
     } catch {
       // Fall back to inline prompt
     }
@@ -368,15 +369,7 @@ function getWorkspaceFolderPaths(): string[] {
 
 function getGlobalPromptsRoot(): string | undefined {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
-  const customPath = config.get<string>("globalPromptsPath", "");
-
-  const defaultRoot = process.env.APPDATA
-    ? path.join(process.env.APPDATA, "Code", "User", "prompts")
-    : "";
-
-  const globalRoot = customPath || defaultRoot;
-  if (!globalRoot) return undefined;
-  return fs.existsSync(globalRoot) ? globalRoot : undefined;
+  return resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""));
 }
 
 /**
@@ -424,6 +417,8 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
         const ok = await scheduleManager.runTaskNow(action.taskId);
         if (!ok) {
+          // Fallback: runTaskNow returns false when the execute callback is not set
+          // (e.g., scheduler was stopped). Execute directly as a best-effort path.
           await executeTask(runTask);
         }
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());

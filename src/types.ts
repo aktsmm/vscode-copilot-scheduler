@@ -119,26 +119,6 @@ export interface CreateTaskInput {
 }
 
 /**
- * Result of task execution
- */
-export interface TaskExecutionResult {
-  /** Task ID */
-  taskId: string;
-
-  /** Whether execution was successful */
-  success: boolean;
-
-  /** Execution timestamp */
-  executedAt: Date;
-
-  /** Error message if execution failed */
-  error?: string;
-
-  /** Execution duration in milliseconds */
-  duration?: number;
-}
-
-/**
  * Agent definition
  */
 export interface AgentInfo {
@@ -239,35 +219,6 @@ export interface ExecuteOptions {
 
   /** Model to use */
   model?: string;
-}
-
-/**
- * Extension configuration
- */
-export interface ExtensionConfig {
-  /** Whether scheduling is enabled */
-  enabled: boolean;
-
-  /** Whether to show notifications */
-  showNotifications: boolean;
-
-  /** Log level */
-  logLevel: LogLevel;
-
-  /** Language setting */
-  language: "auto" | "en" | "ja";
-
-  /** Timezone for scheduling */
-  timezone: string;
-
-  /** Chat session behavior */
-  chatSession: ChatSessionBehavior;
-
-  /** Default scope for new tasks */
-  defaultScope: TaskScope;
-
-  /** Custom global prompts path */
-  globalPromptsPath: string;
 }
 
 /**

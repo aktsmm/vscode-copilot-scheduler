@@ -454,63 +454,6 @@ export function getCronPresets(): CronPreset[] {
 }
 
 /**
- * Get agent display info
- */
-export function getAgentDisplayInfo(agentId: string): {
-  name: string;
-  description: string;
-} {
-  const agentMap: Record<string, () => { name: string; description: string }> =
-    {
-      "": () => ({
-        name: t("None", "なし"),
-        description: t("Use default behavior", "デフォルトの動作を使用"),
-      }),
-      agent: () => ({
-        name: "Agent",
-        description: t(
-          "Agent mode with tool use",
-          "ツール利用のエージェントモード",
-        ),
-      }),
-      ask: () => ({
-        name: "Ask",
-        description: t("Ask questions about code", "コードに関する質問"),
-      }),
-      edit: () => ({
-        name: "Edit",
-        description: t("AI code editing", "AIでコード編集"),
-      }),
-      "@workspace": () => ({
-        name: "@workspace",
-        description: t("Search codebase", "コードベース検索"),
-      }),
-      "@terminal": () => ({
-        name: "@terminal",
-        description: t("Terminal operations", "ターミナル操作"),
-      }),
-      "@vscode": () => ({
-        name: "@vscode",
-        description: t(
-          "VS Code settings and commands",
-          "VS Code設定とコマンド",
-        ),
-      }),
-    };
-
-  const getInfo = agentMap[agentId];
-  if (getInfo) {
-    return getInfo();
-  }
-
-  // For custom agents, return the ID as name
-  return {
-    name: agentId,
-    description: t("Custom agent", "カスタムエージェント"),
-  };
-}
-
-/**
  * Format cron expression for display
  */
 export function formatCronForDisplay(expression: string): string {
