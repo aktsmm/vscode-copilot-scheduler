@@ -163,6 +163,12 @@ export const messages = {
   labelThisWorkspaceShort: () => t("This workspace", "このWS"),
   labelOtherWorkspaceShort: () => t("Other workspace", "他のWS"),
 
+  cannotDeleteOtherWorkspaceTask: (name: string) =>
+    t(
+      `Task "${name}" belongs to a different workspace. Please delete it from that workspace.`,
+      `タスク「${name}」は別のワークスペース用です。元のワークスペースで削除してください。`,
+    ),
+
   // ==================== Clipboard ====================
   promptCopied: () =>
     t(
@@ -243,6 +249,9 @@ export const messages = {
   // ==================== TreeView ====================
   treeGroupGlobal: () => t("🌐 Global", "🌐 グローバル"),
   treeGroupWorkspace: () => t("📁 Workspace", "📁 ワークスペース"),
+  treeGroupThisWorkspace: () => t("🏠 This workspace", "🏠 このワークスペース"),
+  treeGroupOtherWorkspace: () =>
+    t("📎 Other workspaces", "📎 他のワークスペース"),
   treeNoTasks: () => t("No tasks", "タスクなし"),
 
   // ==================== Version Info ====================

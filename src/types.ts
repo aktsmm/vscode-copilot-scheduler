@@ -267,4 +267,6 @@ export type TreeContextValue =
   | "enabledTask"
   | "disabledTask"
   | "enabledWorkspaceTask"
-  | "disabledWorkspaceTask";
+  | "disabledWorkspaceTask"
+  | "enabledOtherWorkspaceTask"
+  | "disabledOtherWorkspaceTask";

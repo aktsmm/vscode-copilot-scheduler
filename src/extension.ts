@@ -456,6 +456,16 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           break;
         }
 
+        if (
+          deleteTask.scope === "workspace" &&
+          !scheduleManager.shouldTaskRunInCurrentWorkspace(deleteTask)
+        ) {
+          const msg = messages.cannotDeleteOtherWorkspaceTask(deleteTask.name);
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
+          break;
+        }
+
         // Show confirmation dialog
         const confirm = await vscode.window.showWarningMessage(
           messages.confirmDelete(deleteTask.name),
@@ -698,7 +708,12 @@ function registerDeleteTaskCommand(): vscode.Disposable {
         task = item.task;
       } else {
         // Show quick pick to select task
-        const tasks = scheduleManager.getAllTasks();
+        const tasks = scheduleManager
+          .getAllTasks()
+          .filter(
+            (t) =>
+              t.scope === "global" || scheduleManager.shouldTaskRunInCurrentWorkspace(t),
+          );
         if (tasks.length === 0) {
           notifyInfo(messages.noTasksFound());
           return;
@@ -715,6 +730,14 @@ function registerDeleteTaskCommand(): vscode.Disposable {
 
         if (!selected) return;
         task = selected.task;
+      }
+
+      if (
+        task.scope === "workspace" &&
+        !scheduleManager.shouldTaskRunInCurrentWorkspace(task)
+      ) {
+        notifyError(messages.cannotDeleteOtherWorkspaceTask(task.name));
+        return;
       }
 
       // Confirm deletion

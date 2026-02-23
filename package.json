@@ -279,12 +279,12 @@
       "view/item/context": [
         {
           "command": "copilotScheduler.disableTask",
-          "when": "view == copilotSchedulerTasks && (viewItem == enabledTask || viewItem == enabledWorkspaceTask)",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledTask || viewItem == enabledWorkspaceTask || viewItem == enabledOtherWorkspaceTask)",
           "group": "inline@1"
         },
         {
           "command": "copilotScheduler.enableTask",
-          "when": "view == copilotSchedulerTasks && (viewItem == disabledTask || viewItem == disabledWorkspaceTask)",
+          "when": "view == copilotSchedulerTasks && (viewItem == disabledTask || viewItem == disabledWorkspaceTask || viewItem == disabledOtherWorkspaceTask)",
           "group": "inline@1"
         },
         {
@@ -304,12 +304,12 @@
         },
         {
           "command": "copilotScheduler.moveToCurrentWorkspace",
-          "when": "view == copilotSchedulerTasks && (viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledOtherWorkspaceTask || viewItem == disabledOtherWorkspaceTask)",
           "group": "inline@4.5"
         },
         {
           "command": "copilotScheduler.deleteTask",
-          "when": "view == copilotSchedulerTasks && viewItem =~ /Task$/",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledTask || viewItem == disabledTask || viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
           "group": "inline@5"
         },
         {
@@ -334,12 +334,12 @@
         },
         {
           "command": "copilotScheduler.moveToCurrentWorkspace",
-          "when": "view == copilotSchedulerTasks && (viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledOtherWorkspaceTask || viewItem == disabledOtherWorkspaceTask)",
           "group": "2_edit@3"
         },
         {
           "command": "copilotScheduler.deleteTask",
-          "when": "view == copilotSchedulerTasks && viewItem =~ /Task$/",
+          "when": "view == copilotSchedulerTasks && (viewItem == enabledTask || viewItem == disabledTask || viewItem == enabledWorkspaceTask || viewItem == disabledWorkspaceTask)",
           "group": "3_delete@1"
         }
       ]

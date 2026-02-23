@@ -933,6 +933,11 @@ export class SchedulerWebview {
       border-radius: 6px;
       background-color: var(--vscode-editor-background);
     }
+
+    .task-card.other-workspace {
+      border-left-width: 4px;
+      border-left-color: var(--vscode-inputValidation-warningBorder);
+    }
     
     .task-card.disabled {
       opacity: 0.6;

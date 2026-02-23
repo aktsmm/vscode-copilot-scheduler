@@ -9,6 +9,8 @@ import type { ScheduledTask, TaskScope, TreeContextValue } from "./types";
 import { ScheduleManager } from "./scheduleManager";
 import { messages, formatCronForDisplay, isJapanese } from "./i18n";
 
+type WorkspaceTaskGroup = "this" | "other";
+
 /**
  * TreeView node for scope groups (Global / Workspace)
  */
@@ -36,6 +38,29 @@ export class ScopeGroupItem extends vscode.TreeItem {
 }
 
 /**
+ * TreeView node for workspace task sub-groups (This workspace / Other workspaces)
+ */
+export class WorkspaceGroupItem extends vscode.TreeItem {
+  public readonly group: WorkspaceTaskGroup;
+
+  constructor(group: WorkspaceTaskGroup, taskCount: number) {
+    const label =
+      group === "this"
+        ? messages.treeGroupThisWorkspace()
+        : messages.treeGroupOtherWorkspace();
+
+    super(label, vscode.TreeItemCollapsibleState.Expanded);
+
+    this.group = group;
+    this.id = `workspace-group-${group}`;
+    this.contextValue = "workspaceGroup";
+    this.description = `(${taskCount})`;
+
+    this.iconPath = new vscode.ThemeIcon(group === "this" ? "home" : "link");
+  }
+}
+
+/**
  * TreeView node for individual tasks
  */
 export class ScheduledTaskItem extends vscode.TreeItem {
@@ -48,14 +73,22 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     this.task = task;
     this.inThisWorkspace = inThisWorkspace;
 
-    // Set context value based on enabled state
+    // Set context value based on enabled state and workspace applicability
+    let contextValue: TreeContextValue;
     if (task.scope === "workspace") {
-      this.contextValue = task.enabled
-        ? "enabledWorkspaceTask"
-        : "disabledWorkspaceTask";
+      if (inThisWorkspace) {
+        contextValue = task.enabled
+          ? "enabledWorkspaceTask"
+          : "disabledWorkspaceTask";
+      } else {
+        contextValue = task.enabled
+          ? "enabledOtherWorkspaceTask"
+          : "disabledOtherWorkspaceTask";
+      }
     } else {
-      this.contextValue = task.enabled ? "enabledTask" : "disabledTask";
+      contextValue = task.enabled ? "enabledTask" : "disabledTask";
     }
+    this.contextValue = contextValue;
 
     // Set description with cron and next run
     const cronDisplay = formatCronForDisplay(task.cronExpression);
@@ -66,15 +99,9 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       this.description = cronDisplay;
     }
 
-    if (task.scope === "workspace") {
-      const wsName = task.workspacePath
-        ? path.basename(task.workspacePath)
-        : "";
-      const wsHint = inThisWorkspace
-        ? messages.labelThisWorkspaceShort()
-        : messages.labelOtherWorkspaceShort();
-      const wsPart = wsName ? `${wsName} (${wsHint})` : `(${wsHint})`;
-      this.description = `${this.description} • ${wsPart}`;
+    if (task.scope === "workspace" && !inThisWorkspace) {
+      const wsName = task.workspacePath ? path.basename(task.workspacePath) : "";
+      this.description = `${this.description} • ${wsName || messages.labelOtherWorkspaceShort()}`;
     }
 
     // Set tooltip with detailed info
@@ -200,16 +227,20 @@ export class ScheduledTaskItem extends vscode.TreeItem {
  */
 export type TreeNode = ScopeGroupItem | ScheduledTaskItem;
 
+export type WorkspaceTreeNode = ScopeGroupItem | WorkspaceGroupItem | ScheduledTaskItem;
+
 /**
  * TreeDataProvider for scheduled tasks
  */
-export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNode> {
+export class ScheduledTaskTreeProvider
+  implements vscode.TreeDataProvider<WorkspaceTreeNode>
+{
   private _onDidChangeTreeData: vscode.EventEmitter<
-    TreeNode | undefined | null | void
-  > = new vscode.EventEmitter<TreeNode | undefined | null | void>();
+    WorkspaceTreeNode | undefined | null | void
+  > = new vscode.EventEmitter<WorkspaceTreeNode | undefined | null | void>();
 
   readonly onDidChangeTreeData: vscode.Event<
-    TreeNode | undefined | null | void
+    WorkspaceTreeNode | undefined | null | void
   > = this._onDidChangeTreeData.event;
 
   private scheduleManager: ScheduleManager;
@@ -233,22 +264,29 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
   /**
    * Get tree item for display
    */
-  getTreeItem(element: TreeNode): vscode.TreeItem {
+  getTreeItem(element: WorkspaceTreeNode): vscode.TreeItem {
     return element;
   }
 
   /**
    * Get children for tree node
    */
-  getChildren(element?: TreeNode): Thenable<TreeNode[]> {
+  getChildren(element?: WorkspaceTreeNode): Thenable<WorkspaceTreeNode[]> {
     if (!element) {
       // Root level: return scope groups
       return this.getRootChildren();
     }
 
     if (element instanceof ScopeGroupItem) {
-      // Scope group: return tasks in that scope
+      // Scope group: return tasks in that scope (or workspace sub-groups)
+      if (element.scope === "workspace") {
+        return this.getWorkspaceGroups();
+      }
       return this.getTasksForScope(element.scope);
+    }
+
+    if (element instanceof WorkspaceGroupItem) {
+      return this.getWorkspaceTasksForGroup(element.group);
     }
 
     // Task items have no children
@@ -258,13 +296,13 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
   /**
    * Get root level children (scope groups)
    */
-  private async getRootChildren(): Promise<TreeNode[]> {
+  private async getRootChildren(): Promise<WorkspaceTreeNode[]> {
     const allTasks = this.scheduleManager.getAllTasks();
 
     const globalTasks = allTasks.filter((t) => t.scope === "global");
     const workspaceTasks = allTasks.filter((t) => t.scope === "workspace");
 
-    const groups: TreeNode[] = [];
+    const groups: WorkspaceTreeNode[] = [];
 
     // Only show groups that have tasks or if there are no tasks at all
     if (globalTasks.length > 0 || allTasks.length === 0) {
@@ -281,7 +319,7 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
   /**
    * Get tasks for a specific scope
    */
-  private async getTasksForScope(scope: TaskScope): Promise<TreeNode[]> {
+  private async getTasksForScope(scope: TaskScope): Promise<WorkspaceTreeNode[]> {
     const tasks = this.scheduleManager.getTasksByScope(scope);
 
     // Sort by name
@@ -296,16 +334,78 @@ export class ScheduledTaskTreeProvider implements vscode.TreeDataProvider<TreeNo
     );
   }
 
+  private partitionWorkspaceTasks(): {
+    thisWorkspace: ScheduledTask[];
+    otherWorkspace: ScheduledTask[];
+  } {
+    const tasks = this.scheduleManager.getTasksByScope("workspace");
+    const thisWorkspace: ScheduledTask[] = [];
+    const otherWorkspace: ScheduledTask[] = [];
+
+    for (const task of tasks) {
+      if (this.scheduleManager.shouldTaskRunInCurrentWorkspace(task)) {
+        thisWorkspace.push(task);
+      } else {
+        otherWorkspace.push(task);
+      }
+    }
+
+    return { thisWorkspace, otherWorkspace };
+  }
+
+  private async getWorkspaceGroups(): Promise<WorkspaceTreeNode[]> {
+    const { thisWorkspace, otherWorkspace } = this.partitionWorkspaceTasks();
+
+    const groups: WorkspaceTreeNode[] = [];
+    if (thisWorkspace.length > 0) {
+      groups.push(new WorkspaceGroupItem("this", thisWorkspace.length));
+    }
+    if (otherWorkspace.length > 0) {
+      groups.push(new WorkspaceGroupItem("other", otherWorkspace.length));
+    }
+
+    return groups;
+  }
+
+  private async getWorkspaceTasksForGroup(
+    group: WorkspaceTaskGroup,
+  ): Promise<WorkspaceTreeNode[]> {
+    const { thisWorkspace, otherWorkspace } = this.partitionWorkspaceTasks();
+    const tasks = group === "this" ? thisWorkspace : otherWorkspace;
+
+    tasks.sort((a, b) => a.name.localeCompare(b.name));
+
+    return tasks.map((task) => new ScheduledTaskItem(task, group === "this"));
+  }
+
   /**
    * Get parent of a tree node (required for reveal)
    */
-  getParent(element: TreeNode): vscode.ProviderResult<TreeNode> {
+  getParent(element: WorkspaceTreeNode): vscode.ProviderResult<WorkspaceTreeNode> {
     if (element instanceof ScheduledTaskItem) {
-      // Return the scope group for this task
       const task = element.task;
+
+      if (task.scope === "workspace") {
+        const { thisWorkspace, otherWorkspace } = this.partitionWorkspaceTasks();
+        const inThisWorkspace = this.scheduleManager.shouldTaskRunInCurrentWorkspace(task);
+        return new WorkspaceGroupItem(
+          inThisWorkspace ? "this" : "other",
+          inThisWorkspace ? thisWorkspace.length : otherWorkspace.length,
+        );
+      }
+
+      // Global: return the scope group for this task
       const allTasks = this.scheduleManager.getAllTasks();
       const tasksInScope = allTasks.filter((t) => t.scope === task.scope);
       return new ScopeGroupItem(task.scope, tasksInScope.length);
+    }
+
+    if (element instanceof WorkspaceGroupItem) {
+      const { thisWorkspace, otherWorkspace } = this.partitionWorkspaceTasks();
+      return new ScopeGroupItem(
+        "workspace",
+        thisWorkspace.length + otherWorkspace.length,
+      );
     }
 
     // Scope groups have no parent

@@ -564,16 +564,21 @@
               '">📌</button>';
           }
 
-          actionsHtml +=
-            '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            strings.actionDelete +
-            '">🗑️</button>';
+          if (scopeValue === "global" || inThisWorkspace) {
+            actionsHtml +=
+              '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
+              taskIdEscaped +
+              '" title="' +
+              strings.actionDelete +
+              '">🗑️</button>';
+          }
 
           return (
             '<div class="task-card ' +
             (enabled ? "" : "disabled") +
+            (scopeValue === "workspace" && !inThisWorkspace
+              ? " other-workspace"
+              : "") +
             '" data-id="' +
             taskIdEscaped +
             '">' +
