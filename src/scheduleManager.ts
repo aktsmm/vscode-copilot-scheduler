@@ -462,6 +462,29 @@ export class ScheduleManager {
         task.jitterSeconds = 0;
       }
 
+      // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),
+      // disable it to prevent runaway execution loops.
+      try {
+        this.validateCronExpression(task.cronExpression);
+      } catch {
+        if (task.enabled) {
+          task.enabled = false;
+          needsSave = true;
+        }
+        if (task.nextRun !== undefined) {
+          task.nextRun = undefined;
+          needsSave = true;
+        }
+        logError(
+          "[CopilotScheduler] Invalid cron expression found in stored task; disabling:",
+          {
+            taskId: task.id,
+            taskName: task.name,
+            cronExpression: task.cronExpression,
+          },
+        );
+      }
+
       // Keep persisted nextRun to allow catch-up execution after reload.
       // Only compute nextRun when it's missing or invalid.
       if (task.enabled) {
@@ -593,15 +616,11 @@ export class ScheduleManager {
     cronExpression: string,
     baseTime?: Date,
   ): Date | undefined {
-    try {
-      const options: {
-        currentDate: Date;
-        tz?: string;
-      } = {
-        currentDate: baseTime || new Date(),
-      };
+    const currentDate = baseTime || new Date();
+    const tz = this.getTimeZone();
 
-      const tz = this.getTimeZone();
+    try {
+      const options: { currentDate: Date; tz?: string } = { currentDate };
       if (tz) {
         options.tz = tz;
       }
@@ -609,6 +628,15 @@ export class ScheduleManager {
       const interval = parseExpression(cronExpression, options);
       return interval.next().toDate();
     } catch {
+      // If the configured timezone is invalid, fall back to local time.
+      if (tz) {
+        try {
+          const interval = parseExpression(cronExpression, { currentDate });
+          return interval.next().toDate();
+        } catch {
+          return undefined;
+        }
+      }
       return undefined;
     }
   }
@@ -658,20 +686,25 @@ export class ScheduleManager {
     }
 
     try {
-      const options: {
-        currentDate: Date;
-        tz?: string;
-      } = {
-        currentDate: new Date(),
-      };
-
+      const currentDate = new Date();
       const tz = this.getTimeZone();
-      if (tz) {
-        options.tz = tz;
-      }
 
-      parseExpression(expression, options);
-      return true;
+      // First, validate with timezone if configured.
+      try {
+        const options: { currentDate: Date; tz?: string } = { currentDate };
+        if (tz) {
+          options.tz = tz;
+        }
+        parseExpression(expression, options);
+        return true;
+      } catch {
+        // If timezone is invalid, retry without tz.
+        if (tz) {
+          parseExpression(expression, { currentDate });
+          return true;
+        }
+        throw new Error(messages.invalidCronExpression());
+      }
     } catch {
       throw new Error(messages.invalidCronExpression());
     }
@@ -1094,7 +1127,7 @@ export class ScheduleManager {
     const rawMaxDaily = config.get<number>("maxDailyExecutions", 24);
     const maxDailyLimit =
       rawMaxDaily === 0 ? 0 : Math.min(Math.max(rawMaxDaily, 1), 100);
-    const defaultJitterSeconds = config.get<number>("jitterSeconds", 0);
+    const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
 
     let needsSave = false;
     let executedCount = 0;

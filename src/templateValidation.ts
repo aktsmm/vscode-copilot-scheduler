@@ -52,8 +52,9 @@ export function validateTemplateLoadRequest(
 
   // Only allow paths from our cached template list to prevent arbitrary file reads
   const resolvedTarget = path.resolve(templatePath);
+  const normalizedTarget = normalizeForCompare(resolvedTarget);
   const cached = input.cachedTemplates.find(
-    (t) => t.source === source && path.resolve(t.path) === resolvedTarget,
+    (t) => t.source === source && normalizeForCompare(t.path) === normalizedTarget,
   );
   if (!cached) {
     return { ok: false, reason: "notInCache" };
@@ -73,7 +74,7 @@ export function validateTemplateLoadRequest(
     return { ok: false, reason: "noAllowedRoots" };
   }
 
-  if (!baseDirs.some((d) => isInside(d, templatePath))) {
+  if (!baseDirs.some((d) => isInside(d, resolvedTarget))) {
     return { ok: false, reason: "notAllowed" };
   }
 

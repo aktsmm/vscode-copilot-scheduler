@@ -569,7 +569,9 @@ export class SchedulerWebview {
    */
   private static getGlobalPromptsPath(): string | undefined {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    return resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""));
+    return resolveGlobalPromptsRoot(
+      config.get<string>("globalPromptsPath", ""),
+    );
   }
 
   /**
@@ -650,6 +652,7 @@ export class SchedulerWebview {
     const presets = getCronPresets();
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
     const initialTasks = Array.isArray(tasks) ? tasks : [];
     const initialAgents = Array.isArray(agents) ? agents : [];
     const initialModels = Array.isArray(models) ? models : [];
@@ -661,6 +664,7 @@ export class SchedulerWebview {
     const strings = {
       title: messages.webviewTitle(),
       tabCreate: messages.tabCreate(),
+      tabEdit: messages.tabEdit(),
       tabList: messages.tabList(),
       labelTaskName: messages.labelTaskName(),
       labelPromptType: messages.labelPromptType(),
@@ -697,6 +701,7 @@ export class SchedulerWebview {
       cronExpressionRequired: messages.cronExpressionRequired(),
       actionCreate: messages.actionCreate(),
       actionSave: messages.actionSave(),
+      actionNewTask: messages.actionNewTask(),
       actionTestRun: messages.actionTestRun(),
       actionRun: messages.actionRun(),
       actionEdit: messages.actionEdit(),
@@ -764,6 +769,7 @@ export class SchedulerWebview {
       workspacePaths: (vscode.workspace.workspaceFolders || [])
         .map((f) => f.uri.fsPath)
         .filter(Boolean),
+      defaultJitterSeconds,
       strings,
     };
 
@@ -779,10 +785,6 @@ export class SchedulerWebview {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource}; font-src ${webview.cspSource};">
   <title>${escapeHtmlAttr(strings.title)}</title>
   <style>
-    :root {
-      --vscode-font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-    }
-    
     * {
       box-sizing: border-box;
     }
@@ -1142,7 +1144,7 @@ export class SchedulerWebview {
         <label for="template-select">${strings.labelPrompt}</label>
         <div class="template-row">
           <select id="template-select">
-            <option value="">-- Select Template --</option>
+            <option value="">${escapeHtmlAttr(strings.placeholderSelectTemplate)}</option>
           </select>
           <button type="button" class="btn-secondary" id="template-refresh-btn">${strings.actionRefresh}</button>
         </div>
@@ -1220,14 +1222,14 @@ export class SchedulerWebview {
         <div class="form-group">
           <label for="agent-select">${strings.labelAgent}</label>
           <select id="agent-select">
-            ${initialAgents.length > 0 ? '<option value="">-- Select Agent --</option>' + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtmlAttr(a.name || "")}</option>`).join("") : '<option value="">Loading...</option>'}
+            ${initialAgents.length > 0 ? `<option value="">${escapeHtmlAttr(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtmlAttr(a.name || "")}</option>`).join("") : `<option value="">${escapeHtmlAttr(strings.placeholderNoAgents)}</option>`}
           </select>
         </div>
         
         <div class="form-group">
           <label for="model-select">${strings.labelModel}</label>
           <select id="model-select">
-            ${initialModels.length > 0 ? '<option value="">-- Select Model --</option>' + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtmlAttr(m.name || "")}</option>`).join("") : '<option value="">Loading...</option>'}
+            ${initialModels.length > 0 ? `<option value="">${escapeHtmlAttr(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtmlAttr(m.name || "")}</option>`).join("") : `<option value="">${escapeHtmlAttr(strings.placeholderNoModels)}</option>`}
           </select>
           <p class="note">${strings.labelModelNote}</p>
         </div>
@@ -1256,12 +1258,13 @@ export class SchedulerWebview {
 
       <div class="form-group">
         <label for="jitter-seconds">${strings.labelJitterSeconds}</label>
-        <input type="number" id="jitter-seconds" min="0" max="1800" value="0">
+        <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
         <p class="note" style="margin-top:4px;">0 ${isJa ? "で無効。値を入れると0〜その秒数でランダム遅延します。" : "disables jitter. Adds a random delay between 0 and the specified seconds before execution."}</p>
       </div>
       
       <div class="button-group">
         <button type="submit" class="btn-primary" id="submit-btn">${strings.actionCreate}</button>
+        <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${strings.actionNewTask}</button>
         <button type="button" class="btn-secondary" id="test-btn">${strings.actionTestRun}</button>
       </div>
     </form>

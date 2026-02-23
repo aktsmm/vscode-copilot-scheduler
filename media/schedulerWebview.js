@@ -68,6 +68,11 @@
   var pendingSubmit = false;
 
   var strings = initialData.strings || {};
+  var defaultJitterSeconds =
+    typeof initialData.defaultJitterSeconds === "number" &&
+    isFinite(initialData.defaultJitterSeconds)
+      ? initialData.defaultJitterSeconds
+      : 0;
   var lastRenderedTasksHtml = "";
 
   // DOM elements - with null safety
@@ -95,6 +100,33 @@
   var friendlyGenerate = document.getElementById("friendly-generate");
   var openGuruBtn = document.getElementById("open-guru-btn");
   var cronPreviewText = document.getElementById("cron-preview-text");
+  var newTaskBtn = document.getElementById("new-task-btn");
+
+  function getCreateTabButton() {
+    return document.querySelector('.tab-button[data-tab="create"]');
+  }
+
+  function setCreateTabLabel(isEditing) {
+    var btn = getCreateTabButton();
+    if (!btn) return;
+    var label = isEditing ? strings.tabEdit || strings.tabCreate : strings.tabCreate;
+    if (label) btn.textContent = label;
+  }
+
+  function setEditingMode(taskId) {
+    editingTaskId = taskId || null;
+    if (editTaskIdInput) editTaskIdInput.value = editingTaskId || "";
+    setCreateTabLabel(!!editingTaskId);
+
+    if (submitBtn) {
+      submitBtn.textContent = editingTaskId
+        ? strings.actionSave || "Update"
+        : strings.actionCreate || "Create";
+    }
+    if (newTaskBtn) {
+      newTaskBtn.style.display = editingTaskId ? "inline-flex" : "none";
+    }
+  }
 
   // Tab switching function
   function switchTab(tabName) {
@@ -934,16 +966,14 @@
 
   function resetForm() {
     if (taskForm) taskForm.reset();
-    editingTaskId = null;
+    setEditingMode(null);
     pendingAgentValue = "";
     pendingModelValue = "";
     pendingTemplatePath = "";
     editingTaskEnabled = true;
-    if (editTaskIdInput) editTaskIdInput.value = "";
-    if (submitBtn) submitBtn.textContent = strings.actionCreate;
     applyPromptSource("inline");
     if (friendlyFrequency) friendlyFrequency.value = "";
-    if (jitterSecondsInput) jitterSecondsInput.value = "0";
+    if (jitterSecondsInput) jitterSecondsInput.value = String(defaultJitterSeconds);
     updateFriendlyVisibility();
     updateCronPreview();
   }
@@ -1098,7 +1128,7 @@
     });
     if (!task) return;
 
-    editingTaskId = id;
+    setEditingMode(id);
     var taskNameEl = document.getElementById("task-name");
     var promptTextEl = document.getElementById("prompt-text");
     if (taskNameEl) taskNameEl.value = task.name || "";
@@ -1165,18 +1195,31 @@
     }
 
     if (jitterSecondsInput) {
-      jitterSecondsInput.value = String(task.jitterSeconds ?? 0);
+      jitterSecondsInput.value = String(task.jitterSeconds ?? defaultJitterSeconds);
     }
 
     // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
     var runFirstEl = document.getElementById("run-first");
     if (runFirstEl) runFirstEl.checked = false;
 
-    if (submitBtn) submitBtn.textContent = strings.actionSave;
-
-    // Switch to create tab
+    // Switch to edit tab (same form)
     switchTab("create");
   };
+
+  if (newTaskBtn) {
+    newTaskBtn.addEventListener("click", function () {
+      resetForm();
+      switchTab("create");
+      try {
+        var taskNameEl = document.getElementById("task-name");
+        if (taskNameEl && typeof taskNameEl.focus === "function") {
+          taskNameEl.focus();
+        }
+      } catch (e) {
+        // ignore
+      }
+    });
+  }
 
   window.copyPrompt = function (id) {
     var task = tasks.find(function (t) {

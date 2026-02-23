@@ -352,7 +352,11 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
 
   if (filePath && fs.existsSync(filePath)) {
     try {
-      return await fs.promises.readFile(filePath, "utf-8");
+      const content = await fs.promises.readFile(filePath, "utf-8");
+      // If the template file is empty, fall back to the task's stored prompt.
+      if (content.trim()) {
+        return content;
+      }
     } catch {
       // Fall back to inline prompt
     }

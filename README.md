@@ -27,18 +27,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 📊 **Sidebar TreeView** - Manage all your scheduled tasks from the sidebar
 
 🖥️ **Webview GUI** - Easy-to-use graphical interface for creating and editing tasks
-| Setting | Default | Description |
-| -------------------------------------- | ------- | ---------------------------------------------------------------- |
-| `copilotScheduler.enabled` | `true` | Enable/disable scheduled execution |
-| `copilotScheduler.showNotifications` | `true` | Show notifications when tasks are executed |
-| `copilotScheduler.logLevel` | `info` | Log level (none/error/info/debug) |
-| `copilotScheduler.language` | `auto` | UI language (auto/en/ja) |
-| `copilotScheduler.timezone` | `""` | Timezone for scheduling |
-| `copilotScheduler.chatSession` | `new` | Chat session (new/continue) |
-| `copilotScheduler.defaultScope` | `workspace` | Default scope |
-| `copilotScheduler.jitterSeconds` | `600` | Max random delay (seconds) before execution (60–1800). Each task can override it. |
-| `copilotScheduler.maxDailyExecutions` | `24` | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting. |
-| `copilotScheduler.minimumIntervalWarning` | `true` | Warn when cron interval is shorter than 30 minutes |
+
 
 ## ⏰ Cron Expression Examples
 
@@ -66,15 +55,22 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## ⚙️ Settings
 
-| Setting                             | Default     | Description                          |
-| ----------------------------------- | ----------- | ------------------------------------ |
-| `copilotSchedule.enabled`           | `true`      | Enable/disable scheduled execution   |
-| `copilotSchedule.showNotifications` | `true`      | Show notifications on task execution |
-| `copilotSchedule.logLevel`          | `info`      | Log level (none/error/info/debug)    |
-| `copilotSchedule.language`          | `auto`      | UI language (auto/en/ja)             |
-| `copilotSchedule.timezone`          | `""`        | Timezone for scheduling              |
-| `copilotSchedule.chatSession`       | `new`       | Chat session behavior (new/continue) |
-| `copilotSchedule.defaultScope`      | `workspace` | Default scope (global/workspace)     |
+| Setting | Default | Description |
+| -------------------------------------- | ------- | ---------------------------------------------------------------- |
+| `copilotScheduler.enabled` | `true` | Enable/disable scheduled execution |
+| `copilotScheduler.showNotifications` | `true` | Show notifications when tasks are executed |
+| `copilotScheduler.notificationMode` | `sound` | Notification mode (sound/silentToast/silentStatus) |
+| `copilotScheduler.logLevel` | `info` | Log level (none/error/info/debug) |
+| `copilotScheduler.language` | `auto` | UI language (auto/en/ja) |
+| `copilotScheduler.timezone` | `""` | Timezone for scheduling |
+| `copilotScheduler.chatSession` | `new` | Chat session (new/continue) |
+| `copilotScheduler.defaultScope` | `workspace` | Default scope |
+| `copilotScheduler.globalPromptsPath` | `""` | Custom global prompts folder path (default: VS Code user prompts folder) |
+| `copilotScheduler.globalAgentsPath` | `""` | Custom global agents folder path |
+| `copilotScheduler.jitterSeconds` | `600` | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it. |
+| `copilotScheduler.maxDailyExecutions` | `24` | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting. |
+| `copilotScheduler.minimumIntervalWarning` | `true` | Warn when cron interval is shorter than 30 minutes |
+
 
 ## 📝 Prompt Placeholders
 
@@ -99,7 +95,7 @@ Use these placeholders in your prompts:
 Store prompt templates for reuse:
 
 - **Local**: `.github/prompts/*.md` in your workspace
-- **Global**: `~/.github/prompts/*.md` or VS Code user prompts folder
+- **Global**: VS Code user prompts folder (or the folder set in `copilotScheduler.globalPromptsPath`)
 
 ## 📋 Requirements
 

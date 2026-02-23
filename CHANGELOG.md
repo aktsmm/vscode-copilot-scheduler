@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-02-24
+
+### Fixed
+
+- **Webview localization**: Localized the initial HTML select placeholders (Agent/Model/Template) to avoid hard-coded English in Japanese UI.
+- **Template load validation**: Normalized resolved paths during allowlist checks to avoid Windows case-sensitivity mismatches.
+- **Timezone resilience**: Invalid `copilotScheduler.timezone` now falls back to local time instead of breaking cron validation/next-run calculation.
+
+### Changed
+
+- **Jitter setting**: `copilotScheduler.jitterSeconds` minimum is now 0 (0 = off), aligned across schema and docs.
+- **Lint ergonomics**: Added a minimal ESLint config so `npm run lint` is runnable.
+
 ## [1.0.5] - 2026-02-24
 
 ### Fixed

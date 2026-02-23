@@ -264,6 +264,7 @@ export type TreeNodeType = "scopeGroup" | "task";
  */
 export type TreeContextValue =
   | "scopeGroup"
+  | "workspaceGroup"
   | "enabledTask"
   | "disabledTask"
   | "enabledWorkspaceTask"

@@ -121,9 +121,10 @@ export const messages = {
   actionCancel: () => t("Cancel", "キャンセル"),
   actionCopyPrompt: () => t("Copy Prompt", "プロンプトをコピー"),
   actionTestRun: () => t("Test Run", "テスト実行"),
-  actionSave: () => t("Save", "保存"),
+  actionSave: () => t("Update", "更新"),
   actionCreate: () => t("Create", "作成"),
-  actionRefresh: () => t("Refresh", "更新"),
+  actionNewTask: () => t("New Task", "新規タスク"),
+  actionRefresh: () => t("Refresh", "再読込"),
 
   // ==================== Webview Placeholders ====================
   webviewSelectAgentPlaceholder: () =>
@@ -190,6 +191,7 @@ export const messages = {
 
   // ==================== Webview UI ====================
   tabCreate: () => t("Create Task", "タスク作成"),
+  tabEdit: () => t("Edit Task", "タスク編集"),
   tabList: () => t("Task List", "タスク一覧"),
 
   webviewMessageHandlingFailed: (error: string) =>
