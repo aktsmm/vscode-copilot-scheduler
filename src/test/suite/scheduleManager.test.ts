@@ -35,6 +35,19 @@ function createMockContext(storageRoot: string): vscode.ExtensionContext {
   } as unknown as vscode.ExtensionContext;
 }
 
+function createMockContextWithGlobalTasks(
+  storageRoot: string,
+  tasks: unknown[],
+): vscode.ExtensionContext {
+  const memento = new MockMemento();
+  // Seed globalState before ScheduleManager constructor runs.
+  void memento.update("scheduledTasks", tasks);
+  return {
+    globalState: memento,
+    globalStorageUri: vscode.Uri.file(storageRoot),
+  } as unknown as vscode.ExtensionContext;
+}
+
 function createManagerWithInvalidTimezone(storageRoot: string): ScheduleManager {
   const manager = new ScheduleManager(createMockContext(storageRoot));
   // Avoid VS Code configuration writes in tests; patch the instance instead.
@@ -73,6 +86,155 @@ suite("ScheduleManager Minimum Interval Tests", () => {
     } finally {
       try {
         fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Prompt Source Migration Tests", () => {
+  function setWorkspaceFoldersForTest(root: string): () => void {
+    const wsAny = vscode.workspace as unknown as {
+      workspaceFolders?: Array<{ uri: vscode.Uri }>;
+    };
+    const original = wsAny.workspaceFolders;
+    try {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: [{ uri: vscode.Uri.file(root) }],
+        configurable: true,
+      });
+    } catch {
+      // Best-effort: some VS Code versions may not allow redefining; leave as-is.
+    }
+    return () => {
+      try {
+        Object.defineProperty(vscode.workspace, "workspaceFolders", {
+          value: original,
+          configurable: true,
+        });
+      } catch {
+        // ignore
+      }
+    };
+  }
+
+  test("migrates missing promptSource to local when promptPath is under .github/prompts", () => {
+    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-ws-"));
+    const restoreWs = setWorkspaceFoldersForTest(wsRoot);
+    const promptsDir = path.join(wsRoot, ".github", "prompts");
+    fs.mkdirSync(promptsDir, { recursive: true });
+
+    const templatePath = path.join(promptsDir, "__test_prompt_source_migration__.md");
+
+    try {
+      fs.writeFileSync(templatePath, "hello", "utf8");
+
+      const now = new Date();
+      const rawTask = {
+        id: "t-migrate-missing",
+        name: "t",
+        prompt: "OLD",
+        cronExpression: "0 * * * *",
+        enabled: false,
+        scope: "global",
+        promptPath: templatePath,
+        // promptSource intentionally missing
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      try {
+        const manager = new ScheduleManager(
+          createMockContextWithGlobalTasks(tmp, [rawTask]),
+        );
+        const loaded = manager.getTask(rawTask.id);
+        assert.ok(loaded);
+        assert.strictEqual(loaded?.promptSource, "local");
+        assert.strictEqual(loaded?.promptPath, templatePath);
+      } finally {
+        try {
+          fs.rmSync(tmp, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 50,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      restoreWs();
+      try {
+        fs.rmSync(wsRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("heals inline promptSource to local when promptPath exists under .github/prompts", () => {
+    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-ws-"));
+    const restoreWs = setWorkspaceFoldersForTest(wsRoot);
+    const promptsDir = path.join(wsRoot, ".github", "prompts");
+    fs.mkdirSync(promptsDir, { recursive: true });
+
+    const templatePath = path.join(promptsDir, "__test_prompt_source_heal__.md");
+
+    try {
+      fs.writeFileSync(templatePath, "hello", "utf8");
+
+      const now = new Date();
+      const rawTask = {
+        id: "t-migrate-inline",
+        name: "t",
+        prompt: "OLD",
+        cronExpression: "0 * * * *",
+        enabled: false,
+        scope: "global",
+        promptSource: "inline",
+        promptPath: templatePath,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      try {
+        const manager = new ScheduleManager(
+          createMockContextWithGlobalTasks(tmp, [rawTask]),
+        );
+        const loaded = manager.getTask(rawTask.id);
+        assert.ok(loaded);
+        assert.strictEqual(loaded?.promptSource, "local");
+        assert.strictEqual(loaded?.promptPath, templatePath);
+      } finally {
+        try {
+          fs.rmSync(tmp, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 50,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      restoreWs();
+      try {
+        fs.rmSync(wsRoot, {
           recursive: true,
           force: true,
           maxRetries: 3,

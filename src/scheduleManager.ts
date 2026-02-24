@@ -11,7 +11,12 @@ import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { selectTaskStore } from "./taskStoreSelection";
-import { normalizeForCompare } from "./promptResolver";
+import {
+  normalizeForCompare,
+  resolveGlobalPromptPath,
+  resolveGlobalPromptsRoot,
+  resolveLocalPromptPath,
+} from "./promptResolver";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -472,8 +477,56 @@ export class ScheduleManager {
       if (!task.scope) {
         task.scope = "global";
       }
-      if (!task.promptSource) {
-        task.promptSource = "inline";
+      {
+        const promptPath =
+          typeof task.promptPath === "string" ? task.promptPath.trim() : "";
+        const hasPromptPath = promptPath.length > 0;
+
+        const inferPromptSource = (): "inline" | "local" | "global" => {
+          if (!hasPromptPath) return "inline";
+
+          const workspaceFolderPaths = (vscode.workspace.workspaceFolders ?? [])
+            .map((f) => f.uri.fsPath)
+            .filter(
+              (p): p is string => typeof p === "string" && p.trim().length > 0,
+            );
+
+          // Prefer global if it matches the configured (or default) global prompts root.
+          const cfg = vscode.workspace.getConfiguration("copilotScheduler");
+          const globalRoot = resolveGlobalPromptsRoot(
+            cfg.get<string>("globalPromptsPath", ""),
+          );
+          if (resolveGlobalPromptPath(globalRoot, promptPath)) {
+            return "global";
+          }
+
+          if (resolveLocalPromptPath(workspaceFolderPaths, promptPath)) {
+            return "local";
+          }
+
+          return "inline";
+        };
+
+        // Migration: promptSource was introduced later; infer it from promptPath.
+        // Also heal inconsistent data where promptSource is inline but promptPath exists.
+        const isKnownSource =
+          task.promptSource === "inline" ||
+          task.promptSource === "local" ||
+          task.promptSource === "global";
+
+        if (!task.promptSource || !isKnownSource) {
+          task.promptSource = inferPromptSource();
+          if (task.promptSource === "inline" && !hasPromptPath) {
+            task.promptPath = undefined;
+          }
+          needsSave = true;
+        } else if (task.promptSource === "inline" && hasPromptPath) {
+          const inferred = inferPromptSource();
+          if (inferred !== "inline") {
+            task.promptSource = inferred;
+            needsSave = true;
+          }
+        }
       }
 
       // Migration: add jitterSeconds if missing
