@@ -363,15 +363,30 @@
 - **Evidence**: `MarkdownString.appendCodeblock()` などでユーザー入力（プロンプト等）をコードブロックとして表示すると、内容に ``` が含まれる場合にフェンスが壊れてツールチップの表示が崩れる。
 - **Action**: ユーザー入力をコードブロック表示する場合は、``` を含むケースを検出してフォールバック（`appendText()` に切り替える、またはより長い fence を使う）を入れる。
 
+### U36: 設定UIの既定パス例を実装と同期する
+
+- **Tags**: `UI/UX` `非機能` `i18n`
+- **Added**: 2026-02-25
+- **Evidence**: 設定説明（`package.nls*.json`）の `globalPromptsPath` / `globalAgentsPath` で、既定パス例が `User/prompts` のサブパスや Linux の `$XDG_CONFIG_HOME` ケースを欠き、実装（`resolveGlobalPromptsRoot`）と不一致になっていた。
+- **Action**: 既定パスを決める実装（`resolveGlobalPromptsRoot` 等）を変更/拡張したら、NLS/README/仕様書にある「既定パス例」も同時に更新して整合を保つ。
+
+### U37: ユーザー向け UI に内部スタックトレースや絶対パスを出さない
+
+- **Tags**: `セキュリティ` `UI/UX` `非機能`
+- **Added**: 2026-02-25
+- **Evidence**: Webview 側の操作失敗時に `error.stack` を UI に表示し得る実装だと、スタックトレース（場合によってはパス情報）が画面に露出する。加えて、テンプレート読込失敗ログに絶対パスを含めると、既定ログレベル（info）でも個人情報を含むパスが残り得る。
+- **Action**: ログ出力用の詳細（stack 等）とユーザー表示用の文言（message 等）を分離する。ユーザー向け UI は最小限の情報に留め、ログも必要最小限にしてファイルパスは basename 等へ縮約する。
+
 ## Session Log
 
 <!-- 毎回上書き。前回の記録は残さない。 -->
-<!-- 2026-02-24 -->
+<!-- 2026-02-25 -->
 
 ### Done
 
-- `ScheduleManager.checkMinimumInterval()` が、無効な timezone 設定時にローカル時刻へフォールバックして最小間隔警告判定を継続するよう修正
-- `ScheduleManager.checkMinimumInterval()` の tz フォールバック分岐をユニットテストでカバー
+- Webview の例外表示で stack を UI に出さない（ログは詳細、UI は message のみ）
+- テンプレートロード失敗ログから絶対パスを削除（basename のみ）
+- Learnings の重複採番（U24）を修正（U36 に整理）
 
 ### Not Done
 
@@ -383,9 +398,9 @@
 
 ### 確認（今回やったことが効いているか）
 
-- [ ] `copilotScheduler.timezone` に無効値を設定した状態で、短間隔 cron の作成/更新時に最小間隔警告が表示されること `~7d`
-- [ ] `npm test` で `ScheduleManager Minimum Interval Tests` が安定して通ること `~7d`
+- [ ] Webview: 例外発生時の画面エラーがスタックトレースではなく短いメッセージになっていること `~3d`
+- [ ] ログ: テンプレートロード失敗ログにユーザーディレクトリ等の絶対パスが出ないこと `~3d`
 
 ### 新観点（今回カバーできなかった品質改善）
 
-- [ ] `validateCronExpression()` / `getNextRun()` の tz フォールバック分岐をユニットテストでカバーする `~30d`
+- [ ] セキュリティ: symlink を考慮した template パス検証（realpath ベース）の必要性を評価する `~30d`

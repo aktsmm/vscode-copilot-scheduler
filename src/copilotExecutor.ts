@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
+import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { resolveGlobalPromptsRoot } from "./promptResolver";
 
 // Node.js globals
@@ -31,6 +32,11 @@ const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
   "ask",
   "edit",
 ]);
+
+function toSafeErrorDetails(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  return sanitizeAbsolutePathDetails(raw) || raw;
+}
 
 /**
  * Executes prompts through GitHub Copilot Chat
@@ -95,7 +101,10 @@ export class CopilotExecutor {
           logDebug(`[CopilotScheduler] Model selection result:`, result);
           await this.delay(DELAY_AFTER_MODEL_SELECT_MS);
         } catch (error) {
-          logError(`[CopilotScheduler] Model selection failed:`, error);
+          logError(
+            `[CopilotScheduler] Model selection failed:`,
+            toSafeErrorDetails(error),
+          );
           // Model selection may not be available, continue without it
         }
       } else {
@@ -201,19 +210,19 @@ export class CopilotExecutor {
       },
       {
         id: "agent",
-        name: "Agent",
+        name: messages.agentAgentName(),
         description: messages.agentModeDesc(),
         isCustom: false,
       },
       {
         id: "ask",
-        name: "Ask",
+        name: messages.agentAskName(),
         description: messages.agentAskDesc(),
         isCustom: false,
       },
       {
         id: "edit",
-        name: "Edit",
+        name: messages.agentEditName(),
         description: messages.agentEditDesc(),
         isCustom: false,
       },
@@ -254,9 +263,7 @@ export class CopilotExecutor {
     );
 
     for (const file of agentFiles) {
-      const fileName = path
-        .basename(file.fsPath)
-        .replace(/\.agent\.md$/i, "");
+      const fileName = path.basename(file.fsPath).replace(/\.agent\.md$/i, "");
       agents.push({
         id: `@${fileName}`,
         name: `@${fileName}`,
@@ -298,7 +305,10 @@ export class CopilotExecutor {
           }
         }
       } catch (error) {
-        logDebug("[CopilotScheduler] Failed to parse AGENTS.md:", error);
+        logDebug(
+          "[CopilotScheduler] Failed to parse AGENTS.md:",
+          toSafeErrorDetails(error),
+        );
       }
     }
 
@@ -338,7 +348,10 @@ export class CopilotExecutor {
         }
       }
     } catch (error) {
-      logDebug("[CopilotScheduler] Failed to read global agents:", error);
+      logDebug(
+        "[CopilotScheduler] Failed to read global agents:",
+        toSafeErrorDetails(error),
+      );
     }
 
     return agents;
@@ -394,7 +407,10 @@ export class CopilotExecutor {
       }
     } catch (error) {
       // Language Model API may not be available
-      logDebug("[CopilotScheduler] Language Model API unavailable:", error);
+      logDebug(
+        "[CopilotScheduler] Language Model API unavailable:",
+        toSafeErrorDetails(error),
+      );
     }
 
     // Fallback to static list

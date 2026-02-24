@@ -21,6 +21,7 @@ import { messages, isJapanese, getCronPresets } from "./i18n";
 import { logError } from "./logger";
 import { validateTemplateLoadRequest } from "./templateValidation";
 import { resolveGlobalPromptsRoot } from "./promptResolver";
+import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 
@@ -84,7 +85,8 @@ export class SchedulerWebview {
     const queue = this.pendingMessages;
     this.pendingMessages = [];
     for (const message of queue) {
-      void this.panel.webview.postMessage(message);
+      // Route through the wrapper to keep all sending logic consistent (U2).
+      this.postMessage(message);
     }
   }
 
@@ -123,9 +125,11 @@ export class SchedulerWebview {
           });
         })
         .catch((error) => {
+          const rawMessage =
+            error instanceof Error ? error.message : String(error ?? "");
           logError(
             "[CopilotScheduler] Failed to refresh agents/models:",
-            error,
+            this.sanitizeErrorDetailsForUser(rawMessage),
           );
         });
 
@@ -137,9 +141,11 @@ export class SchedulerWebview {
           });
         })
         .catch((error) => {
+          const rawMessage =
+            error instanceof Error ? error.message : String(error ?? "");
           logError(
             "[CopilotScheduler] Failed to refresh prompt templates:",
-            error,
+            this.sanitizeErrorDetailsForUser(rawMessage),
           );
         });
     };
@@ -201,15 +207,23 @@ export class SchedulerWebview {
           try {
             await this.handleMessage(message);
           } catch (error) {
-            const details =
-              error instanceof Error
-                ? error.stack || error.message
-                : String(error ?? "");
+            const rawDetailsForLog =
+              error instanceof Error ? error.message : String(error ?? "");
+            const detailsForLog =
+              this.sanitizeErrorDetailsForUser(rawDetailsForLog);
+            const rawDetailsForUser =
+              error instanceof Error ? error.message : String(error ?? "");
+            const detailsForUser =
+              this.sanitizeErrorDetailsForUser(rawDetailsForUser);
             logError("[CopilotScheduler] Webview message handling failed:", {
               type: (message as { type?: unknown } | undefined)?.type,
-              error: details,
+              error: detailsForLog,
             });
-            this.showError(messages.webviewMessageHandlingFailed(details));
+            this.showError(
+              messages.webviewMessageHandlingFailed(
+                detailsForUser || messages.webviewUnknown(),
+              ),
+            );
           }
         },
       );
@@ -242,10 +256,15 @@ export class SchedulerWebview {
    * Show an error message inside the webview
    */
   static showError(errorMessage: string): void {
+    const safe = this.sanitizeErrorDetailsForUser(errorMessage);
     this.postMessage({
       type: "showError",
-      text: errorMessage,
+      text: safe || messages.webviewUnknown(),
     });
+  }
+
+  private static sanitizeErrorDetailsForUser(message: string): string {
+    return sanitizeAbsolutePathDetails(message);
   }
 
   /**
@@ -629,10 +648,15 @@ export class SchedulerWebview {
         path: templatePath,
       });
     } catch (error) {
+      const templateFile = path.basename(templatePath);
+      const rawError =
+        error instanceof Error ? error.message : String(error ?? "");
+      const safeError =
+        this.sanitizeErrorDetailsForUser(rawError) || messages.webviewUnknown();
       logError("[CopilotScheduler] Template load failed:", {
-        templatePath,
+        templateFile,
         source,
-        error: error instanceof Error ? error.message : String(error ?? ""),
+        error: safeError,
       });
       notifyError(messages.templateLoadError());
     }
@@ -690,7 +714,17 @@ export class SchedulerWebview {
     const presets = getCronPresets();
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
-    const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
+    const defaultJitterSecondsRaw = config.get<number>("jitterSeconds", 600);
+    // Keep the Webview resilient even if settings are corrupted/out-of-range.
+    const defaultJitterSeconds = (() => {
+      const n =
+        typeof defaultJitterSecondsRaw === "number"
+          ? defaultJitterSecondsRaw
+          : Number(defaultJitterSecondsRaw);
+      if (!Number.isFinite(n)) return 600;
+      const i = Math.floor(n);
+      return Math.min(Math.max(i, 0), 1800);
+    })();
     const initialTasks = Array.isArray(tasks) ? tasks : [];
     const initialAgents = Array.isArray(agents) ? agents : [];
     const initialModels = Array.isArray(models) ? models : [];
@@ -1242,7 +1276,7 @@ export class SchedulerWebview {
             <div class="form-group">
               <label for="friendly-frequency">${escapeHtml(strings.labelFrequency)}</label>
               <select id="friendly-frequency">
-                <option value="">-- ${escapeHtml(strings.labelFriendlySelect)} --</option>
+                <option value="">${escapeHtml(strings.labelFriendlySelect)}</option>
                 <option value="every-n">${escapeHtml(strings.labelEveryNMinutes)}</option>
                 <option value="hourly">${escapeHtml(strings.labelHourlyAtMinute)}</option>
                 <option value="daily">${escapeHtml(strings.labelDailyAtTime)}</option>

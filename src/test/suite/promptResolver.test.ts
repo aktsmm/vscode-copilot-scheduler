@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import {
   resolveAllowedPathInBaseDir,
@@ -73,5 +75,40 @@ suite("Prompt Resolver Tests", () => {
     const rel = path.join(".github", "prompts", "x.agent.md");
     const p = resolveLocalPromptPath([ws1], rel);
     assert.strictEqual(p, undefined);
+  });
+
+  test("resolveAllowedPathInBaseDir rejects symlink escape", function () {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-resolver-"),
+    );
+
+    try {
+      const base = path.join(tempRoot, "allowed");
+      const outsideDir = path.join(tempRoot, "outside");
+      fs.mkdirSync(base, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+
+      const outsideFile = path.join(outsideDir, "secret.md");
+      fs.writeFileSync(outsideFile, "secret", "utf8");
+
+      const linkPath = path.join(base, "link.md");
+      try {
+        fs.symlinkSync(outsideFile, linkPath, "file");
+      } catch {
+        // Symlink may be unavailable (e.g. Windows without privileges).
+        this.skip();
+        return;
+      }
+
+      const resolved = resolveAllowedPathInBaseDir(base, "link.md");
+      assert.strictEqual(resolved, undefined);
+    } finally {
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
+    }
   });
 });

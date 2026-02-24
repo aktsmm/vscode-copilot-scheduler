@@ -39,8 +39,8 @@
   "config.jitterSeconds": "Default max random delay in seconds before running a task (0 = off). Each task can override this.",
   "config.maxDailyExecutions": "Maximum scheduled executions per day across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.",
   "config.minimumIntervalWarning": "Show a warning when a cron interval is shorter than 30 minutes",
-  "config.globalPromptsPath": "Custom path for global prompt templates. Default: VS Code's User/prompts folder (Windows: %APPDATA%/Code, macOS: ~/Library/Application Support/Code, Linux: ~/.config/Code)",
-  "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: VS Code's User/prompts folder (Windows: %APPDATA%/Code, macOS: ~/Library/Application Support/Code, Linux: ~/.config/Code)",
+  "config.globalPromptsPath": "Custom path for global prompt templates. Default: VS Code's User/prompts folder (Windows: %APPDATA%/Code/User/prompts, macOS: ~/Library/Application Support/Code/User/prompts, Linux: $XDG_CONFIG_HOME/Code/User/prompts or ~/.config/Code/User/prompts)",
+  "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: VS Code's User/prompts folder (Windows: %APPDATA%/Code/User/prompts, macOS: ~/Library/Application Support/Code/User/prompts, Linux: $XDG_CONFIG_HOME/Code/User/prompts or ~/.config/Code/User/prompts)",
   "config.reportIssue": "🐛 Found a bug? [Report an issue on GitHub](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
   "view.tasks": "Scheduled Tasks"
 }

@@ -5,14 +5,33 @@ export function normalizeForCompare(p: string): string {
   if (!p) return "";
   const resolved = path.normalize(path.resolve(p));
   const root = path.parse(resolved).root;
-  // Avoid turning filesystem roots ("/", "C:\\") into empty strings (U34).
-  const trimmed = resolved === root ? resolved : resolved.replace(/[\\/]+$/, "");
+  // Avoid turning filesystem roots ("/", "C:\\") into empty strings.
+  const trimmed =
+    resolved === root ? resolved : resolved.replace(/[\\/]+$/, "");
   return process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
 }
 
-function isInsideDir(baseDir: string, targetPath: string): boolean {
-  const base = normalizeForCompare(baseDir);
-  const tgt = normalizeForCompare(targetPath);
+function tryResolveRealPathNormalized(p: string): string | undefined {
+  if (!p) return undefined;
+  try {
+    const real = fs.realpathSync.native
+      ? fs.realpathSync.native(p)
+      : fs.realpathSync(p);
+    return normalizeForCompare(real);
+  } catch {
+    return undefined;
+  }
+}
+
+export function isPathInsideBaseDir(
+  baseDir: string,
+  targetPath: string,
+): boolean {
+  const baseReal = tryResolveRealPathNormalized(baseDir);
+  const targetReal = tryResolveRealPathNormalized(targetPath);
+
+  const base = baseReal || normalizeForCompare(baseDir);
+  const tgt = targetReal || normalizeForCompare(targetPath);
   if (!base || !tgt) return false;
   const prefix = base.endsWith(path.sep) ? base : base + path.sep;
   return tgt === base || tgt.startsWith(prefix);
@@ -35,7 +54,7 @@ export function resolveAllowedPathInBaseDir(
 ): string | undefined {
   if (!baseDir || !promptPath) return undefined;
   const resolvedTarget = path.resolve(baseDir, promptPath);
-  if (!isInsideDir(baseDir, resolvedTarget)) {
+  if (!isPathInsideBaseDir(baseDir, resolvedTarget)) {
     return undefined;
   }
   if (!isMarkdownFile(resolvedTarget)) {
@@ -74,7 +93,10 @@ export function resolveLocalPromptPath(
     // Absolute path case: just validate containment.
     if (path.isAbsolute(promptPath)) {
       const resolvedAbs = path.resolve(promptPath);
-      if (isInsideDir(promptsDir, resolvedAbs) && isMarkdownFile(resolvedAbs)) {
+      if (
+        isPathInsideBaseDir(promptsDir, resolvedAbs) &&
+        isMarkdownFile(resolvedAbs)
+      ) {
         return resolvedAbs;
       }
       continue;
@@ -85,7 +107,7 @@ export function resolveLocalPromptPath(
     // - relative to prompts dir (e.g., "foo.md" or "sub/foo.md")
     const candidateFromWorkspace = path.resolve(workspaceRoot, promptPath);
     if (
-      isInsideDir(promptsDir, candidateFromWorkspace) &&
+      isPathInsideBaseDir(promptsDir, candidateFromWorkspace) &&
       isMarkdownFile(candidateFromWorkspace)
     ) {
       return candidateFromWorkspace;
@@ -93,7 +115,7 @@ export function resolveLocalPromptPath(
 
     const candidateFromPrompts = path.resolve(promptsDir, promptPath);
     if (
-      isInsideDir(promptsDir, candidateFromPrompts) &&
+      isPathInsideBaseDir(promptsDir, candidateFromPrompts) &&
       isMarkdownFile(candidateFromPrompts)
     ) {
       return candidateFromPrompts;

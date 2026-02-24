@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { PromptSource, PromptTemplate } from "./types";
-import { normalizeForCompare } from "./promptResolver";
+import { isPathInsideBaseDir, normalizeForCompare } from "./promptResolver";
 
 export type TemplateLoadValidationInput = {
   templatePath: string;
@@ -22,14 +22,6 @@ export type TemplateLoadValidationResult =
         | "noAllowedRoots"
         | "notAllowed";
     };
-
-function isInside(baseDir: string, target: string): boolean {
-  const base = normalizeForCompare(baseDir);
-  const tgt = normalizeForCompare(target);
-  if (!base || !tgt) return false;
-  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
-  return tgt === base || tgt.startsWith(prefix);
-}
 
 export function validateTemplateLoadRequest(
   input: TemplateLoadValidationInput,
@@ -78,7 +70,7 @@ export function validateTemplateLoadRequest(
     return { ok: false, reason: "noAllowedRoots" };
   }
 
-  if (!baseDirs.some((d) => isInside(d, resolvedTarget))) {
+  if (!baseDirs.some((d) => isPathInsideBaseDir(d, resolvedTarget))) {
     return { ok: false, reason: "notAllowed" };
   }
 

@@ -15,6 +15,78 @@
 
   strings = initialData.strings || {};
 
+  function basenameAny(p) {
+    if (!p) return "";
+    var s = String(p);
+    var i1 = s.lastIndexOf("\\");
+    var i2 = s.lastIndexOf("/");
+    var i = i1 > i2 ? i1 : i2;
+    return i >= 0 ? s.slice(i + 1) : s;
+  }
+
+  function basenameFromPathLike(p) {
+    if (!p) return "";
+    var s = String(p);
+    if (/^file:\/\/\/?/i.test(s)) {
+      try {
+        var u = new URL(s);
+        if (u.protocol === "file:") {
+          s = decodeURIComponent(u.pathname || "");
+          s = s.replace(/^\/([A-Za-z]:[\\/])/, "$1");
+        } else {
+          s = s.replace(/^file:\/\/\/?/i, "");
+        }
+      } catch (_e) {
+        s = s.replace(/^file:\/\/\/?/i, "");
+      }
+    }
+    return basenameAny(s);
+  }
+
+  function sanitizeAbsolutePaths(text) {
+    if (!text) return "";
+    var s = String(text);
+    return (
+      s
+        // Quoted file URIs (may include spaces)
+        .replace(/'(file:\/\/[^']+)'/gi, function (_m, p1) {
+          return "'" + basenameFromPathLike(p1) + "'";
+        })
+        .replace(/"(file:\/\/[^"]+)"/gi, function (_m, p1) {
+          return '"' + basenameFromPathLike(p1) + '"';
+        })
+        // Unquoted file URIs (no spaces)
+        .replace(/file:\/\/[^\s"'`]+/gi, function (m) {
+          return basenameFromPathLike(m);
+        })
+        // Quoted Windows absolute paths / UNC (may include spaces)
+        .replace(/'((?:[A-Za-z]:(?:\\|\/)|\\\\)[^']+)'/g, function (_m, p1) {
+          return "'" + basenameFromPathLike(p1) + "'";
+        })
+        .replace(/"((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"]+)"/g, function (_m, p1) {
+          return '"' + basenameFromPathLike(p1) + '"';
+        })
+        // Unquoted Windows absolute paths / UNC (no spaces)
+        .replace(
+          /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^\s"'`]+)/g,
+          function (_m, prefix, p1) {
+            return String(prefix) + basenameFromPathLike(p1);
+          },
+        )
+        // Quoted POSIX absolute paths (may include spaces)
+        .replace(/'(\/[^']+)'/g, function (_m, p1) {
+          return "'" + basenameFromPathLike(p1) + "'";
+        })
+        .replace(/"(\/[^\"]+)"/g, function (_m, p1) {
+          return '"' + basenameFromPathLike(p1) + '"';
+        })
+        // Unquoted POSIX absolute paths (no spaces) — only when preceded by start/whitespace/(
+        .replace(/(^|[\s(])(\/[^\s"'`]+)/g, function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        })
+    );
+  }
+
   // Global error handler for debugging (kept minimal to avoid breaking the UI)
   window.onerror = function (msg, url, line, col, error) {
     var errDiv = document.getElementById("form-error");
@@ -23,7 +95,11 @@
     var linePrefix = strings.webviewLinePrefix || "";
     var lineSuffix = strings.webviewLineSuffix || "";
     errDiv.textContent =
-      prefix + String(msg) + linePrefix + String(line) + lineSuffix;
+      prefix +
+      sanitizeAbsolutePaths(String(msg)) +
+      linePrefix +
+      String(line) +
+      lineSuffix;
     errDiv.style.display = "block";
   };
 
@@ -32,8 +108,20 @@
     if (!errDiv) return;
     var prefix = strings.webviewUnhandledErrorPrefix || "";
     var unknown = strings.webviewUnknown || "";
-    errDiv.textContent =
-      prefix + (ev && ev.reason ? String(ev.reason) : unknown);
+    var reason = ev && ev.reason ? ev.reason : null;
+    var raw = unknown;
+    if (reason) {
+      if (typeof reason === "string") {
+        raw = reason;
+      } else if (typeof reason === "object" && reason.message) {
+        raw = String(reason.message);
+      } else {
+        raw = String(reason);
+      }
+    }
+    // Avoid showing multi-line stack traces in UI; keep only the first line.
+    raw = String(raw).split(/\r?\n/)[0];
+    errDiv.textContent = prefix + sanitizeAbsolutePaths(raw);
     errDiv.style.display = "block";
   };
 
@@ -66,11 +154,15 @@
   var editingTaskEnabled = true;
   var pendingSubmit = false;
 
-  var defaultJitterSeconds =
-    typeof initialData.defaultJitterSeconds === "number" &&
-    isFinite(initialData.defaultJitterSeconds)
-      ? initialData.defaultJitterSeconds
-      : 600;
+  var defaultJitterSeconds = (function () {
+    var raw = initialData.defaultJitterSeconds;
+    var n = typeof raw === "number" ? raw : Number(raw);
+    if (!isFinite(n)) return 600;
+    var i = Math.floor(n);
+    if (i < 0) return 0;
+    if (i > 1800) return 1800;
+    return i;
+  })();
   var locale =
     typeof initialData.locale === "string" && initialData.locale
       ? initialData.locale
@@ -530,9 +622,11 @@
           var toggleTitle = enabled
             ? strings.actionDisable
             : strings.actionEnable;
-          var nextRun = task.nextRun
-            ? new Date(task.nextRun).toLocaleString(locale)
-            : strings.labelNever;
+          var nextRunDate = task.nextRun ? new Date(task.nextRun) : null;
+          var nextRun =
+            nextRunDate && !isNaN(nextRunDate.getTime())
+              ? nextRunDate.toLocaleString(locale)
+              : strings.labelNever;
           var promptText = typeof task.prompt === "string" ? task.prompt : "";
           var promptPreview =
             promptText.length > 100
@@ -1438,7 +1532,9 @@
       var errDiv = document.getElementById("form-error");
       if (errDiv) {
         var prefix = strings.webviewClientErrorPrefix || "";
-        errDiv.textContent = prefix + String(e && e.message ? e.message : e);
+        var rawError = e && e.message ? e.message : e;
+        rawError = String(rawError).split(/\r?\n/)[0];
+        errDiv.textContent = prefix + sanitizeAbsolutePaths(rawError);
         errDiv.style.display = "block";
       }
       pendingSubmit = false;

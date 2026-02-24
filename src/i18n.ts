@@ -135,8 +135,8 @@ export const messages = {
   // Webview-only runtime strings (used in media/schedulerWebview.js)
   webviewScriptErrorPrefix: () => t("Script error: ", "スクリプトエラー: "),
   webviewUnhandledErrorPrefix: () => t("Unhandled error: ", "未処理のエラー: "),
-  webviewLinePrefix: () => t(" (line ", " (line "),
-  webviewLineSuffix: () => t(")", ")"),
+  webviewLinePrefix: () => t(" (line ", "（行 "),
+  webviewLineSuffix: () => t(")", "）"),
   webviewUnknown: () => t("unknown", "不明"),
   webviewApiUnavailable: () =>
     t(
@@ -149,16 +149,14 @@ export const messages = {
   webviewSuccessPrefix: () => t("✔ ", "✔ "),
 
   // ==================== Webview Placeholders ====================
-  webviewSelectAgentPlaceholder: () =>
-    t("-- Select Agent --", "-- エージェントを選択 --"),
+  webviewSelectAgentPlaceholder: () => t("Select agent", "エージェントを選択"),
   webviewNoAgentsAvailable: () =>
-    t("-- No agents available --", "-- 利用可能なエージェントがありません --"),
-  webviewSelectModelPlaceholder: () =>
-    t("-- Select Model --", "-- モデルを選択 --"),
+    t("No agents available", "利用可能なエージェントがありません"),
+  webviewSelectModelPlaceholder: () => t("Select model", "モデルを選択"),
   webviewNoModelsAvailable: () =>
-    t("-- No models available --", "-- 利用可能なモデルがありません --"),
+    t("No models available", "利用可能なモデルがありません"),
   webviewSelectTemplatePlaceholder: () =>
-    t("-- Select Template --", "-- テンプレートを選択 --"),
+    t("Select template", "テンプレートを選択"),
 
   // ==================== Confirmations ====================
   confirmDelete: (name: string) =>
@@ -202,6 +200,9 @@ export const messages = {
   // ==================== Agent / Model Descriptions ====================
   agentNoneName: () => t("None", "なし"),
   agentNoneDesc: () => t("Default behavior", "デフォルトの動作"),
+  agentAgentName: () => t("Agent", "エージェント"),
+  agentAskName: () => t("Ask", "質問"),
+  agentEditName: () => t("Edit", "編集"),
   agentModeDesc: () =>
     t("Agent mode with tool use", "ツール利用のエージェントモード"),
   agentAskDesc: () => t("Questions about code", "コードに関する質問"),

@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import type { PromptTemplate } from "../../types";
 import { validateTemplateLoadRequest } from "../../templateValidation";
@@ -92,6 +94,56 @@ suite("Template Load Validation Tests", () => {
     assert.strictEqual(res.ok, false);
     if (!res.ok) {
       assert.strictEqual(res.reason, "notAllowed");
+    }
+  });
+
+  test("Rejects cached local template symlink escaping allowed root", function () {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-validation-"),
+    );
+
+    try {
+      const ws = path.join(tempRoot, "ws");
+      const promptsDir = path.join(ws, ".github", "prompts");
+      const outsideDir = path.join(tempRoot, "outside");
+      fs.mkdirSync(promptsDir, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+
+      const outside = path.join(outsideDir, "secret.md");
+      fs.writeFileSync(outside, "secret", "utf8");
+
+      const linkPath = path.join(promptsDir, "link.md");
+      try {
+        fs.symlinkSync(outside, linkPath, "file");
+      } catch {
+        // Symlink may be unavailable (e.g. Windows without privileges).
+        this.skip();
+        return;
+      }
+
+      const cached: PromptTemplate[] = [
+        { path: linkPath, name: "link", source: "local" },
+      ];
+
+      const res = validateTemplateLoadRequest({
+        templatePath: linkPath,
+        source: "local",
+        cachedTemplates: cached,
+        workspaceFolderPaths: [ws],
+        globalPromptsPath: undefined,
+      });
+
+      assert.strictEqual(res.ok, false);
+      if (!res.ok) {
+        assert.strictEqual(res.reason, "notAllowed");
+      }
+    } finally {
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
     }
   });
 });

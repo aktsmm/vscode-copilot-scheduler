@@ -39,8 +39,8 @@
   "config.jitterSeconds": "タスク実行前に入れるランダム遅延の最大秒数（0=無効）。タスクごとに上書き可能。",
   "config.maxDailyExecutions": "1日にスケジュール実行できる回数の上限（全タスク合計、0=無制限、1〜100）。⚠️ 無制限はAPIレート制限のリスクがあります。",
   "config.minimumIntervalWarning": "30分未満のcron間隔を設定しようとしたときに警告を表示",
-  "config.globalPromptsPath": "グローバルプロンプトテンプレートのカスタムパス。デフォルト: VS CodeのUser/promptsフォルダー（Windows: %APPDATA%/Code, macOS: ~/Library/Application Support/Code, Linux: ~/.config/Code）",
-  "config.globalAgentsPath": "グローバルエージェントファイル（*.agent.md）のカスタムパス。デフォルト: VS CodeのUser/promptsフォルダー（Windows: %APPDATA%/Code, macOS: ~/Library/Application Support/Code, Linux: ~/.config/Code）",
+  "config.globalPromptsPath": "グローバルプロンプトテンプレートのカスタムパス。デフォルト: VS CodeのUser/promptsフォルダー（Windows: %APPDATA%/Code/User/prompts, macOS: ~/Library/Application Support/Code/User/prompts, Linux: $XDG_CONFIG_HOME/Code/User/prompts または ~/.config/Code/User/prompts）",
+  "config.globalAgentsPath": "グローバルエージェントファイル（*.agent.md）のカスタムパス。デフォルト: VS CodeのUser/promptsフォルダー（Windows: %APPDATA%/Code/User/prompts, macOS: ~/Library/Application Support/Code/User/prompts, Linux: $XDG_CONFIG_HOME/Code/User/prompts または ~/.config/Code/User/prompts）",
   "config.reportIssue": "🐛 バグを見つけた場合は [GitHub で報告](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
   "view.tasks": "スケジュールタスク"
 }

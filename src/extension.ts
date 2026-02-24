@@ -11,6 +11,7 @@ import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
+import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
   normalizeForCompare,
   resolveGlobalPromptPath,
@@ -28,6 +29,10 @@ type NotificationMode = "sound" | "silentToast" | "silentStatus";
 
 const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
+
+function sanitizeErrorDetailsForLog(message: string): string {
+  return sanitizeAbsolutePathDetails(message);
+}
 
 function shouldNotify(): boolean {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
@@ -99,7 +104,11 @@ async function syncPromptTemplatesIfNeeded(
         }
       }
     } catch (error) {
-      logError(`Prompt sync failed for task ${task.name}: ${error}`);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+      logError(
+        `[CopilotScheduler] Prompt sync failed for task "${task.name}": ${sanitizeErrorDetailsForLog(errorMessage)}`,
+      );
     }
   }
 
@@ -135,13 +144,26 @@ export function notifyInfo(message: string, timeoutMs = 4000): void {
 }
 
 export function notifyError(message: string, timeoutMs = 6000): void {
+  const safeMessage = sanitizeErrorDetailsForLog(message);
+  const displayMessage = safeMessage || messages.webviewUnknown() || "";
   const mode = getNotificationMode();
   if (mode === "silentStatus") {
-    vscode.window.setStatusBarMessage(`⚠ ${message}`, timeoutMs);
-    logError(message);
+    vscode.window.setStatusBarMessage(`⚠ ${displayMessage}`, timeoutMs);
+    logError(displayMessage);
     return;
   }
-  void vscode.window.showErrorMessage(message);
+  if (mode === "silentToast") {
+    void vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `⚠ ${displayMessage}`,
+      },
+      () => new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    );
+    logError(displayMessage);
+    return;
+  }
+  void vscode.window.showErrorMessage(displayMessage);
 }
 
 // Global instances
@@ -221,14 +243,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Sync prompt templates to tasks (startup and daily)
   void syncPromptTemplatesIfNeeded(context, true).catch((error) =>
-    logError("[CopilotScheduler] Prompt template sync failed:", error),
+    logError(
+      "[CopilotScheduler] Prompt template sync failed:",
+      sanitizeErrorDetailsForLog(
+        error instanceof Error ? error.message : String(error ?? ""),
+      ),
+    ),
   );
   promptSyncInterval = setInterval(
     () => {
       void syncPromptTemplatesIfNeeded(context, false).catch((error) =>
         logError(
           "[CopilotScheduler] Prompt template daily sync failed:",
-          error,
+          sanitizeErrorDetailsForLog(
+            error instanceof Error ? error.message : String(error ?? ""),
+          ),
         ),
       );
     },
@@ -290,9 +319,11 @@ export function activate(context: vscode.ExtensionContext): void {
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         })
         .catch((error) => {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error ?? "");
           logError(
             "[CopilotScheduler] Failed to recalculate nextRun after config change:",
-            error,
+            sanitizeErrorDetailsForLog(errorMessage),
           );
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         });
@@ -342,7 +373,9 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     // Re-throw so callers (checkAndExecuteTasks / runTaskNow) can distinguish
     // success from failure and avoid recording lastRun on failure (U15).
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logError(messages.taskExecutionFailed(task.name, errorMessage));
+    const safeErrorMessage =
+      sanitizeErrorDetailsForLog(errorMessage) || errorMessage;
+    logError(messages.taskExecutionFailed(task.name, safeErrorMessage));
     throw error;
   }
 }
@@ -420,7 +453,7 @@ async function resolvePromptText(
         error instanceof Error ? error.message : String(error ?? "");
       logDebug(
         `[CopilotScheduler] resolvePromptText: readFile failed (file=${path.basename(filePath)}, task=${task.id})`,
-        errorMessage,
+        sanitizeErrorDetailsForLog(errorMessage),
       );
       // Fall back to inline prompt (file may not exist or be unreadable)
     }
@@ -435,6 +468,11 @@ async function resolvePromptText(
   );
   return task.prompt;
 }
+
+export const __testOnly = {
+  resolvePromptText,
+  sanitizeErrorDetailsForLog,
+};
 
 function getWorkspaceFolderPaths(): string[] {
   return (vscode.workspace.workspaceFolders ?? [])
@@ -717,8 +755,10 @@ function registerCreateTaskGuiCommand(
             } catch (error) {
               const errorMessage =
                 error instanceof Error ? error.message : String(error);
+              const safeErrorMessage =
+                sanitizeErrorDetailsForLog(errorMessage) || errorMessage;
               logError(
-                `[CopilotScheduler] Test prompt failed: ${errorMessage}`,
+                `[CopilotScheduler] Test prompt failed: ${safeErrorMessage}`,
               );
             }
           },
