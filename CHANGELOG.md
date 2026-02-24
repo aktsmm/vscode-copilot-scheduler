@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added unit tests covering the invalid-timezone fallback behavior.
 
+## [1.0.11] - 2026-02-24
+
+### Fixed
+
+- **Template prompt refresh on execution**: Healed legacy tasks where `promptPath` existed but `promptSource` was missing/incorrect, so template edits are reflected when tasks execute.
+
+### Tests
+
+- Added regression tests for promptSource migration from `promptPath`.
+
 ## [1.0.9] - 2026-02-24
 
 ### Fixed
