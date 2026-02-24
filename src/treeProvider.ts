@@ -7,7 +7,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import type { ScheduledTask, TaskScope, TreeContextValue } from "./types";
 import { ScheduleManager } from "./scheduleManager";
-import { messages, formatCronForDisplay, isJapanese } from "./i18n";
+import { messages, formatCronForDisplay } from "./i18n";
 
 type WorkspaceTaskGroup = "this" | "other";
 
@@ -135,98 +135,83 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     md.isTrusted = false;
 
     const task = this.task;
-    const ja = isJapanese();
 
     const safeName = task.name.replace(/([\\`*_{}[\]()#+\-.!|>~<])/g, "\\$1");
     md.appendMarkdown(`### ${safeName}\n\n`);
 
     // Status
-    const statusLabel = ja ? "ステータス" : "Status";
     const statusValue = task.enabled
-      ? ja
-        ? "✅ 有効"
-        : "✅ Enabled"
-      : ja
-        ? "⏸️ 無効"
-        : "⏸️ Disabled";
-    md.appendMarkdown(`**${statusLabel}:** ${statusValue}\n\n`);
+      ? `✅ ${messages.labelEnabled()}`
+      : `⏸️ ${messages.labelDisabled()}`;
+    md.appendMarkdown(`**${messages.labelStatus()}:** ${statusValue}\n\n`);
 
     // Schedule
-    const scheduleLabel = ja ? "スケジュール" : "Schedule";
-    md.appendMarkdown(`**${scheduleLabel}:** \`${task.cronExpression}\`\n\n`);
+    md.appendMarkdown(
+      `**${messages.labelSchedule()}:** \`${task.cronExpression}\`\n\n`,
+    );
 
     // Scope / workspace
-    const scopeLabel = ja ? "スコープ" : "Scope";
     const scopeValue =
       task.scope === "global"
-        ? ja
-          ? "🌐 グローバル"
-          : "🌐 Global"
-        : ja
-          ? "📁 ワークスペースのみ"
-          : "📁 Workspace only";
-    md.appendMarkdown(`**${scopeLabel}:** ${scopeValue}\n\n`);
+        ? messages.treeGroupGlobal()
+        : `📁 ${messages.labelScopeWorkspace()}`;
+    md.appendMarkdown(`**${messages.labelScope()}:** ${scopeValue}\n\n`);
 
     if (task.scope === "workspace") {
-      const workspaceLabel = ja ? "対象ワークスペース" : "Workspace";
       const wsPath = task.workspacePath || "";
-      md.appendMarkdown(`**${workspaceLabel}:**\n\n`);
+      md.appendMarkdown(`**${messages.tooltipWorkspaceTarget()}:**\n\n`);
       if (wsPath) {
         md.appendCodeblock(wsPath);
       } else {
-        md.appendMarkdown(ja ? "(未設定)\n\n" : "(not set)\n\n");
+        md.appendMarkdown(`${messages.tooltipNotSet()}\n\n`);
       }
 
-      const appliesLabel = ja ? "このワークスペース" : "Applies here";
       const appliesValue = this.inThisWorkspace
         ? messages.labelThisWorkspaceShort()
         : messages.labelOtherWorkspaceShort();
-      md.appendMarkdown(`**${appliesLabel}:** ${appliesValue}\n\n`);
+      md.appendMarkdown(
+        `**${messages.tooltipAppliesHere()}:** ${appliesValue}\n\n`,
+      );
     }
 
     // Next run
     if (task.nextRun && task.enabled) {
-      const nextRunLabel = ja ? "次回実行" : "Next run";
       md.appendMarkdown(
-        `**${nextRunLabel}:** ${messages.formatDateTime(task.nextRun)}\n\n`,
+        `**${messages.labelNextRun()}:** ${messages.formatDateTime(task.nextRun)}\n\n`,
       );
     }
 
     // Last run
     if (task.lastRun) {
-      const lastRunLabel = ja ? "前回実行" : "Last run";
       md.appendMarkdown(
-        `**${lastRunLabel}:** ${messages.formatDateTime(task.lastRun)}\n\n`,
+        `**${messages.labelLastRun()}:** ${messages.formatDateTime(task.lastRun)}\n\n`,
       );
     }
 
     // Agent
     if (task.agent) {
-      const agentLabel = ja ? "エージェント" : "Agent";
       const safeAgent = task.agent.replace(
         /([\\`*_{}[\]()#+\-.!|>~<])/g,
         "\\$1",
       );
-      md.appendMarkdown(`**${agentLabel}:** ${safeAgent}\n\n`);
+      md.appendMarkdown(`**${messages.labelAgent()}:** ${safeAgent}\n\n`);
     }
 
     // Model
     if (task.model) {
-      const modelLabel = ja ? "モデル" : "Model";
       const safeModel = task.model.replace(
         /([\\`*_{}[\]()#+\-.!|>~<])/g,
         "\\$1",
       );
-      md.appendMarkdown(`**${modelLabel}:** ${safeModel}\n\n`);
+      md.appendMarkdown(`**${messages.labelModel()}:** ${safeModel}\n\n`);
     }
 
     // Prompt preview
-    const promptLabel = ja ? "プロンプト" : "Prompt";
     const promptPreview =
       task.prompt.length > 100
         ? task.prompt.substring(0, 100) + "..."
         : task.prompt;
-    md.appendMarkdown(`**${promptLabel}:**\n\n`);
+    md.appendMarkdown(`**${messages.labelPrompt()}:**\n\n`);
     md.appendCodeblock(promptPreview);
 
     return md;

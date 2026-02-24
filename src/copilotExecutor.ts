@@ -5,7 +5,6 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import * as fs from "fs";
 import { notifyInfo } from "./extension";
 import type {
   AgentInfo,
@@ -61,7 +60,7 @@ export class CopilotExecutor {
         }
       }
       logDebug(
-        `[CopilotScheduler] Agent set: ${options.agent}, Full prompt: ${fullPrompt.substring(0, 100)}...`,
+        `[CopilotScheduler] Agent set: ${options.agent}, prompt length: ${fullPrompt.length}`,
       );
     } else {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
@@ -148,22 +147,22 @@ export class CopilotExecutor {
     let result = prompt;
 
     // Replace {{date}} with current date
+    // Use function replacers to prevent $& / $' / $` interpretation (U14)
     const now = new Date();
-    result = result.replace(
-      /\{\{date\}\}/gi,
-      now.toLocaleDateString(isJapanese() ? "ja-JP" : "en-US"),
+    // isJapanese() here is for locale-aware date/time formatting, not a UI label.
+    const locale = isJapanese() ? "ja-JP" : "en-US";
+    result = result.replace(/\{\{date\}\}/gi, () =>
+      now.toLocaleDateString(locale),
     );
 
     // Replace {{time}} with current time
-    result = result.replace(
-      /\{\{time\}\}/gi,
-      now.toLocaleTimeString(isJapanese() ? "ja-JP" : "en-US"),
+    result = result.replace(/\{\{time\}\}/gi, () =>
+      now.toLocaleTimeString(locale),
     );
 
     // Replace {{datetime}} with current date and time
-    result = result.replace(
-      /\{\{datetime\}\}/gi,
-      now.toLocaleString(isJapanese() ? "ja-JP" : "en-US"),
+    result = result.replace(/\{\{datetime\}\}/gi, () =>
+      now.toLocaleString(locale),
     );
 
     // Replace {{workspace}} with workspace name
@@ -196,50 +195,44 @@ export class CopilotExecutor {
     const agents: AgentInfo[] = [
       {
         id: "",
-        name: isJapanese() ? "なし" : "None",
-        description: isJapanese() ? "デフォルトの動作" : "Default behavior",
+        name: messages.agentNoneName(),
+        description: messages.agentNoneDesc(),
         isCustom: false,
       },
       {
         id: "agent",
         name: "Agent",
-        description: isJapanese()
-          ? "ツール利用のエージェントモード"
-          : "Agent mode with tool use",
+        description: messages.agentModeDesc(),
         isCustom: false,
       },
       {
         id: "ask",
         name: "Ask",
-        description: isJapanese()
-          ? "コードに関する質問"
-          : "Questions about code",
+        description: messages.agentAskDesc(),
         isCustom: false,
       },
       {
         id: "edit",
         name: "Edit",
-        description: isJapanese() ? "AIでコード編集" : "AI code editing",
+        description: messages.agentEditDesc(),
         isCustom: false,
       },
       {
         id: "@workspace",
         name: "@workspace",
-        description: isJapanese() ? "コードベース検索" : "Codebase search",
+        description: messages.agentWorkspaceDesc(),
         isCustom: false,
       },
       {
         id: "@terminal",
         name: "@terminal",
-        description: isJapanese() ? "ターミナル操作" : "Terminal operations",
+        description: messages.agentTerminalDesc(),
         isCustom: false,
       },
       {
         id: "@vscode",
         name: "@vscode",
-        description: isJapanese()
-          ? "VS Code設定とコマンド"
-          : "VS Code settings and commands",
+        description: messages.agentVscodeDesc(),
         isCustom: false,
       },
     ];
@@ -265,7 +258,7 @@ export class CopilotExecutor {
       agents.push({
         id: `@${fileName}`,
         name: `@${fileName}`,
-        description: isJapanese() ? "カスタムエージェント" : "Custom agent",
+        description: messages.agentCustomDesc(),
         isCustom: true,
         filePath: file.fsPath,
       });
@@ -287,20 +280,23 @@ export class CopilotExecutor {
 
         for (const match of agentMatches) {
           const agentName = match[1].trim();
-          if (agentName && !agents.some((a) => a.name === agentName)) {
+          if (!agentName) continue;
+          // Normalise to @-prefixed ID consistent with .agent.md agents (U32)
+          const normalizedId = agentName.startsWith("@")
+            ? agentName
+            : `@${agentName}`;
+          if (!agents.some((a) => a.id === normalizedId)) {
             agents.push({
-              id: agentName,
-              name: agentName,
-              description: isJapanese()
-                ? "AGENTS.mdで定義"
-                : "Defined in AGENTS.md",
+              id: normalizedId,
+              name: normalizedId,
+              description: messages.agentAgentsMdDesc(),
               isCustom: true,
               filePath: file.fsPath,
             });
           }
         }
-      } catch {
-        // Ignore read errors
+      } catch (error) {
+        logDebug("[CopilotScheduler] Failed to parse AGENTS.md:", error);
       }
     }
 
@@ -323,27 +319,24 @@ export class CopilotExecutor {
         return agents;
       }
 
-      const entries = await fs.promises.readdir(globalPath, {
-        withFileTypes: true,
-      });
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const fileName = entry.name;
+      const entries = await vscode.workspace.fs.readDirectory(
+        vscode.Uri.file(globalPath),
+      );
+      for (const [fileName, fileType] of entries) {
+        if (fileType !== vscode.FileType.File) continue;
         if (fileName.endsWith(".agent.md")) {
-          const agentName = fileName.replace(".agent.md", "");
+          const agentName = path.basename(fileName, ".agent.md");
           agents.push({
-            id: agentName,
-            name: agentName,
-            description: isJapanese()
-              ? "グローバルエージェント"
-              : "Global agent",
+            id: `@${agentName}`,
+            name: `@${agentName}`,
+            description: messages.agentGlobalDesc(),
             isCustom: true,
             filePath: path.join(globalPath, fileName),
           });
         }
       }
-    } catch {
-      // Ignore read errors
+    } catch (error) {
+      logDebug("[CopilotScheduler] Failed to read global agents:", error);
     }
 
     return agents;
@@ -380,10 +373,8 @@ export class CopilotExecutor {
         const modelInfos: ModelInfo[] = [
           {
             id: "",
-            name: isJapanese() ? "デフォルト" : "Default",
-            description: isJapanese()
-              ? "デフォルトモデルを使用"
-              : "Use default model",
+            name: messages.modelDefaultName(),
+            description: messages.modelDefaultDesc(),
             vendor: "",
           },
         ];
@@ -399,8 +390,9 @@ export class CopilotExecutor {
 
         return modelInfos;
       }
-    } catch {
+    } catch (error) {
       // Language Model API may not be available
+      logDebug("[CopilotScheduler] Language Model API unavailable:", error);
     }
 
     // Fallback to static list
@@ -414,10 +406,8 @@ export class CopilotExecutor {
     return [
       {
         id: "",
-        name: isJapanese() ? "デフォルト" : "Default",
-        description: isJapanese()
-          ? "デフォルトモデルを使用"
-          : "Use default model",
+        name: messages.modelDefaultName(),
+        description: messages.modelDefaultDesc(),
         vendor: "",
       },
       {

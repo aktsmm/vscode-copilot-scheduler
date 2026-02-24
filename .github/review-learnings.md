@@ -27,8 +27,8 @@
 
 - **Tags**: `コード品質`
 - **Added**: 2026-02-24
-- **Evidence**: `cronBuilder.ts`（ファイル全体）、`types.ts` の `TaskExecutionResult`/`ExtensionConfig`、`i18n.ts` の `getAgentDisplayInfo()`、`logger.ts` の `logInfo()` がエクスポートされていたが、プロジェクト内のどこからも参照されていなかった。計4箇所、約200行のデッドコード。
-- **Action**: 「将来使うかもしれない」コードはエクスポートしない。必要になった時点で追加する（YAGNI）。定期的に `tsc` の `noUnusedLocals` や ESLint の `no-unused-vars` で未使用シンボルを検出する。ファイル単位で完全に未参照の場合は削除を優先する。
+- **Evidence**: `cronBuilder.ts`（ファイル全体）、`types.ts` の `TaskExecutionResult`/`ExtensionConfig`、`i18n.ts` の `getAgentDisplayInfo()`、`logger.ts` の `logInfo()` がエクスポートされていたが、プロジェクト内のどこからも参照されていなかった。計4箇所、約200行のデッドコード。2回目のレビュー（同日）でも `messages.agentNone()` 等8個の i18n メッセージ、`messages.dailyExecutionCount()`、`ScheduleManager.getDailyExecInfo()` が同パターンで残存していた。大規模リファクタ後にデッドコードが残りやすい。
+- **Action**: 「将来使うかもしれない」コードはエクスポートしない。必要になった時点で追加する（YAGNI）。定期的に `tsc` の `noUnusedLocals` や ESLint の `no-unused-vars` で未使用シンボルを検出する。ファイル単位で完全に未参照の場合は削除を優先する。リファクタ後は grep で削除候補の参照有無を確認する。
 
 ### U5: 起動時に nextRun を強制再計算して取りこぼさない
 
@@ -167,9 +167,175 @@
 - **Evidence**: `checkAndExecuteTasks` でタスク実行の try-catch の外（つまり成功・失敗問わず）で `task.lastRun = executedAt` を設定していた。実行が失敗してもユーザーには「最終実行: XX:XX」と表示され、正常に実行されたと誤認される。
 - **Action**: 成功時のみタイムスタンプを記録する（lastRun は try 内）。リトライ防止用のスケジュール進行（nextRun）は常に行う。「最終試行」と「最終成功」を区別する必要がある場合はフィールドを分ける。
 
-### U14: i18n 文字列も HTML コンテキストに応じてエスケープする
+### U16: i18n 文字列も HTML コンテキストに応じてエスケープする
 
 - **Tags**: `セキュリティ` `コード品質`
 - **Added**: 2026-02-24
 - **Evidence**: Webview HTML テンプレート（`schedulerWebview.ts`）で `placeholder` 属性に i18n 文字列を `escapeHtmlAttr()` なしで埋め込んでいた箇所があった（`placeholderTaskName`, `placeholderPrompt`）。同テンプレート内の他の placeholder（`placeholderCron`）はエスケープ済みで不統一だった。同様に `media/schedulerWebview.js` で `strings.noTasksFound` 等のi18n文字列が `escapeHtml()` なしで `innerHTML` に注入されていた。
 - **Action**: i18n 文字列は開発者管理だが、属性コンテキスト（`placeholder=`, `title=` 等）では `escapeHtmlAttr()` を、要素テキストコンテキストで `innerHTML` に挿入する場合は `escapeHtml()` を適用する。修正時は同一テンプレート内のすべての動的値のエスケープ状況を網羅チェックする（1箇所だけ修正して他を放置しない）。
+
+### U17: ロケール変更時にキャッシュ内のローカライズ済みデータを再構築する
+
+- **Tags**: `UI/UX` `バグ`
+- **Added**: 2026-02-24
+- **Evidence**: `SchedulerWebview.refreshLanguage` で Webview HTML は新言語で再生成されたが、`cachedAgents`/`cachedModels` 内のローカライズ済み名称（"なし"/"None", "デフォルト"/"Default"）が旧言語のままだった。言語切り替え後にエージェント/モデルのドロップダウンだけ旧言語で表示された。さらに、非同期でキャッシュを再取得する前に HTML を生成していたため、初期表示が旧言語になる問題が残っていた。
+- **Action**: `isJapanese()` 等のロケール依存関数で組み立てたデータをキャッシュしている場合、ロケール変更イベント時にキャッシュを無効化して再構築する。初期 HTML 埋め込みデータとメッセージ送信経由データの両方が対象。**同期的に取得可能なデータ（ビルトイン一覧等）は HTML 再生成前に同期更新し、非同期データ（API 取得等）は後続の非同期更新に任せる**。これにより初期表示のフラッシュを最小化できる。
+
+### U18: WebviewPanel は `deactivate()` で明示的に dispose する
+
+- **Tags**: `非機能` `リソース管理`
+- **Added**: 2026-02-24
+- **Evidence**: `SchedulerWebview.panel` が `context.subscriptions` に push されておらず、`deactivate()` でも dispose されていなかった。extension 無効化時に panel が非機能のまま残り、ユーザーにはフリーズしたように見える可能性があった。
+- **Action**: `vscode.window.createWebviewPanel()` で作成した panel は、`context.subscriptions` に追加するか、`deactivate()` から明示的に `panel.dispose()` を呼ぶ。static クラスで管理している場合は `dispose()` static メソッドを用意して `deactivate()` から呼び出す。
+
+### U19: Webview 内の日付フォーマットもアプリのロケール設定を反映する
+
+- **Tags**: `UI/UX` `バグ`
+- **Added**: 2026-02-24
+- **Evidence**: `media/schedulerWebview.js` で `toLocaleString()` をロケール引数なしで呼んでおり、拡張側の `copilotScheduler.language` 設定（ja/en/auto）が反映されなかった。VS Code の言語が en でも拡張設定が ja の場合、Tree View は日本語書式だが Webview のタスク一覧は英語書式で表示された。
+- **Action**: Webview で日付や数値をフォーマットする場合、アプリのロケール設定を `initialData` 経由で渡し、`toLocaleString(locale)` のように明示的に指定する。ブラウザデフォルトに依存しない。
+
+## Project-specific（このワークスペース固有 — 追加分）
+
+### P9: 全タスク変更パスで Webview・TreeView の更新を統一する
+
+- **Tags**: `バグ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: `registerCreateTaskCommand`（CLI 経由のタスク作成）だけ `SchedulerWebview.updateTasks()` が欠落しており、Webview が開いている状態で CLI からタスクを作成してもタスク一覧に反映されなかった。他の15以上の変更パス（edit, delete, toggle, duplicate 等）ではすべて呼ばれていた。
+- **Action**: タスクの CRUD 操作を行うコマンドを追加・変更したら、`SchedulerWebview.updateTasks()` と `treeProvider.refresh()` の呼び出し有無を全パスで確認する（TreeView は `notifyTasksChanged` 経由で自動更新されるが、Webview は明示呼び出しが必要）。
+
+## Universal（汎用 — 追加分 2）
+
+### U20: 失敗した操作を即リトライするとユーザー通知が重複する
+
+- **Tags**: `バグ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: `runTaskNow` が内部で `executeTask` を呼び出し失敗すると `false` を返すが、呼び出し元が即座に同じ `executeTask` をフォールバックとして再実行していた。`executePrompt` は失敗時に自身でユーザー向け warning を表示するため、リトライにより同一の警告ダイアログが2回連続表示された。さらにリトライは同一コード・同一入力のため成功する可能性がなかった。
+- **Action**: ユーザー通知を含む操作のフォールバック/リトライでは、(1) 同一コードの即時再実行は避ける（原因が変わらなければ結果も同じ）、(2) エラー通知を含む関数の呼び出し回数を意識し、重複通知を防ぐ。`executePrompt` のように「自分でエラー UI を出して re-throw する」パターンの関数は、呼び出し元でリトライすると通知が倍になる。
+
+### U21: 安全機構（免責事項・警告）は全操作経路に適用する
+
+- **Tags**: `バグ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: CLI タスク作成パス（`registerCreateTaskCommand`）で `maybeShowDisclaimerOnce` が欠落しており、GUI では表示される ToS リスク警告を CLI 経由で回避できた。P9（UI 更新パスの統一）と同じ根本原因で、CLI パスは GUI パスの「劣化コピー」になりやすい。
+- **Action**: 安全機構（免責事項ダイアログ、レート制限チェック、警告表示）を追加する際は、CLI・GUI・TreeView すべての操作パスに適用されているか確認する。特に CLI パスは GUI パスの実装後に追加されることが多く、新しいチェックが漏れやすい。
+
+### U22: 設定変更時にキャッシュ済み計算値を無効化・再計算する
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: `copilotScheduler.timezone` 設定を変更しても、既存タスクの `nextRun`（旧 timezone で計算済み）が再計算されなかった。ユーザーが timezone を変更しても、タスクが次に実行されるまで新しい timezone が反映されず、誤った時刻に実行される。U17（ロケール変更時のキャッシュ再構築）と同じパターンだが、対象が「表示」ではなく「実行ロジック」であるためバグの深刻度が高い。
+- **Action**: 設定項目を `onDidChangeConfiguration` で監視する際、その設定に依存する計算済みデータ（`nextRun`、キャッシュ、フォーマット済みテキスト等）を洗い出し、変更時に再計算する。特に timezone やロケールのように広範囲に影響する設定は、全関連データの更新が必要。
+
+## Project-specific（このワークスペース固有 — 追加分 2）
+
+### P10: ファイル種別ごとにスキャン対象を正しくフィルタリングする
+
+- **Tags**: `UI/UX` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `getPromptTemplates()` が `.md` 拡張子のみでフィルタリングしていたため、`.agent.md`（エージェント定義ファイル）もプロンプトテンプレートとして「テンプレート選択」ドロップダウンに表示されていた。同じフォルダ（`.github/prompts/` やグローバル prompts フォルダ）にプロンプトとエージェントが共存する設計のため発生しやすい。
+- **Action**: 同一ディレクトリに複数種別のファイルが共存する場合、スキャン関数では「その種別に該当しないファイル」を明示的に除外する。特に `.agent.md` と `.prompt.md` など拡張子に意味を持たせる規約がある場合、`endsWith(".md")` だけでなく `endsWith(".agent.md")` 等のネガティブフィルタも追加する。
+
+### P11: duplicateTask のコピー名サフィックスも i18n 化する
+
+- **Tags**: `UI/UX` `i18n`
+- **Added**: 2026-02-24
+- **Evidence**: `scheduleManager.ts` の `duplicateTask()` でコピー名に `" (Copy)"` をハードコードしていた。日本語環境で「タスク名 (Copy)」と英語混じり表示になった。
+- **Action**: タスク名やファイル名に付加するサフィックス（`(Copy)`, `(New)` 等）も `messages.*` で管理する。ハードコードは UI 文言として扱う。
+
+## Universal（汎用 — 追加分 3）
+
+### U23: エラーを飲み込むラッパー関数は呼び出し元の成否判定を壊す
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: `executeTask()` が `executePrompt()` の例外を catch してログのみ行い re-throw しなかった。呼び出し元（`checkAndExecuteTasks`, `runTaskNow`）は成否を例外の有無で判定しているため、実行失敗時にも `lastRun` 記録・日次カウント消費が行われた（U15 の再発パターン）。
+- **Action**: 「ログ＋ユーザー通知」と「成否の伝播」は分離する。wrapper 関数がエラーをログしつつも呼び出し元に成否を伝える必要がある場合、catch 後に re-throw するか、成功/失敗を示す戻り値を返す。`catch` でエラーを飲み込む場合は、呼び出し元が成否を判定しないことを前提条件として文書化する。
+
+### U24: スケジューラ等の有効/無効トグルでもキャッシュ済み計算値を再計算する
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: `copilotScheduler.enabled` を false→true に切り替えた際、`startScheduler()` は呼ばれるが `recalculateAllNextRuns()` が呼ばれなかった。無効期間中に過去になった `nextRun` がそのまま残り、再有効化直後の最初の tick で全対象タスクが一斉実行（バースト）した。timezone 変更時には `recalculateAllNextRuns()` を呼んでいたため、同一設定クラス内での対応漏れ。U22 の派生パターン。
+- **Action**: `onDidChangeConfiguration` で「動作の有効/無効」を切り替える設定を監視する際、有効化時にはそのコンポーネントが保持するキャッシュ済み計算値（`nextRun` 等）も再計算する。特に「無効期間中に時間が経過する」設定は、再有効化後のバースト実行を防ぐために再計算が必要。
+
+### U25: 「パース失敗時のフォールバック」で現在時刻を返さない
+
+- **Tags**: `バグ` `回復性`
+- **Added**: 2026-02-24
+- **Evidence**: `getNextRunForTask` が cron パース失敗時のフォールバックとして `truncateToMinute(baseTime)`（≒現在時刻）を返していた。スケジューラの tick は毎分実行されるため、パース失敗が継続する間、タスクが毎分実行される高速ループが日次上限まで続く可能性があった。
+- **Action**: スケジューラの「次回実行時刻」をフォールバック計算する際は、必ず十分な未来時刻（例: +60分）を返す。「現在時刻」をフォールバックに使うと、ポーリングベースのスケジューラでは即時再実行のループになるリスクがある。同様に、リトライ間隔のフォールバックでも 0 や「即時」は避ける。
+
+### U26: onDidChangeConfiguration で同一副作用を持つ複数ハンドラを統合する
+
+- **Tags**: `設計` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `onDidChangeConfiguration` で `timezone` と `enabled` の各ブランチがそれぞれ独立に `recalculateAllNextRuns()` を呼んでいた。VS Code はユーザーが settings.json を直接編集した場合など、1イベントで複数設定の変更を通知する。両方が同時に変更されると `recalculateAllNextRuns()` が2回起動し、2重の保存と UI 更新が発生した。
+- **Action**: `onDidChangeConfiguration` ハンドラ内で同一の高コスト操作（再計算、API 呼び出し等）を複数ブランチからトリガーする場合、フラグで統合して1回のみ実行する。各ブランチでは設定固有の軽量処理（start/stop 等）のみ行い、共通の副作用はハンドラの末尾でまとめて実行する。
+
+### U27: Webview アクションが拡張側ロジックを必要とする場合は action callback 経由にする
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: Webview のタスクカード「コピー」ボタンが `{ type: "copyPrompt", prompt: task.prompt }` のようにローカルデータ（JS 側の `tasks[]` 配列）をそのまま送信していた。テンプレートベースのタスク（`promptSource === "local"/"global"`）では、ファイルの最新内容ではなく同期済みの古い `prompt` がコピーされ、TreeView 経由の同等操作（`resolvePromptText()` を呼ぶ）と結果が不一致になった。
+- **Action**: Webview のアクションボタンが拡張側の処理（ファイル解決、バリデーション、確認ダイアログ等）を伴う場合、データをそのまま送信するのではなく `taskId` のみ送って `onTaskActionCallback` 経由で共通ハンドラに委譲する。同一操作の複数経路（Webview / TreeView / コマンドパレット）で同じコードパスを通ることを確認する。
+
+### U28: ファイル拡張子の除去には `path.basename(file, ext)` を使う
+
+- **Tags**: `バグ` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `getPromptTemplates()` で `file.replace(".md", "")` を使ってテンプレート表示名を導出していたが、`String.replace()` は最初の一致のみ置換する。`notes.md.backup.md` のようなファイル名では `.md` がサフィックスではなく途中で除去され、誤った名前 `notes.backup.md` になる。同プロジェクト内で `getCustomAgents()` は正しく `path.basename(file.fsPath, ".agent.md")` を使用しており、不統一だった。
+- **Action**: ファイル拡張子を除去して表示名を生成する場合は `path.basename(filename, ".ext")` を使う。`String.replace(".ext", "")` は最初の一致のみ置換するため、拡張子がファイル名の途中にも含まれる場合に誤動作する。代替として `filename.replace(/\.ext$/i, "")` も安全。
+
+### U29: 重複ユーティリティ関数はエクスポートして共有する
+
+- **Tags**: `コード品質` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: パス正規化関数 `normalizeForCompare` が `promptResolver.ts`・`templateValidation.ts`・`scheduleManager.ts` の3ファイルに同一ロジックとして存在していた。修正時に1箇所だけ更新して他を忘れるリスクがあった。
+- **Action**: 同一ロジックが2ファイル以上で重複した場合、最も適切なモジュールからエクスポートして他はインポートする。特にセキュリティ・パス検証系の関数は一箇所で管理し、修正漏れを防ぐ。
+
+### U30: cron パターンの「固定間隔」ショートカットは cron グリッドからドリフトする
+
+- **Tags**: `バグ` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: `getNextRunForTask` が `*/N * * * *` パターンを検出して `baseTime + N分` で次回実行を計算する最適化を持っていた。ジッター遅延や実行時間で `baseTime` がグリッドからずれると、次回実行もずれ、実行ごとにドリフトが蓄積した（例: `*/5` で 09:05 にジッター2分 → 09:07 → 次回が 09:12 になる。cron-parser なら 09:10）。
+- **Action**: cron の次回実行時刻は常に cron-parser（グリッドアライン）で計算する。「baseTime + N」方式の固定間隔最適化は、ジッターやリトライなど baseTime がずれるケースでドリフトを引き起こすため避ける。cron-parser は `*/N` パターンにも高速に対応する。
+
+### U31: VS Code 拡張ではファイルシステム操作に `vscode.workspace.fs` を統一する
+
+- **Tags**: `コード品質` `非機能`
+- **Added**: 2026-02-24
+- **Evidence**: `getGlobalAgents()` が `fs.promises.readdir` を使用し、同機能の `getPromptTemplates()` は `vscode.workspace.fs.readDirectory` を使用していた（API 不統一）。`fs` モジュール直接使用はリモート開発（SSH / WSL / Codespaces）で仮想ファイルシステムに対応できない。
+- **Action**: VS Code 拡張内のファイル読み書きは `vscode.workspace.fs`（`readFile`, `readDirectory`, `writeFile`）を優先する。Node.js `fs` は `vscode.workspace.fs` でカバーできないケース（同期読み取り、`existsSync` 等）に限定する。同一ファイル内で API が混在する場合はレビュー時に指摘する。
+
+### P12: Tooltip や二次的 UI のハードコード i18n に注意する
+
+- **Tags**: `i18n` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `treeProvider.ts` の `createTooltip()` で11箇所の `ja ? "..." : "..."` パターンがハードコードされていた。該当する `messages.*` 関数（`labelStatus`, `labelSchedule`, `labelAgent` 等）はすべて既に `i18n.ts` に存在していたが、tooltip 構築時には使用されていなかった。Webview や TreeView のメインラベルは i18n 移行済みだったが、tooltip のような「二次的な表示」が漏れていた。
+- **Action**: tooltip、ステータスバー、プログレス通知など、メイン UI 以外の表示箇所も `messages.*` を使う。新規にラベルを追加する際は、まず既存の `messages.*` に同じ意味の関数がないか確認し、不足分のみ追加する。レビュー時は `isJapanese()` の直接使用箇所を検索し、`messages.*` で置換可能な箇所がないかチェックする。
+
+## Universal（汎用 — 追加分 4）
+
+### U32: 複数ソースからエンティティを収集する際は ID フォーマットを統一する
+
+- **Tags**: `バグ` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `CopilotExecutor.getCustomAgents()` はワークスペースの `.agent.md` エージェントに `@` プレフィックスを付けた `id`（例: `@foo`）を生成していたが、`getGlobalAgents()` は同じ `.agent.md` ファイルに対してプレフィックスなしの `id`（例: `foo`）を生成していた。`getAllAgents()` の重複排除が `id` をキーに行われるため、同名エージェントがワークスペースとグローバルの両方に存在する場合、異なる `id`（`@foo` vs `foo`）として重複表示された。実行時の出力は同一（どちらも `@foo prompt` になる）だが、UI の整合性が崩れていた。
+- **Action**: 複数のソース（ローカル/グローバル/API等）からエンティティを収集して重複排除する場合、すべてのソースで `id` フォーマット（プレフィックス、大小文字、正規化）を統一する。特にプレフィックス（`@`, `/`, `#` 等）は1箇所のヘルパー関数で付与し、ソースごとに異なるルールにしない。
+
+### P13: データオブジェクト内のローカライズ文字列も messages.* を使う
+
+- **Tags**: `i18n` `コード品質`
+- **Added**: 2026-02-24
+- **Evidence**: `copilotExecutor.ts` の `getBuiltInAgents()` / `getFallbackModels()` 等で、エージェント名・説明・モデル名を `isJapanese() ? "..." : "..."` でハードコードしていた（計13箇所）。過去に対応する `messages.*` エントリが存在したが U4 でデッドコードとして削除され、元のハードコードが残った。P12 で treeProvider は修正されたが copilotExecutor は見落とされていた。
+- **Action**: デッドコード削除（U4）時に、対応する i18n メッセージが「未使用」なのか「消費側が `messages.*` を使うべきなのに `isJapanese()` 直接呼出しで参照していない」のかを区別する。後者の場合はメッセージを削除するのではなく、消費側を `messages.*` に移行する。レビュー時は `isJapanese()` を全文検索し、データオブジェクト（AgentInfo, ModelInfo 等）内のローカライズ文字列も対象に含める。
+
+## Universal（汎用 — 追加分 5）
+
+### U33: VS Code コマンドハンドラの async コールバックには try/catch を統一する
+
+- **Tags**: `バグ` `回復性`
+- **Added**: 2026-02-24
+- **Evidence**: `extension.ts` の14コマンドハンドラのうち7つ（`deleteTask`, `toggleTask`, `enableTask`, `disableTask`, `runNow`, `copyPrompt`, `duplicateTask`）に try/catch がなかった。`saveTasks()` が file と globalState の両方で失敗した場合、ユーザーにエラーが通知されず unhandled promise rejection になった。同ファイルの `createTask` と `moveToCurrentWorkspace` は正しく try/catch があり、パターンが不統一だった。
+- **Action**: `registerCommand` の async コールバックには必ず try/catch を入れ、catch 内で `notifyError(errorMessage)` 等のユーザー向け通知を行う。新規コマンド追加時は既存コマンドの catch パターンをコピーして揃える。コマンド数が多い場合は共通ラッパー関数で統一する。

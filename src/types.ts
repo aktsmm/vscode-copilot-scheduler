@@ -105,7 +105,11 @@ export interface CreateTaskInput {
   /** Task scope (default: "workspace") */
   scope?: TaskScope;
 
-  /** Whether to run first execution in 3 minutes */
+  /**
+   * Whether to schedule the first execution soon after creation.
+   * Despite the legacy name, the actual delay is FIRST_RUN_DELAY_MINUTES (3 min).
+   * Kept as-is to avoid breaking the Webview ↔ Extension message contract.
+   */
   runFirstInOneMinute?: boolean;
 
   /** Prompt source type (default: "inline") */
@@ -228,7 +232,6 @@ export type WebviewToExtensionMessage =
   | { type: "createTask"; data: CreateTaskInput }
   | { type: "updateTask"; taskId: string; data: Partial<CreateTaskInput> }
   | { type: "testPrompt"; prompt: string; agent?: string; model?: string }
-  | { type: "copyPrompt"; prompt: string }
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
   | { type: "refreshPrompts" }
@@ -236,7 +239,8 @@ export type WebviewToExtensionMessage =
   | { type: "toggleTask"; taskId: string }
   | { type: "deleteTask"; taskId: string }
   | { type: "moveTaskToCurrentWorkspace"; taskId: string }
-  | { type: "loadPromptTemplate"; path: string; source: PromptSource }
+  | { type: "copyTask"; taskId: string }
+  | { type: "loadPromptTemplate"; path: string; source: "local" | "global" }
   | { type: "webviewReady" };
 
 /**

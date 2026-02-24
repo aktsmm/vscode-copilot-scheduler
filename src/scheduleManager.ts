@@ -11,6 +11,7 @@ import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { selectTaskStore } from "./taskStoreSelection";
+import { normalizeForCompare } from "./promptResolver";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -85,14 +86,6 @@ export class ScheduleManager {
       "",
     );
     this.loadTasks();
-  }
-
-  private normalizeFsPath(fsPath: string | undefined): string {
-    if (!fsPath) return "";
-    const normalized = path
-      .normalize(path.resolve(fsPath))
-      .replace(/[\\/]+$/, "");
-    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   }
 
   private loadMetaFromFile(): TaskStorageMeta | undefined {
@@ -297,17 +290,6 @@ export class ScheduleManager {
       this.dailyExecDate = today;
     }
     return this.dailyExecCount >= maxDailyLimit;
-  }
-
-  /**
-   * Get current daily execution count and limit
-   */
-  getDailyExecInfo(): { count: number; limit: number } {
-    const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const rawMax = config.get<number>("maxDailyExecutions", 24);
-    // 0 = unlimited
-    const maxDaily = rawMax === 0 ? 0 : Math.min(Math.max(rawMax, 1), 100); // enforce 0 or 1–100
-    return { count: this.dailyExecCount, limit: maxDaily };
   }
 
   // ==================== Safety: Jitter (Random Delay) ====================
@@ -633,8 +615,11 @@ export class ScheduleManager {
       const interval = parseExpression(cronExpression, options);
       return interval.next().toDate();
     } catch {
-      // If the configured timezone is invalid, fall back to local time.
+      // If the configured timezone is invalid, fall back to local time (U9).
       if (tz) {
+        logDebug(
+          `[CopilotScheduler] Invalid timezone "${tz}", falling back to local time`,
+        );
         try {
           const interval = parseExpression(cronExpression, { currentDate });
           return interval.next().toDate();
@@ -656,39 +641,30 @@ export class ScheduleManager {
     );
   }
 
-  private getFixedMinuteInterval(cronExpression: string): number | undefined {
-    // Support the simple fixed-interval form: "*/N * * * *" (every N minutes).
-    const parts = (cronExpression || "").trim().split(/\s+/);
-    if (parts.length !== 5) return undefined;
-    const [min, hour, dom, mon, dow] = parts;
-    if (hour !== "*" || dom !== "*" || mon !== "*" || dow !== "*") {
-      return undefined;
-    }
-    const m = /^\*\/(\d+)$/.exec(min);
-    if (!m) return undefined;
-    const n = Number(m[1]);
-    if (!Number.isFinite(n) || n <= 0) return undefined;
-    return n;
-  }
-
   private getNextRunForTask(cronExpression: string, baseTime: Date): Date {
-    const fixed = this.getFixedMinuteInterval(cronExpression);
-    if (fixed !== undefined) {
-      const next = new Date(baseTime.getTime() + fixed * 60 * 1000);
-      return this.truncateToMinute(next);
+    // Always use cron-parser to stay aligned with the cron grid.
+    // A previous "*/N" fixed-interval optimisation was removed because it
+    // drifted from the grid when jitter or execution time shifted baseTime
+    // away from a grid-aligned minute (e.g., */5 starting at :03 → :08
+    // instead of :05, compounding on every subsequent execution).
+    const parsed = this.getNextRun(cronExpression, baseTime);
+    if (parsed) {
+      return parsed;
     }
 
-    return (
-      this.getNextRun(cronExpression, baseTime) ??
-      this.truncateToMinute(baseTime)
+    // Fallback: if cron parsing fails unexpectedly, schedule 60 min in the
+    // future instead of "now" to prevent rapid-fire execution loops.
+    logError(
+      `[CopilotScheduler] Failed to parse cron "${cronExpression}"; falling back to +60 min`,
     );
+    return this.truncateToMinute(new Date(baseTime.getTime() + 60 * 60 * 1000));
   }
 
   /**
    * Validate cron expression
    * @throws Error if invalid
    */
-  validateCronExpression(expression: string): boolean {
+  validateCronExpression(expression: string): void {
     if (!expression || !expression.trim()) {
       throw new Error(messages.invalidCronExpression());
     }
@@ -703,13 +679,13 @@ export class ScheduleManager {
         options.tz = tz;
       }
       parseExpression(expression, options);
-      return true;
+      return;
     } catch {
       // If timezone is invalid, retry without tz.
       if (tz) {
         try {
           parseExpression(expression, { currentDate });
-          return true;
+          return;
         } catch {
           // Fall through to throw
         }
@@ -801,6 +777,27 @@ export class ScheduleManager {
    */
   getAllTasks(): ScheduledTask[] {
     return Array.from(this.tasks.values());
+  }
+
+  /**
+   * Recalculate nextRun for all enabled tasks.
+   * Call when timezone configuration changes so that persisted nextRun values
+   * (computed under the old timezone) are recomputed under the new one.
+   */
+  async recalculateAllNextRuns(): Promise<void> {
+    const now = new Date();
+    let changed = false;
+    for (const task of this.tasks.values()) {
+      if (!task.enabled) continue;
+      const newNextRun = this.getNextRunForTask(task.cronExpression, now);
+      if (!task.nextRun || task.nextRun.getTime() !== newNextRun.getTime()) {
+        task.nextRun = newNextRun;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.saveTasks();
+    }
   }
 
   /**
@@ -985,7 +982,7 @@ export class ScheduleManager {
     }
 
     const input: CreateTaskInput = {
-      name: `${original.name} (Copy)`,
+      name: `${original.name} ${messages.taskCopySuffix()}`,
       cronExpression: original.cronExpression,
       prompt: original.prompt,
       enabled: false, // Start disabled
@@ -1043,9 +1040,9 @@ export class ScheduleManager {
       return false;
     }
 
-    const a = this.normalizeFsPath(task.workspacePath);
+    const a = task.workspacePath ? normalizeForCompare(task.workspacePath) : "";
     if (a === "") return false;
-    return workspacePaths.some((p) => this.normalizeFsPath(p) === a);
+    return workspacePaths.some((p) => normalizeForCompare(p) === a);
   }
 
   /**
@@ -1132,8 +1129,9 @@ export class ScheduleManager {
 
     // Read config values once per tick (avoid redundant reads inside the loop)
     const rawMaxDaily = config.get<number>("maxDailyExecutions", 24);
+    const safeMaxDaily = Number.isFinite(rawMaxDaily) ? rawMaxDaily : 24;
     const maxDailyLimit =
-      rawMaxDaily === 0 ? 0 : Math.min(Math.max(rawMaxDaily, 1), 100);
+      safeMaxDaily === 0 ? 0 : Math.min(Math.max(safeMaxDaily, 1), 100);
     const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
 
     let needsSave = false;
@@ -1188,7 +1186,7 @@ export class ScheduleManager {
 
         // Safety: Apply jitter (random delay)
         const maxJitterSeconds = task.jitterSeconds ?? defaultJitterSeconds;
-        await this.applyJitter(maxJitterSeconds ?? 0);
+        await this.applyJitter(maxJitterSeconds);
 
         // Execute
         if (this.onExecuteCallback) {
@@ -1247,7 +1245,7 @@ export class ScheduleManager {
     try {
       await this.onExecuteCallback(task);
 
-      // Update lastRun and nextRun (for fixed minute intervals, count from the manual run)
+      // Update lastRun and nextRun after manual execution
       const executedAt = new Date();
       task.lastRun = executedAt;
       if (task.enabled) {

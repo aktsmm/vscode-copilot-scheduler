@@ -69,7 +69,11 @@
     typeof initialData.defaultJitterSeconds === "number" &&
     isFinite(initialData.defaultJitterSeconds)
       ? initialData.defaultJitterSeconds
-      : 0;
+      : 600;
+  var locale =
+    typeof initialData.locale === "string" && initialData.locale
+      ? initialData.locale
+      : undefined;
   var lastRenderedTasksHtml = "";
 
   // DOM elements - with null safety
@@ -510,7 +514,7 @@
             ? strings.actionDisable
             : strings.actionEnable;
           var nextRun = task.nextRun
-            ? new Date(task.nextRun).toLocaleString()
+            ? new Date(task.nextRun).toLocaleString(locale)
             : strings.labelNever;
           var promptText = typeof task.prompt === "string" ? task.prompt : "";
           var promptPreview =
@@ -668,8 +672,9 @@
 
   // Helper functions
   function escapeHtml(text) {
+    if (text == null) return "";
     var div = document.createElement("div");
-    div.textContent = text;
+    div.textContent = String(text);
     return div.innerHTML;
   }
 
@@ -1235,12 +1240,9 @@
   }
 
   window.copyPrompt = function (id) {
-    var task = tasks.find(function (t) {
-      return t && t.id === id;
-    });
-    if (task) {
-      vscode.postMessage({ type: "copyPrompt", prompt: task.prompt || "" });
-    }
+    // Route through the action callback so that template-based prompts
+    // are resolved from the file (consistent with tree view copy).
+    vscode.postMessage({ type: "copyTask", taskId: id });
   };
 
   window.duplicateTask = function (id) {

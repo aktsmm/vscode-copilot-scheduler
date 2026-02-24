@@ -5,6 +5,22 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-02-24
+
+### Fixed
+
+- **Config change duplicate recalculation**: Consolidated timezone / enabled recalculation to avoid duplicate `recalculateAllNextRuns()` when both change in a single event (U22/U24).
+- **Agent ID normalization**: AGENTS.md agents now use `@`-prefixed IDs consistent with `.agent.md` agents (U32).
+- **Log safety**: Prompt text is no longer logged; only prompt length is shown to prevent secret exposure.
+
+### Improved
+
+- **i18n consolidation**: Moved all hard-coded agent/model descriptions in `copilotExecutor.ts` to `i18n.ts` messages (agentNoneName, agentModeDesc, modelDefaultName, etc.).
+- **Dead code removal**: Removed unused `fs` imports, redundant `openingSettings` / `agentNone` / `agentAgent` messages, and consolidated duplicate notification guards.
+- **Webview lifecycle**: Added explicit `SchedulerWebview.dispose()` in `deactivate()` for clean shutdown; promptSyncInterval cleanup via disposable.
+- **Task copy suffix**: Duplicate-task name suffix now uses i18n (`taskCopySuffix`).
+- **Review learnings**: Updated `.github/review-learnings.md` with new entries.
+
 ## [1.0.7] - 2026-02-24
 
 ### Fixed

@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 
-function normalizeForCompare(p: string): string {
+export function normalizeForCompare(p: string): string {
   const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? n.toLowerCase() : n;
 }

@@ -5,8 +5,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import * as fs from "fs";
-import { notifyInfo, notifyError } from "./extension";
+import { notifyError } from "./extension";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -15,8 +14,6 @@ import type {
   ModelInfo,
   PromptTemplate,
   TaskScope,
-  PromptSource,
-  CronPreset,
   WebviewToExtensionMessage,
 } from "./types";
 import { CopilotExecutor } from "./copilotExecutor";
@@ -49,6 +46,16 @@ export class SchedulerWebview {
   private static resetWebviewReadyState(): void {
     this.webviewReady = false;
     this.pendingMessages = [];
+  }
+
+  /**
+   * Dispose the webview panel (e.g., on extension deactivation)
+   */
+  static dispose(): void {
+    if (this.panel) {
+      this.panel.dispose();
+      // onDidDispose handler will reset panel & readyState
+    }
   }
 
   private static enqueueMessage(message: OutgoingWebviewMessage): void {
@@ -248,6 +255,12 @@ export class SchedulerWebview {
     if (this.panel) {
       // Re-rendering HTML resets the webview context; wait for the new instance to become ready.
       this.resetWebviewReadyState();
+
+      // Synchronously rebuild built-in agents/models so the initial HTML
+      // already reflects the new language (U17: avoid stale localized names).
+      this.cachedAgents = CopilotExecutor.getBuiltInAgents();
+      this.cachedModels = CopilotExecutor.getFallbackModels();
+
       // Regenerate HTML with new language
       this.panel.webview.html = this.getWebviewContent(
         this.panel.webview,
@@ -270,6 +283,9 @@ export class SchedulerWebview {
         type: "updatePromptTemplates",
         templates: this.cachedPromptTemplates,
       });
+
+      // Re-fetch agents/models/templates so that localized names reflect the new language
+      void this.refreshCachesAndNotifyPanel(true).catch(() => {});
     }
   }
 
@@ -374,11 +390,6 @@ export class SchedulerWebview {
         }
         break;
 
-      case "copyPrompt":
-        await vscode.env.clipboard.writeText(message.prompt);
-        notifyInfo(messages.promptCopied());
-        break;
-
       case "refreshAgents":
         await this.refreshAgentsAndModels(true);
         this.postMessage({
@@ -439,6 +450,15 @@ export class SchedulerWebview {
         if (this.onTaskActionCallback) {
           this.onTaskActionCallback({
             action: "moveToCurrentWorkspace",
+            taskId: message.taskId,
+          });
+        }
+        break;
+
+      case "copyTask":
+        if (this.onTaskActionCallback) {
+          this.onTaskActionCallback({
+            action: "copy",
             taskId: message.taskId,
           });
         }
@@ -519,9 +539,10 @@ export class SchedulerWebview {
         for (const [file, fileType] of entries) {
           if (fileType !== vscode.FileType.File) continue;
           if (!file.endsWith(".md")) continue;
+          if (file.endsWith(".agent.md")) continue;
           templates.push({
             path: path.join(localPromptDir, file),
-            name: file.replace(".md", ""),
+            name: path.basename(file, ".md"),
             source: "local",
           });
         }
@@ -540,9 +561,10 @@ export class SchedulerWebview {
         for (const [file, fileType] of entries) {
           if (fileType !== vscode.FileType.File) continue;
           if (!file.endsWith(".md")) continue;
+          if (file.endsWith(".agent.md")) continue;
           templates.push({
             path: path.join(globalPath, file),
-            name: file.replace(".md", ""),
+            name: path.basename(file, ".md"),
             source: "global",
           });
         }
@@ -551,6 +573,7 @@ export class SchedulerWebview {
       }
     }
 
+    templates.sort((a, b) => a.name.localeCompare(b.name));
     return templates;
   }
 
@@ -569,7 +592,7 @@ export class SchedulerWebview {
    */
   private static async loadPromptTemplateContent(
     templatePath: string,
-    source: PromptSource,
+    source: "local" | "global",
   ): Promise<void> {
     try {
       const validation = validateTemplateLoadRequest({
@@ -583,16 +606,25 @@ export class SchedulerWebview {
       });
 
       if (!validation.ok) {
-        throw new Error("Template load rejected");
+        throw new Error(`Template load rejected: ${validation.reason}`);
       }
 
-      const content = await fs.promises.readFile(templatePath, "utf-8");
+      const resolvedPath = path.resolve(templatePath);
+      const bytes = await vscode.workspace.fs.readFile(
+        vscode.Uri.file(resolvedPath),
+      );
+      const content = Buffer.from(bytes).toString("utf8");
       this.postMessage({
         type: "promptTemplateLoaded",
         content: content,
         path: templatePath,
       });
-    } catch {
+    } catch (error) {
+      logError("[CopilotScheduler] Template load failed:", {
+        templatePath,
+        source,
+        error: error instanceof Error ? error.message : String(error ?? ""),
+      });
       notifyError(messages.templateLoadError());
     }
   }
@@ -624,6 +656,13 @@ export class SchedulerWebview {
       .replace(/&/g, "&amp;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  private static escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
@@ -701,7 +740,6 @@ export class SchedulerWebview {
       actionEnable: messages.actionEnable(),
       actionDisable: messages.actionDisable(),
       noTasksFound: messages.noTasksFound(),
-      confirmDeleteTemplate: messages.confirmDelete("{name}"),
       labelAdvanced: messages.labelAdvanced(),
       labelFrequency: messages.labelFrequency(),
       labelFrequencyMinute: messages.labelFrequencyMinute(),
@@ -767,6 +805,7 @@ export class SchedulerWebview {
 
     const serializeForWebview = this.serializeForWebview;
     const escapeHtmlAttr = this.escapeHtmlAttr;
+    const escapeHtml = this.escapeHtml;
 
     const initialData = {
       tasks: initialTasks,
@@ -777,6 +816,7 @@ export class SchedulerWebview {
         .map((f) => f.uri.fsPath)
         .filter(Boolean),
       defaultJitterSeconds,
+      locale: isJa ? "ja-JP" : "en-US",
       strings,
     };
 
@@ -848,6 +888,7 @@ export class SchedulerWebview {
     }
     
     input[type="text"],
+    input[type="number"],
     textarea,
     select {
       width: 100%;
@@ -1122,8 +1163,8 @@ export class SchedulerWebview {
 </head>
 <body>
   <div class="tabs">
-    <button type="button" class="tab-button active" data-tab="create">${strings.tabCreate}</button>
-    <button type="button" class="tab-button" data-tab="list">${strings.tabList}</button>
+    <button type="button" class="tab-button active" data-tab="create">${escapeHtml(strings.tabCreate)}</button>
+    <button type="button" class="tab-button" data-tab="list">${escapeHtml(strings.tabList)}</button>
   </div>
   
   <div id="create-tab" class="tab-content active">
@@ -1132,133 +1173,133 @@ export class SchedulerWebview {
       <input type="hidden" id="edit-task-id" value="">
       
       <div class="form-group">
-        <label for="task-name">${strings.labelTaskName}</label>
+        <label for="task-name">${escapeHtml(strings.labelTaskName)}</label>
         <input type="text" id="task-name" placeholder="${escapeHtmlAttr(strings.placeholderTaskName)}" required>
       </div>
       
       <div class="form-group">
-        <label>${strings.labelPromptType}</label>
+        <label>${escapeHtml(strings.labelPromptType)}</label>
         <div class="radio-group">
           <label>
             <input type="radio" name="prompt-source" value="inline" checked>
-            ${strings.labelPromptInline}
+            ${escapeHtml(strings.labelPromptInline)}
           </label>
           <label>
             <input type="radio" name="prompt-source" value="local">
-            ${strings.labelPromptLocal}
+            ${escapeHtml(strings.labelPromptLocal)}
           </label>
           <label>
             <input type="radio" name="prompt-source" value="global">
-            ${strings.labelPromptGlobal}
+            ${escapeHtml(strings.labelPromptGlobal)}
           </label>
         </div>
       </div>
       
       <div class="form-group" id="template-select-group" style="display: none;">
-        <label for="template-select">${strings.labelPrompt}</label>
+        <label for="template-select">${escapeHtml(strings.labelPrompt)}</label>
         <div class="template-row">
           <select id="template-select">
-            <option value="">${escapeHtmlAttr(strings.placeholderSelectTemplate)}</option>
+            <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
           </select>
-          <button type="button" class="btn-secondary" id="template-refresh-btn">${strings.actionRefresh}</button>
+          <button type="button" class="btn-secondary" id="template-refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
         </div>
       </div>
       
       <div class="form-group" id="prompt-group">
-        <label for="prompt-text">${strings.labelPrompt}</label>
+        <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
         <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
       </div>
       
       <div class="form-group">
-        <label>${strings.labelSchedule}</label>
+        <label>${escapeHtml(strings.labelSchedule)}</label>
         <div class="preset-select">
           <select id="cron-preset">
-            <option value="">${escapeHtmlAttr(strings.labelCustom)}</option>
-            ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtmlAttr(p.name)}</option>`).join("")}
+            <option value="">${escapeHtml(strings.labelCustom)}</option>
+            ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtml(p.name)}</option>`).join("")}
           </select>
         </div>
         <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required>
         <div class="cron-preview">
-          <strong>${strings.labelFriendlyPreview}:</strong>
-          <span id="cron-preview-text">${strings.labelFriendlyFallback}</span>
-          <button type="button" class="btn-secondary btn-icon" id="open-guru-btn">${strings.labelOpenInGuru}</button>
+          <strong>${escapeHtml(strings.labelFriendlyPreview)}:</strong>
+          <span id="cron-preview-text">${escapeHtml(strings.labelFriendlyFallback)}</span>
+          <button type="button" class="btn-secondary btn-icon" id="open-guru-btn">${escapeHtml(strings.labelOpenInGuru)}</button>
         </div>
         <div class="friendly-cron">
-          <div class="section-title">${strings.labelFriendlyBuilder}</div>
+          <div class="section-title">${escapeHtml(strings.labelFriendlyBuilder)}</div>
           <div class="friendly-grid">
             <div class="form-group">
-              <label for="friendly-frequency">${strings.labelFrequency}</label>
+              <label for="friendly-frequency">${escapeHtml(strings.labelFrequency)}</label>
               <select id="friendly-frequency">
-                <option value="">-- ${strings.labelFriendlySelect} --</option>
-                <option value="every-n">${strings.labelEveryNMinutes}</option>
-                <option value="hourly">${strings.labelHourlyAtMinute}</option>
-                <option value="daily">${strings.labelDailyAtTime}</option>
-                <option value="weekly">${strings.labelWeeklyAtTime}</option>
-                <option value="monthly">${strings.labelMonthlyAtTime}</option>
+                <option value="">-- ${escapeHtml(strings.labelFriendlySelect)} --</option>
+                <option value="every-n">${escapeHtml(strings.labelEveryNMinutes)}</option>
+                <option value="hourly">${escapeHtml(strings.labelHourlyAtMinute)}</option>
+                <option value="daily">${escapeHtml(strings.labelDailyAtTime)}</option>
+                <option value="weekly">${escapeHtml(strings.labelWeeklyAtTime)}</option>
+                <option value="monthly">${escapeHtml(strings.labelMonthlyAtTime)}</option>
               </select>
             </div>
             <div class="form-group friendly-field" data-field="interval">
-              <label for="friendly-interval">${strings.labelInterval}</label>
+              <label for="friendly-interval">${escapeHtml(strings.labelInterval)}</label>
               <input type="number" id="friendly-interval" min="1" max="59" value="5">
             </div>
             <div class="form-group friendly-field" data-field="minute">
-              <label for="friendly-minute">${strings.labelMinute}</label>
+              <label for="friendly-minute">${escapeHtml(strings.labelMinute)}</label>
               <input type="number" id="friendly-minute" min="0" max="59" value="0">
             </div>
             <div class="form-group friendly-field" data-field="hour">
-              <label for="friendly-hour">${strings.labelHour}</label>
+              <label for="friendly-hour">${escapeHtml(strings.labelHour)}</label>
               <input type="number" id="friendly-hour" min="0" max="23" value="9">
             </div>
             <div class="form-group friendly-field" data-field="dow">
-              <label for="friendly-dow">${strings.labelDayOfWeek}</label>
+              <label for="friendly-dow">${escapeHtml(strings.labelDayOfWeek)}</label>
               <select id="friendly-dow">
-                <option value="0">${strings.daySun}</option>
-                <option value="1">${strings.dayMon}</option>
-                <option value="2">${strings.dayTue}</option>
-                <option value="3">${strings.dayWed}</option>
-                <option value="4">${strings.dayThu}</option>
-                <option value="5">${strings.dayFri}</option>
-                <option value="6">${strings.daySat}</option>
+                <option value="0">${escapeHtml(strings.daySun)}</option>
+                <option value="1">${escapeHtml(strings.dayMon)}</option>
+                <option value="2">${escapeHtml(strings.dayTue)}</option>
+                <option value="3">${escapeHtml(strings.dayWed)}</option>
+                <option value="4">${escapeHtml(strings.dayThu)}</option>
+                <option value="5">${escapeHtml(strings.dayFri)}</option>
+                <option value="6">${escapeHtml(strings.daySat)}</option>
               </select>
             </div>
             <div class="form-group friendly-field" data-field="dom">
-              <label for="friendly-dom">${strings.labelDayOfMonth}</label>
+              <label for="friendly-dom">${escapeHtml(strings.labelDayOfMonth)}</label>
               <input type="number" id="friendly-dom" min="1" max="31" value="1">
             </div>
           </div>
           <div class="friendly-actions">
-            <button type="button" class="btn-secondary" id="friendly-generate">${strings.labelFriendlyGenerate}</button>
+            <button type="button" class="btn-secondary" id="friendly-generate">${escapeHtml(strings.labelFriendlyGenerate)}</button>
           </div>
         </div>
       </div>
       
       <div class="inline-group">
         <div class="form-group">
-          <label for="agent-select">${strings.labelAgent}</label>
+          <label for="agent-select">${escapeHtml(strings.labelAgent)}</label>
           <select id="agent-select">
-            ${initialAgents.length > 0 ? `<option value="">${escapeHtmlAttr(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtmlAttr(a.name || "")}</option>`).join("") : `<option value="">${escapeHtmlAttr(strings.placeholderNoAgents)}</option>`}
+            ${initialAgents.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtml(a.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoAgents)}</option>`}
           </select>
         </div>
         
         <div class="form-group">
-          <label for="model-select">${strings.labelModel}</label>
+          <label for="model-select">${escapeHtml(strings.labelModel)}</label>
           <select id="model-select">
-            ${initialModels.length > 0 ? `<option value="">${escapeHtmlAttr(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtmlAttr(m.name || "")}</option>`).join("") : `<option value="">${escapeHtmlAttr(strings.placeholderNoModels)}</option>`}
+            ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtml(m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
           </select>
-          <p class="note">${escapeHtmlAttr(strings.labelModelNote)}</p>
+          <p class="note">${escapeHtml(strings.labelModelNote)}</p>
         </div>
       </div>
       
       <div class="form-group">
-        <label>${strings.labelScope}</label>
+        <label>${escapeHtml(strings.labelScope)}</label>
         <div class="radio-group">
           <label>
             <input type="radio" name="scope" value="workspace" ${defaultScope === "workspace" ? "checked" : ""}>
-            ${strings.labelScopeWorkspace}
+            ${escapeHtml(strings.labelScopeWorkspace)}
           </label>
           <label>
             <input type="radio" name="scope" value="global" ${defaultScope === "global" ? "checked" : ""}>
-            ${strings.labelScopeGlobal}
+            ${escapeHtml(strings.labelScopeGlobal)}
           </label>
         </div>
       </div>
@@ -1266,20 +1307,20 @@ export class SchedulerWebview {
       <div class="form-group">
         <div class="checkbox-group">
           <input type="checkbox" id="run-first">
-          <label for="run-first">${strings.labelRunFirstInOneMinute}</label>
+          <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
         </div>
       </div>
 
       <div class="form-group">
-        <label for="jitter-seconds">${strings.labelJitterSeconds}</label>
+        <label for="jitter-seconds">${escapeHtml(strings.labelJitterSeconds)}</label>
         <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
-        <p class="note" style="margin-top:4px;">${escapeHtmlAttr(strings.webviewJitterNote)}</p>
+        <p class="note">${escapeHtml(strings.webviewJitterNote)}</p>
       </div>
       
       <div class="button-group">
-        <button type="submit" class="btn-primary" id="submit-btn">${strings.actionCreate}</button>
-        <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${strings.actionNewTask}</button>
-        <button type="button" class="btn-secondary" id="test-btn">${strings.actionTestRun}</button>
+        <button type="submit" class="btn-primary" id="submit-btn">${escapeHtml(strings.actionCreate)}</button>
+        <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${escapeHtml(strings.actionNewTask)}</button>
+        <button type="button" class="btn-secondary" id="test-btn">${escapeHtml(strings.actionTestRun)}</button>
       </div>
     </form>
   </div>
@@ -1287,10 +1328,10 @@ export class SchedulerWebview {
   <div id="list-tab" class="tab-content">
     <div id="success-toast" style="display:none; background:var(--vscode-notificationsInfoIcon-foreground, #3794ff); color:#fff; padding:8px 14px; border-radius:4px; margin-bottom:12px; font-size:13px; opacity:1; transition:opacity 0.5s ease-out;"></div>
     <div class="button-group" style="margin-bottom: 16px;">
-      <button class="btn-secondary" id="refresh-btn">${strings.actionRefresh}</button>
+      <button class="btn-secondary" id="refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
     </div>
     <div id="task-list" class="task-list">
-      <div class="empty-state">${strings.noTasksFound}</div>
+      <div class="empty-state">${escapeHtml(strings.noTasksFound)}</div>
     </div>
   </div>
   

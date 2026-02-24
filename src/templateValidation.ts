@@ -1,5 +1,6 @@
 import * as path from "path";
 import type { PromptSource, PromptTemplate } from "./types";
+import { normalizeForCompare } from "./promptResolver";
 
 export type TemplateLoadValidationInput = {
   templatePath: string;
@@ -21,11 +22,6 @@ export type TemplateLoadValidationResult =
         | "noAllowedRoots"
         | "notAllowed";
     };
-
-function normalizeForCompare(p: string): string {
-  const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? n.toLowerCase() : n;
-}
 
 function isInside(baseDir: string, target: string): boolean {
   const base = normalizeForCompare(baseDir);
@@ -54,7 +50,8 @@ export function validateTemplateLoadRequest(
   const resolvedTarget = path.resolve(templatePath);
   const normalizedTarget = normalizeForCompare(resolvedTarget);
   const cached = input.cachedTemplates.find(
-    (t) => t.source === source && normalizeForCompare(t.path) === normalizedTarget,
+    (t) =>
+      t.source === source && normalizeForCompare(t.path) === normalizedTarget,
   );
   if (!cached) {
     return { ok: false, reason: "notInCache" };

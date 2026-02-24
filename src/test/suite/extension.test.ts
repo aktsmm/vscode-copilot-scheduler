@@ -45,6 +45,16 @@ suite("Extension Test Suite", () => {
     for (const cmd of expectedCommands) {
       assert.ok(commands.includes(cmd), `Command ${cmd} should be registered`);
     }
+
+    // Verify no unexpected copilotScheduler commands exist (P6)
+    const registeredSchedulerCommands = commands.filter((cmd) =>
+      cmd.startsWith("copilotScheduler."),
+    );
+    assert.strictEqual(
+      registeredSchedulerCommands.length,
+      expectedCommands.length,
+      `Expected ${expectedCommands.length} copilotScheduler commands but found ${registeredSchedulerCommands.length}. Update expectedCommands when adding new commands.`,
+    );
   });
 });
 

@@ -60,6 +60,7 @@ export const messages = {
     t(`Task "${name}" deleted`, `タスク「${name}」を削除しました`),
   taskDuplicated: (name: string) =>
     t(`Task duplicated as "${name}"`, `タスクを「${name}」として複製しました`),
+  taskCopySuffix: () => t("(Copy)", "(コピー)"),
   taskMovedToCurrentWorkspace: (name: string) =>
     t(
       `Task "${name}" moved to the current workspace`,
@@ -191,6 +192,23 @@ export const messages = {
       "プロンプトをクリップボードにコピーしました",
     ),
 
+  // ==================== Agent / Model Descriptions ====================
+  agentNoneName: () => t("None", "なし"),
+  agentNoneDesc: () => t("Default behavior", "デフォルトの動作"),
+  agentModeDesc: () =>
+    t("Agent mode with tool use", "ツール利用のエージェントモード"),
+  agentAskDesc: () => t("Questions about code", "コードに関する質問"),
+  agentEditDesc: () => t("AI code editing", "AIでコード編集"),
+  agentWorkspaceDesc: () => t("Codebase search", "コードベース検索"),
+  agentTerminalDesc: () => t("Terminal operations", "ターミナル操作"),
+  agentVscodeDesc: () =>
+    t("VS Code settings and commands", "VS Code設定とコマンド"),
+  agentCustomDesc: () => t("Custom agent", "カスタムエージェント"),
+  agentAgentsMdDesc: () => t("Defined in AGENTS.md", "AGENTS.mdで定義"),
+  agentGlobalDesc: () => t("Global agent", "グローバルエージェント"),
+  modelDefaultName: () => t("Default", "デフォルト"),
+  modelDefaultDesc: () => t("Use default model", "デフォルトモデルを使用"),
+
   // ==================== Execution Errors ====================
   autoExecuteFailed: () =>
     t(
@@ -294,8 +312,7 @@ export const messages = {
   cronPreviewHourlyAtMinute: () => t("Hourly at minute {m}", "毎時 {m}分"),
   cronPreviewDailyAt: () => t("Daily at {t}", "毎日 {t}"),
   cronPreviewWeekdaysAt: () => t("Weekdays at {t}", "平日 {t}"),
-  cronPreviewWeeklyOnAt: () =>
-    t("Weekly on {d} at {t}", "毎週 {d} {t}"),
+  cronPreviewWeeklyOnAt: () => t("Weekly on {d} at {t}", "毎週 {d} {t}"),
   cronPreviewMonthlyOnAt: () =>
     t("Monthly on day {dom} at {t}", "毎月{dom}日 {t}"),
 
@@ -324,27 +341,6 @@ export const messages = {
       `Copilot Scheduler が v${version} に更新されました。新しいバージョンを有効にするにはリロードしてください。`,
     ),
   reloadNow: () => t("Reload Now", "今すぐリロード"),
-
-  // ==================== Settings ====================
-  openingSettings: () =>
-    t(
-      "Opening Copilot Scheduler settings...",
-      "Copilot Scheduler の設定を開いています...",
-    ),
-
-  // ==================== Agents ====================
-  agentNone: () => t("None (Default)", "なし（デフォルト）"),
-  agentAgent: () => t("Agent (Tool use)", "Agent（ツール利用）"),
-  agentAsk: () => t("Ask (Code questions)", "Ask（コード質問）"),
-  agentEdit: () => t("Edit (AI code editing)", "Edit（AIコード編集）"),
-  agentWorkspace: () =>
-    t("@workspace (Codebase search)", "@workspace（コードベース検索）"),
-  agentTerminal: () =>
-    t("@terminal (Terminal operations)", "@terminal（ターミナル操作）"),
-  agentVscode: () => t("@vscode (VS Code settings)", "@vscode（VS Code設定）"),
-
-  // ==================== Models ====================
-  modelDefault: () => t("Default", "デフォルト"),
 
   // ==================== Date/Time ====================
   formatDateTime: (date: Date) => {
@@ -380,11 +376,10 @@ export const messages = {
       "Only workspace-scoped tasks can be moved",
       "移動できるのはワークスペーススコープのタスクのみです",
     ),
-  workspaceTaskSkipped: (name: string) =>
-    t(
-      `Task "${name}" skipped (workspace-specific)`,
-      `タスク「${name}」をスキップしました（ワークスペース固有）`,
-    ),
+  // ==================== Tooltip ====================
+  tooltipWorkspaceTarget: () => t("Target Workspace", "対象ワークスペース"),
+  tooltipNotSet: () => t("(not set)", "(未設定)"),
+  tooltipAppliesHere: () => t("Applies here", "このワークスペース"),
 
   // ==================== Safety / Rate Limiting ====================
   dailyLimitReached: (limit: number) =>
@@ -419,15 +414,6 @@ export const messages = {
     t(
       "⚠️ Daily execution limit is set to unlimited (0). Excessive automated usage may result in API rate-limiting or account restrictions by the provider. Use at your own risk.",
       "⚠️ 1日の実行回数上限が無制限（0）に設定されています。過度な自動利用はAPIプロバイダーによるレート制限やアカウント制限の原因となる可能性があります。自己責任でご利用ください。",
-    ),
-  dailyExecutionCount: (count: number, limit: number) =>
-    t(
-      limit === 0
-        ? `Today's executions: ${count} (unlimited)`
-        : `Today's executions: ${count}/${limit}`,
-      limit === 0
-        ? `本日の実行回数: ${count} (無制限)`
-        : `本日の実行回数: ${count}/${limit}`,
     ),
 };
 
