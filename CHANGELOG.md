@@ -5,6 +5,20 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-02-24
+
+### Fixed
+
+- **Command error handling**: Wrapped remaining command handlers with consistent try/catch to avoid unhandled failures.
+- **Template safety**: Prevented `.agent.md` files from being treated/loaded as prompt templates.
+- **Path normalization edge cases**: Preserved filesystem root handling during normalization (avoids collapsing `/` to empty) and tightened containment checks.
+
+### Improved
+
+- **Webview consistency**: Added case-insensitive path compare support on Windows and localized success-toast prefix.
+- **Resilience**: Healed corrupted/invalid persisted Date fields to avoid JSON serialization breakage.
+- **Tooltip robustness**: Avoided Markdown code fence breakage when user content contains ```.
+
 ## [1.0.8] - 2026-02-24
 
 ### Fixed
