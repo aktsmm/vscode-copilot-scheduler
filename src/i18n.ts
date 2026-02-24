@@ -91,6 +91,11 @@ export const messages = {
   taskNameRequired: () =>
     t("Task name is required", "タスク名を入力してください"),
   promptRequired: () => t("Prompt is required", "プロンプトを入力してください"),
+  templateRequired: () =>
+    t(
+      "Prompt template is required",
+      "プロンプトテンプレートを選択してください",
+    ),
   cronExpressionRequired: () =>
     t("Cron expression is required", "cron式を入力してください"),
 

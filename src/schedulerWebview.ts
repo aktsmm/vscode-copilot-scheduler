@@ -331,6 +331,13 @@ export class SchedulerWebview {
   }
 
   /**
+   * Force the webview into "create new task" mode (clears edit state and form).
+   */
+  static startCreateTask(): void {
+    this.postMessage({ type: "startCreateTask" });
+  }
+
+  /**
    * Focus on a specific task
    */
   static focusTask(taskId: string): void {
@@ -727,6 +734,7 @@ export class SchedulerWebview {
       invalidCronExpression: messages.invalidCronExpression(),
       taskNameRequired: messages.taskNameRequired(),
       promptRequired: messages.promptRequired(),
+      templateRequired: messages.templateRequired(),
       cronExpressionRequired: messages.cronExpressionRequired(),
       actionCreate: messages.actionCreate(),
       actionSave: messages.actionSave(),

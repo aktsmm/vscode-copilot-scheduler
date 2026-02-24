@@ -330,6 +330,15 @@
         return;
       }
 
+      var templateValue = (taskData.promptPath || "").trim();
+      if (promptSourceValue !== "inline" && !templateValue) {
+        if (formErr) {
+          formErr.textContent = strings.templateRequired || "";
+          formErr.style.display = "block";
+        }
+        return;
+      }
+
       var promptValue = (taskData.prompt || "").trim();
       if (!promptValue) {
         if (formErr) {
@@ -502,7 +511,9 @@
 
     if (taskItems.length === 0) {
       renderedTasks =
-        '<div class="empty-state">' + escapeHtml(strings.noTasksFound) + "</div>";
+        '<div class="empty-state">' +
+        escapeHtml(strings.noTasksFound) +
+        "</div>";
     } else {
       renderedTasks = taskItems
         .map(function (task) {
@@ -658,7 +669,9 @@
 
       if (!renderedTasks) {
         renderedTasks =
-          '<div class="empty-state">' + escapeHtml(strings.noTasksFound) + "</div>";
+          '<div class="empty-state">' +
+          escapeHtml(strings.noTasksFound) +
+          "</div>";
       }
     }
 
@@ -1388,6 +1401,22 @@
           if (message.taskId && typeof window.editTask === "function") {
             window.editTask(message.taskId);
           }
+          break;
+        case "startCreateTask":
+          pendingSubmit = false;
+          if (submitBtn) submitBtn.disabled = false;
+          resetForm();
+          switchTab("create");
+          setTimeout(function () {
+            try {
+              var taskNameEl = document.getElementById("task-name");
+              if (taskNameEl && typeof taskNameEl.focus === "function") {
+                taskNameEl.focus();
+              }
+            } catch (e) {
+              // ignore
+            }
+          }, 0);
           break;
         case "showError":
           if (message.text) {

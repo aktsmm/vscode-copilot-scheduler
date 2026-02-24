@@ -10,8 +10,9 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
-import { logError } from "./logger";
+import { logDebug, logError } from "./logger";
 import {
+  normalizeForCompare,
   resolveGlobalPromptPath,
   resolveLocalPromptPath,
   resolveGlobalPromptsRoot,
@@ -89,7 +90,8 @@ async function syncPromptTemplatesIfNeeded(
     if (task.promptSource === "inline") continue;
     if (!task.promptPath) continue;
     try {
-      const latest = await resolvePromptText(task);
+      // Background sync should only read persisted file contents.
+      const latest = await resolvePromptText(task, false);
       if (latest && latest !== task.prompt) {
         // Avoid syncing empty prompts (would break validation and UX)
         if (latest.trim()) {
@@ -348,12 +350,27 @@ async function executeTask(task: ScheduledTask): Promise<void> {
 /**
  * Resolve prompt text from task (inline, local, or global)
  */
-async function resolvePromptText(task: ScheduledTask): Promise<string> {
+async function resolvePromptText(
+  task: ScheduledTask,
+  preferOpenDocument = true,
+): Promise<string> {
   if (task.promptSource === "inline") {
+    logDebug(`[CopilotScheduler] resolvePromptText: inline (task=${task.id})`);
     return task.prompt;
   }
 
   if (!task.promptPath) {
+    logDebug(
+      `[CopilotScheduler] resolvePromptText: missing promptPath (source=${task.promptSource}, task=${task.id})`,
+    );
+    return task.prompt;
+  }
+
+  const promptPath = task.promptPath.trim();
+  if (!promptPath) {
+    logDebug(
+      `[CopilotScheduler] resolvePromptText: empty promptPath (source=${task.promptSource}, task=${task.id})`,
+    );
     return task.prompt;
   }
 
@@ -361,15 +378,31 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
   let filePath: string | undefined;
 
   if (task.promptSource === "global") {
-    filePath = resolveGlobalPromptPath(getGlobalPromptsRoot(), task.promptPath);
+    filePath = resolveGlobalPromptPath(getGlobalPromptsRoot(), promptPath);
   } else if (task.promptSource === "local") {
-    filePath = resolveLocalPromptPath(
-      getWorkspaceFolderPaths(),
-      task.promptPath,
-    );
+    filePath = resolveLocalPromptPath(getWorkspaceFolderPaths(), promptPath);
   }
 
   if (filePath) {
+    if (preferOpenDocument) {
+      // Prefer in-memory document text when the file is open (supports unsaved edits).
+      const normalizedTarget = normalizeForCompare(filePath);
+      const openDoc = vscode.workspace.textDocuments.find(
+        (d) =>
+          d.uri.scheme === "file" &&
+          normalizeForCompare(d.uri.fsPath) === normalizedTarget,
+      );
+      if (openDoc) {
+        const text = openDoc.getText();
+        if (text.trim()) {
+          logDebug(
+            `[CopilotScheduler] resolvePromptText: openDocument (file=${path.basename(filePath)}, dirty=${openDoc.isDirty}, task=${task.id})`,
+          );
+          return text;
+        }
+      }
+    }
+
     try {
       const bytes = await vscode.workspace.fs.readFile(
         vscode.Uri.file(filePath),
@@ -377,13 +410,29 @@ async function resolvePromptText(task: ScheduledTask): Promise<string> {
       const content = Buffer.from(bytes).toString("utf8");
       // If the template file is empty, fall back to the task's stored prompt.
       if (content.trim()) {
+        logDebug(
+          `[CopilotScheduler] resolvePromptText: file (file=${path.basename(filePath)}, task=${task.id})`,
+        );
         return content;
       }
-    } catch {
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+      logDebug(
+        `[CopilotScheduler] resolvePromptText: readFile failed (file=${path.basename(filePath)}, task=${task.id})`,
+        errorMessage,
+      );
       // Fall back to inline prompt (file may not exist or be unreadable)
     }
+  } else {
+    logDebug(
+      `[CopilotScheduler] resolvePromptText: path resolution failed (source=${task.promptSource}, file=${path.basename(promptPath)}, task=${task.id})`,
+    );
   }
 
+  logDebug(
+    `[CopilotScheduler] resolvePromptText: fallback to stored prompt (source=${task.promptSource}, task=${task.id})`,
+  );
   return task.prompt;
 }
 
@@ -674,6 +723,9 @@ function registerCreateTaskGuiCommand(
             }
           },
         );
+
+        // Ensure the '+' command always opens the webview in "new task" mode.
+        SchedulerWebview.startCreateTask();
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
@@ -879,9 +931,7 @@ function registerEnableTaskCommand(): vscode.Disposable {
           taskId = item.task.id;
         } else {
           // Show quick pick to select a disabled task
-          const tasks = scheduleManager
-            .getAllTasks()
-            .filter((t) => !t.enabled);
+          const tasks = scheduleManager.getAllTasks().filter((t) => !t.enabled);
           if (tasks.length === 0) {
             notifyInfo(messages.noTasksFound());
             return;
@@ -926,9 +976,7 @@ function registerDisableTaskCommand(): vscode.Disposable {
           taskId = item.task.id;
         } else {
           // Show quick pick to select an enabled task
-          const tasks = scheduleManager
-            .getAllTasks()
-            .filter((t) => t.enabled);
+          const tasks = scheduleManager.getAllTasks().filter((t) => t.enabled);
           if (tasks.length === 0) {
             notifyInfo(messages.noTasksFound());
             return;
