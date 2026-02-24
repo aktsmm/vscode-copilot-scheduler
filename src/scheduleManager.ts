@@ -322,13 +322,13 @@ export class ScheduleManager {
    * Check if a cron expression has a short interval and return warning if so
    */
   checkMinimumInterval(cronExpression: string): string | undefined {
-    try {
-      const options: { currentDate: Date; tz?: string } = {
-        currentDate: new Date(),
-      };
-      const tz = this.getTimeZone();
-      if (tz) options.tz = tz;
+    const currentDate = new Date();
+    const tz = this.getTimeZone();
 
+    const check = (options: {
+      currentDate: Date;
+      tz?: string;
+    }): string | undefined => {
       const interval = parseExpression(cronExpression, options);
       const first = interval.next().toDate();
       const second = interval.next().toDate();
@@ -337,10 +337,22 @@ export class ScheduleManager {
       if (diffMinutes < 30) {
         return messages.minimumIntervalWarning();
       }
+      return undefined;
+    };
+
+    try {
+      return check(tz ? { currentDate, tz } : { currentDate });
     } catch {
-      // If parsing fails, skip interval check
+      // If parsing fails with the configured timezone, fall back to local time (U9).
+      if (tz) {
+        try {
+          return check({ currentDate });
+        } catch {
+          // If parsing fails, skip interval check
+        }
+      }
+      return undefined;
     }
-    return undefined;
   }
 
   // ==================== Safety: Disclaimer ====================
