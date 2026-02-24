@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-02-24
+
+### Fixed
+
+- **Minimum interval warning**: `checkMinimumInterval()` now falls back to local time when the configured timezone is invalid, so short-interval cron warnings still work.
+
+### Tests
+
+- Added unit tests covering the invalid-timezone fallback behavior.
+
 ## [1.0.9] - 2026-02-24
 
 ### Fixed
