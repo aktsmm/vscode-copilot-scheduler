@@ -136,8 +136,21 @@ export class ScheduledTaskItem extends vscode.TreeItem {
 
     const task = this.task;
 
-    const safeName = task.name.replace(/([\\`*_{}[\]()#+\-.!|>~<])/g, "\\$1");
-    md.appendMarkdown(`### ${safeName}\n\n`);
+    const toSingleLine = (value: string): string =>
+      value.replace(/[\r\n]+/g, " ").trim();
+
+    const appendSafeCodeblock = (value: string): void => {
+      // Markdown code fences break if the content contains ```.
+      if (value.includes("```")) {
+        md.appendText(value);
+      } else {
+        md.appendCodeblock(value);
+      }
+    };
+
+    md.appendMarkdown("### ");
+    md.appendText(toSingleLine(task.name));
+    md.appendMarkdown("\n\n");
 
     // Status
     const statusValue = task.enabled
@@ -146,9 +159,16 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     md.appendMarkdown(`**${messages.labelStatus()}:** ${statusValue}\n\n`);
 
     // Schedule
-    md.appendMarkdown(
-      `**${messages.labelSchedule()}:** \`${task.cronExpression}\`\n\n`,
-    );
+    const cronExpressionForDisplay = toSingleLine(task.cronExpression);
+    if (cronExpressionForDisplay.includes("`")) {
+      md.appendMarkdown(`**${messages.labelSchedule()}:**\n\n`);
+      appendSafeCodeblock(cronExpressionForDisplay);
+      md.appendMarkdown("\n");
+    } else {
+      md.appendMarkdown(`**${messages.labelSchedule()}:** \``);
+      md.appendText(cronExpressionForDisplay);
+      md.appendMarkdown("`\n\n");
+    }
 
     // Scope / workspace
     const scopeValue =
@@ -161,7 +181,7 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       const wsPath = task.workspacePath || "";
       md.appendMarkdown(`**${messages.tooltipWorkspaceTarget()}:**\n\n`);
       if (wsPath) {
-        md.appendCodeblock(wsPath);
+        appendSafeCodeblock(wsPath);
       } else {
         md.appendMarkdown(`${messages.tooltipNotSet()}\n\n`);
       }
@@ -190,20 +210,16 @@ export class ScheduledTaskItem extends vscode.TreeItem {
 
     // Agent
     if (task.agent) {
-      const safeAgent = task.agent.replace(
-        /([\\`*_{}[\]()#+\-.!|>~<])/g,
-        "\\$1",
-      );
-      md.appendMarkdown(`**${messages.labelAgent()}:** ${safeAgent}\n\n`);
+      md.appendMarkdown(`**${messages.labelAgent()}:** `);
+      md.appendText(toSingleLine(task.agent));
+      md.appendMarkdown("\n\n");
     }
 
     // Model
     if (task.model) {
-      const safeModel = task.model.replace(
-        /([\\`*_{}[\]()#+\-.!|>~<])/g,
-        "\\$1",
-      );
-      md.appendMarkdown(`**${messages.labelModel()}:** ${safeModel}\n\n`);
+      md.appendMarkdown(`**${messages.labelModel()}:** `);
+      md.appendText(toSingleLine(task.model));
+      md.appendMarkdown("\n\n");
     }
 
     // Prompt preview
@@ -212,7 +228,12 @@ export class ScheduledTaskItem extends vscode.TreeItem {
         ? task.prompt.substring(0, 100) + "..."
         : task.prompt;
     md.appendMarkdown(`**${messages.labelPrompt()}:**\n\n`);
-    md.appendCodeblock(promptPreview);
+    if (promptPreview.includes("```")) {
+      // Avoid breaking the surrounding markdown code fence.
+      md.appendText(promptPreview);
+    } else {
+      md.appendCodeblock(promptPreview);
+    }
 
     return md;
   }

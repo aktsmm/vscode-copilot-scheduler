@@ -141,6 +141,8 @@ export const messages = {
   webviewClientErrorPrefix: () =>
     t("Webview error: ", "画面処理でエラーが発生しました: "),
 
+  webviewSuccessPrefix: () => t("✔ ", "✔ "),
+
   // ==================== Webview Placeholders ====================
   webviewSelectAgentPlaceholder: () =>
     t("-- Select Agent --", "-- エージェントを選択 --"),

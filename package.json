@@ -36,82 +36,82 @@
       {
         "command": "copilotScheduler.createTask",
         "title": "%command.createTask%",
-        "category": "Copilot Scheduler"
+        "category": "%extension.title%"
       },
       {
         "command": "copilotScheduler.createTaskGui",
         "title": "%command.createTaskGui%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(add)"
       },
       {
         "command": "copilotScheduler.listTasks",
         "title": "%command.listTasks%",
-        "category": "Copilot Scheduler"
+        "category": "%extension.title%"
       },
       {
         "command": "copilotScheduler.deleteTask",
         "title": "%command.deleteTask%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(trash)"
       },
       {
         "command": "copilotScheduler.toggleTask",
         "title": "%command.toggleTask%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(debug-pause)"
       },
       {
         "command": "copilotScheduler.enableTask",
         "title": "%command.enableTask%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(play-circle)"
       },
       {
         "command": "copilotScheduler.disableTask",
         "title": "%command.disableTask%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(stop-circle)"
       },
       {
         "command": "copilotScheduler.runNow",
         "title": "%command.runNow%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(play)"
       },
       {
         "command": "copilotScheduler.copyPrompt",
         "title": "%command.copyPrompt%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(copy)"
       },
       {
         "command": "copilotScheduler.editTask",
         "title": "%command.editTask%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(edit)"
       },
       {
         "command": "copilotScheduler.duplicateTask",
         "title": "%command.duplicateTask%",
-        "category": "Copilot Scheduler"
+        "category": "%extension.title%"
       },
       {
         "command": "copilotScheduler.moveToCurrentWorkspace",
         "title": "%command.moveToCurrentWorkspace%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(pin)"
       },
       {
         "command": "copilotScheduler.openSettings",
         "title": "%command.openSettings%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(settings-gear)"
       },
       {
         "command": "copilotScheduler.showVersion",
         "title": "%command.showVersion%",
-        "category": "Copilot Scheduler",
+        "category": "%extension.title%",
         "icon": "$(info)"
       }
     ],

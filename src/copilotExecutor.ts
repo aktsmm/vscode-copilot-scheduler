@@ -254,7 +254,9 @@ export class CopilotExecutor {
     );
 
     for (const file of agentFiles) {
-      const fileName = path.basename(file.fsPath, ".agent.md");
+      const fileName = path
+        .basename(file.fsPath)
+        .replace(/\.agent\.md$/i, "");
       agents.push({
         id: `@${fileName}`,
         name: `@${fileName}`,
@@ -324,8 +326,8 @@ export class CopilotExecutor {
       );
       for (const [fileName, fileType] of entries) {
         if (fileType !== vscode.FileType.File) continue;
-        if (fileName.endsWith(".agent.md")) {
-          const agentName = path.basename(fileName, ".agent.md");
+        if (fileName.toLowerCase().endsWith(".agent.md")) {
+          const agentName = fileName.replace(/\.agent\.md$/i, "");
           agents.push({
             id: `@${agentName}`,
             name: `@${agentName}`,

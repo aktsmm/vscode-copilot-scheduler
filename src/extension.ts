@@ -609,27 +609,27 @@ function registerCreateTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.createTask",
     async () => {
-      // CLI-style task creation using InputBox
-      const name = await vscode.window.showInputBox({
-        prompt: messages.enterTaskName(),
-        placeHolder: messages.placeholderTaskName(),
-      });
-      if (!name) return;
-
-      const prompt = await vscode.window.showInputBox({
-        prompt: messages.enterPrompt(),
-        placeHolder: messages.placeholderPrompt(),
-      });
-      if (!prompt) return;
-
-      const cronExpression = await vscode.window.showInputBox({
-        prompt: messages.enterCronExpression(),
-        placeHolder: messages.placeholderCron(),
-        value: "0 9 * * 1-5",
-      });
-      if (!cronExpression) return;
-
       try {
+        // CLI-style task creation using InputBox
+        const name = await vscode.window.showInputBox({
+          prompt: messages.enterTaskName(),
+          placeHolder: messages.placeholderTaskName(),
+        });
+        if (!name) return;
+
+        const prompt = await vscode.window.showInputBox({
+          prompt: messages.enterPrompt(),
+          placeHolder: messages.placeholderPrompt(),
+        });
+        if (!prompt) return;
+
+        const cronExpression = await vscode.window.showInputBox({
+          prompt: messages.enterCronExpression(),
+          placeHolder: messages.placeholderCron(),
+          value: "0 9 * * 1-5",
+        });
+        if (!cronExpression) return;
+
         await maybeWarnCronInterval(cronExpression);
         const task = await scheduleManager.createTask({
           name,
@@ -756,62 +756,62 @@ function registerDeleteTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.deleteTask",
     async (item?: ScheduledTaskItem) => {
-      let task: ScheduledTask | undefined;
+      try {
+        let task: ScheduledTask | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        task = item.task;
-      } else {
-        // Show quick pick to select task
-        const tasks = scheduleManager
-          .getAllTasks()
-          .filter(
-            (t) =>
-              t.scope === "global" ||
-              scheduleManager.shouldTaskRunInCurrentWorkspace(t),
+        if (item instanceof ScheduledTaskItem) {
+          task = item.task;
+        } else {
+          // Show quick pick to select task
+          const tasks = scheduleManager
+            .getAllTasks()
+            .filter(
+              (t) =>
+                t.scope === "global" ||
+                scheduleManager.shouldTaskRunInCurrentWorkspace(t),
+            );
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: t.name,
+              description: t.cronExpression,
+              task: t,
+            })),
+            { placeHolder: messages.selectTask() },
           );
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
+
+          if (!selected) return;
+          task = selected.task;
+        }
+
+        if (
+          task.scope === "workspace" &&
+          !scheduleManager.shouldTaskRunInCurrentWorkspace(task)
+        ) {
+          notifyError(messages.cannotDeleteOtherWorkspaceTask(task.name));
           return;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: t.name,
-            description: t.cronExpression,
-            task: t,
-          })),
-          { placeHolder: messages.selectTask() },
+        // Confirm deletion
+        const confirm = await vscode.window.showWarningMessage(
+          messages.confirmDelete(task.name),
+          { modal: true },
+          messages.confirmDeleteYes(),
         );
 
-        if (!selected) return;
-        task = selected.task;
-      }
-
-      if (
-        task.scope === "workspace" &&
-        !scheduleManager.shouldTaskRunInCurrentWorkspace(task)
-      ) {
-        notifyError(messages.cannotDeleteOtherWorkspaceTask(task.name));
-        return;
-      }
-
-      // Confirm deletion
-      const confirm = await vscode.window.showWarningMessage(
-        messages.confirmDelete(task.name),
-        { modal: true },
-        messages.confirmDeleteYes(),
-      );
-
-      if (confirm === messages.confirmDeleteYes()) {
-        try {
+        if (confirm === messages.confirmDeleteYes()) {
           await scheduleManager.deleteTask(task.id);
           notifyInfo(messages.taskDeleted(task.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          notifyError(errorMessage);
         }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        notifyError(errorMessage);
       }
     },
   );
@@ -821,32 +821,32 @@ function registerToggleTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.toggleTask",
     async (item?: ScheduledTaskItem) => {
-      let taskId: string | undefined;
+      try {
+        let taskId: string | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        taskId = item.task.id;
-      } else {
-        // Show quick pick to select task
-        const tasks = scheduleManager.getAllTasks();
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          taskId = item.task.id;
+        } else {
+          // Show quick pick to select task
+          const tasks = scheduleManager.getAllTasks();
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: `${t.enabled ? "✅" : "⏸️"} ${t.name}`,
+              description: t.cronExpression,
+              id: t.id,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          taskId = selected.id;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: `${t.enabled ? "✅" : "⏸️"} ${t.name}`,
-            description: t.cronExpression,
-            id: t.id,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        taskId = selected.id;
-      }
-
-      try {
         const task = await scheduleManager.toggleTask(taskId);
         if (task) {
           notifyInfo(
@@ -872,32 +872,34 @@ function registerEnableTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.enableTask",
     async (item?: ScheduledTaskItem) => {
-      let taskId: string | undefined;
+      try {
+        let taskId: string | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        taskId = item.task.id;
-      } else {
-        // Show quick pick to select a disabled task
-        const tasks = scheduleManager.getAllTasks().filter((t) => !t.enabled);
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          taskId = item.task.id;
+        } else {
+          // Show quick pick to select a disabled task
+          const tasks = scheduleManager
+            .getAllTasks()
+            .filter((t) => !t.enabled);
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: `⏸️ ${t.name}`,
+              description: t.cronExpression,
+              id: t.id,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          taskId = selected.id;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: `⏸️ ${t.name}`,
-            description: t.cronExpression,
-            id: t.id,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        taskId = selected.id;
-      }
-
-      try {
         const task = await scheduleManager.setTaskEnabled(taskId, true);
         if (task) {
           notifyInfo(messages.taskEnabled(task.name));
@@ -917,32 +919,34 @@ function registerDisableTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.disableTask",
     async (item?: ScheduledTaskItem) => {
-      let taskId: string | undefined;
+      try {
+        let taskId: string | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        taskId = item.task.id;
-      } else {
-        // Show quick pick to select an enabled task
-        const tasks = scheduleManager.getAllTasks().filter((t) => t.enabled);
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          taskId = item.task.id;
+        } else {
+          // Show quick pick to select an enabled task
+          const tasks = scheduleManager
+            .getAllTasks()
+            .filter((t) => t.enabled);
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: `✅ ${t.name}`,
+              description: t.cronExpression,
+              id: t.id,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          taskId = selected.id;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: `✅ ${t.name}`,
-            description: t.cronExpression,
-            id: t.id,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        taskId = selected.id;
-      }
-
-      try {
         const task = await scheduleManager.setTaskEnabled(taskId, false);
         if (task) {
           notifyInfo(messages.taskDisabled(task.name));
@@ -961,39 +965,39 @@ function registerRunNowCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.runNow",
     async (item?: ScheduledTaskItem) => {
-      let task: ScheduledTask | undefined;
+      try {
+        let task: ScheduledTask | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        task = item.task;
-      } else {
-        // Show quick pick to select task
-        const tasks = scheduleManager.getAllTasks();
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
+        if (item instanceof ScheduledTaskItem) {
+          task = item.task;
+        } else {
+          // Show quick pick to select task
+          const tasks = scheduleManager.getAllTasks();
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: t.name,
+              description: t.cronExpression,
+              task: t,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          task = selected.task;
+        }
+
+        const confirmed = await confirmManualRunIfWorkspaceMismatch(task);
+        if (!confirmed) {
           return;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: t.name,
-            description: t.cronExpression,
-            task: t,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        task = selected.task;
-      }
-
-      const confirmed = await confirmManualRunIfWorkspaceMismatch(task);
-      if (!confirmed) {
-        return;
-      }
-
-      // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-      // Do not retry on failure — executePrompt already shows a warning.
-      try {
+        // Manual run: no jitter / no daily limit. Persist lastRun when possible.
+        // Do not retry on failure — executePrompt already shows a warning.
         await scheduleManager.runTaskNow(task.id);
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       } catch (error) {
@@ -1009,35 +1013,35 @@ function registerCopyPromptCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.copyPrompt",
     async (item?: ScheduledTaskItem) => {
-      let task: ScheduledTask | undefined;
+      try {
+        let task: ScheduledTask | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        task = item.task;
-      } else {
-        // Show quick pick to select task
-        const tasks = scheduleManager.getAllTasks();
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          task = item.task;
+        } else {
+          // Show quick pick to select task
+          const tasks = scheduleManager.getAllTasks();
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: t.name,
+              description:
+                t.prompt.length > 50
+                  ? t.prompt.substring(0, 50) + "..."
+                  : t.prompt,
+              task: t,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          task = selected.task;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: t.name,
-            description:
-              t.prompt.length > 50
-                ? t.prompt.substring(0, 50) + "..."
-                : t.prompt,
-            task: t,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        task = selected.task;
-      }
-
-      try {
         const promptText = await resolvePromptText(task);
         await vscode.env.clipboard.writeText(promptText);
         notifyInfo(messages.promptCopied());
@@ -1054,32 +1058,32 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.duplicateTask",
     async (item?: ScheduledTaskItem) => {
-      let taskId: string | undefined;
+      try {
+        let taskId: string | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        taskId = item.task.id;
-      } else {
-        // Show quick pick to select task
-        const tasks = scheduleManager.getAllTasks();
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          taskId = item.task.id;
+        } else {
+          // Show quick pick to select task
+          const tasks = scheduleManager.getAllTasks();
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: t.name,
+              description: t.cronExpression,
+              id: t.id,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          taskId = selected.id;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: t.name,
-            description: t.cronExpression,
-            id: t.id,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        taskId = selected.id;
-      }
-
-      try {
         const duplicated = await scheduleManager.duplicateTask(taskId);
         if (duplicated) {
           notifyInfo(messages.taskDuplicated(duplicated.name));
@@ -1098,33 +1102,35 @@ function registerMoveToCurrentWorkspaceCommand(): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.moveToCurrentWorkspace",
     async (item?: ScheduledTaskItem) => {
-      let task: ScheduledTask | undefined;
+      try {
+        let task: ScheduledTask | undefined;
 
-      if (item instanceof ScheduledTaskItem) {
-        task = item.task;
-      } else {
-        const tasks = scheduleManager
-          .getAllTasks()
-          .filter((t) => t.scope === "workspace");
-        if (tasks.length === 0) {
-          notifyInfo(messages.noTasksFound());
-          return;
+        if (item instanceof ScheduledTaskItem) {
+          task = item.task;
+        } else {
+          const tasks = scheduleManager
+            .getAllTasks()
+            .filter((t) => t.scope === "workspace");
+          if (tasks.length === 0) {
+            notifyInfo(messages.noTasksFound());
+            return;
+          }
+
+          const selected = await vscode.window.showQuickPick(
+            tasks.map((t) => ({
+              label: t.name,
+              description: t.workspacePath
+                ? path.basename(t.workspacePath)
+                : "",
+              task: t,
+            })),
+            { placeHolder: messages.selectTask() },
+          );
+
+          if (!selected) return;
+          task = selected.task;
         }
 
-        const selected = await vscode.window.showQuickPick(
-          tasks.map((t) => ({
-            label: t.name,
-            description: t.workspacePath ? path.basename(t.workspacePath) : "",
-            task: t,
-          })),
-          { placeHolder: messages.selectTask() },
-        );
-
-        if (!selected) return;
-        task = selected.task;
-      }
-
-      try {
         if (!task) {
           notifyError(messages.taskNotFound());
           return;

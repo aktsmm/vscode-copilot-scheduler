@@ -48,9 +48,15 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `Copilot Scheduler: List Scheduled Tasks`          | View all tasks             |
 | `Copilot Scheduler: Edit Task`                     | Edit an existing task      |
 | `Copilot Scheduler: Delete Task`                   | Delete a task              |
-| `Copilot Scheduler: Toggle Task`                   | Enable/disable a task      |
+| `Copilot Scheduler: Toggle Task (Enable/Disable)`  | Enable/disable a task      |
+| `Copilot Scheduler: Enable Task`                   | Enable a task              |
+| `Copilot Scheduler: Disable Task`                  | Disable a task             |
 | `Copilot Scheduler: Run Now`                       | Execute a task immediately |
-| `Copilot Scheduler: Copy Prompt`                   | Copy prompt to clipboard   |
+| `Copilot Scheduler: Copy Prompt to Clipboard`      | Copy prompt to clipboard   |
+| `Copilot Scheduler: Duplicate Task`                | Duplicate a task           |
+| `Copilot Scheduler: Move Task to Current Workspace` | Move a workspace task here |
+| `Copilot Scheduler: Open Settings`                 | Open extension settings    |
+| `Copilot Scheduler: Show Version`                  | Show extension version     |
 
 ## ⚙️ Settings
 

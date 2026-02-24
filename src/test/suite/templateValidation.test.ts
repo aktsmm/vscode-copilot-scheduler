@@ -41,6 +41,25 @@ suite("Template Load Validation Tests", () => {
     }
   });
 
+  test("Rejects .agent.md templates", () => {
+    const ws = path.join("/tmp", "ws");
+    const templatePath = path.join(ws, ".github", "prompts", "a.agent.md");
+    const cached: PromptTemplate[] = [
+      { path: templatePath, name: "a.agent", source: "local" },
+    ];
+    const res = validateTemplateLoadRequest({
+      templatePath,
+      source: "local",
+      cachedTemplates: cached,
+      workspaceFolderPaths: [ws],
+      globalPromptsPath: undefined,
+    });
+    assert.strictEqual(res.ok, false);
+    if (!res.ok) {
+      assert.strictEqual(res.reason, "notMarkdown");
+    }
+  });
+
   test("Rejects templates not present in cache", () => {
     const ws = path.join("/tmp", "ws");
     const templatePath = path.join(ws, ".github", "prompts", "a.md");

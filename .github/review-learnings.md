@@ -243,6 +243,13 @@
 - **Evidence**: `scheduleManager.ts` の `duplicateTask()` でコピー名に `" (Copy)"` をハードコードしていた。日本語環境で「タスク名 (Copy)」と英語混じり表示になった。
 - **Action**: タスク名やファイル名に付加するサフィックス（`(Copy)`, `(New)` 等）も `messages.*` で管理する。ハードコードは UI 文言として扱う。
 
+### P14: コマンド追加・文言変更時は README のコマンド一覧も同期する
+
+- **Tags**: `コード品質` `UI/UX` `非機能`
+- **Added**: 2026-02-24
+- **Evidence**: `package.json` / `package.nls*.json` 側でコマンドが追加・更新されても、README のコマンド表が追従せず、存在しない/名称の違うコマンドが記載されるズレが起きた。
+- **Action**: コマンドを追加・改名・表示名変更（NLS）したら、(1) `extension.test.ts` の expectedCommands、(2) README/README_ja のコマンド一覧、(3) `package.nls*.json` を同じタイミングで更新する。
+
 ## Universal（汎用 — 追加分 3）
 
 ### U23: エラーを飲み込むラッパー関数は呼び出し元の成否判定を壊す
@@ -339,3 +346,19 @@
 - **Added**: 2026-02-24
 - **Evidence**: `extension.ts` の14コマンドハンドラのうち7つ（`deleteTask`, `toggleTask`, `enableTask`, `disableTask`, `runNow`, `copyPrompt`, `duplicateTask`）に try/catch がなかった。`saveTasks()` が file と globalState の両方で失敗した場合、ユーザーにエラーが通知されず unhandled promise rejection になった。同ファイルの `createTask` と `moveToCurrentWorkspace` は正しく try/catch があり、パターンが不統一だった。
 - **Action**: `registerCommand` の async コールバックには必ず try/catch を入れ、catch 内で `notifyError(errorMessage)` 等のユーザー向け通知を行う。新規コマンド追加時は既存コマンドの catch パターンをコピーして揃える。コマンド数が多い場合は共通ラッパー関数で統一する。
+
+## Universal（汎用 — 追加分 6）
+
+### U34: 末尾セパレータ除去で POSIX ルート `/` を空文字にしない
+
+- **Tags**: `バグ` `非機能` `設計`
+- **Added**: 2026-02-24
+- **Evidence**: Webview 側のパス比較で `replace(/\/+$/, "")` のように末尾スラッシュを削除すると、パスが `/` のとき結果が空文字になり得る。これにより「同一ワークスペース判定」などが誤り、UI 上のボタン表示や注記がズレる。
+- **Action**: 正規化関数で末尾セパレータを落とす場合は、ルート相当（`/`、Windows のドライブルート等）を特別扱いし、空文字に潰さない。比較用の正規化と表示用の整形を混同しない。
+
+### U35: MarkdownString の code fence はユーザー入力の ``` で崩れる
+
+- **Tags**: `バグ` `UI/UX`
+- **Added**: 2026-02-24
+- **Evidence**: `MarkdownString.appendCodeblock()` などでユーザー入力（プロンプト等）をコードブロックとして表示すると、内容に ``` が含まれる場合にフェンスが壊れてツールチップの表示が崩れる。
+- **Action**: ユーザー入力をコードブロック表示する場合は、``` を含むケースを検出してフォールバック（`appendText()` に切り替える、またはより長い fence を使う）を入れる。

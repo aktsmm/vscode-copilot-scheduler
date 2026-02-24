@@ -429,11 +429,31 @@ export class ScheduleManager {
       // Restore Date objects from JSON serialization
       task.createdAt = new Date(task.createdAt);
       task.updatedAt = new Date(task.updatedAt);
-      if (task.lastRun) {
+      if (task.lastRun !== undefined) {
         task.lastRun = new Date(task.lastRun);
       }
-      if (task.nextRun) {
+      if (task.nextRun !== undefined) {
         task.nextRun = new Date(task.nextRun);
+      }
+
+      // Recovery: avoid keeping Invalid Date objects (would break JSON serialization).
+      // When dates are corrupted/missing, heal them and persist once.
+      const healedNow = new Date();
+      if (Number.isNaN(task.createdAt.getTime())) {
+        task.createdAt = healedNow;
+        needsSave = true;
+      }
+      if (Number.isNaN(task.updatedAt.getTime())) {
+        task.updatedAt = task.createdAt;
+        needsSave = true;
+      }
+      if (task.lastRun && Number.isNaN(task.lastRun.getTime())) {
+        task.lastRun = undefined;
+        needsSave = true;
+      }
+      if (task.nextRun && Number.isNaN(task.nextRun.getTime())) {
+        task.nextRun = undefined;
+        needsSave = true;
       }
 
       // Migration: add missing fields for older tasks

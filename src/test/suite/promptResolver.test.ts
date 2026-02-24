@@ -25,10 +25,22 @@ suite("Prompt Resolver Tests", () => {
     assert.strictEqual(resolved, undefined);
   });
 
+  test("resolveAllowedPathInBaseDir rejects .agent.md", () => {
+    const base = path.join("/tmp", "ws");
+    const resolved = resolveAllowedPathInBaseDir(base, "a.agent.md");
+    assert.strictEqual(resolved, undefined);
+  });
+
   test("resolveGlobalPromptPath resolves under global root", () => {
     const globalRoot = path.join("/tmp", "prompts");
     const p = resolveGlobalPromptPath(globalRoot, "daily.md");
     assert.strictEqual(norm(p), norm(path.join(globalRoot, "daily.md")));
+  });
+
+  test("resolveGlobalPromptPath rejects .agent.md", () => {
+    const globalRoot = path.join("/tmp", "prompts");
+    const p = resolveGlobalPromptPath(globalRoot, "x.agent.md");
+    assert.strictEqual(p, undefined);
   });
 
   test("resolveLocalPromptPath supports multi-root absolute paths", () => {
@@ -54,5 +66,12 @@ suite("Prompt Resolver Tests", () => {
       norm(p),
       norm(path.join(ws1, ".github", "prompts", "x.md")),
     );
+  });
+
+  test("resolveLocalPromptPath rejects .agent.md", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const rel = path.join(".github", "prompts", "x.agent.md");
+    const p = resolveLocalPromptPath([ws1], rel);
+    assert.strictEqual(p, undefined);
   });
 });

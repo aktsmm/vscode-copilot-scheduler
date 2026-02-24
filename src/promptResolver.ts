@@ -2,18 +2,26 @@ import * as path from "path";
 import * as fs from "fs";
 
 export function normalizeForCompare(p: string): string {
-  const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? n.toLowerCase() : n;
+  if (!p) return "";
+  const resolved = path.normalize(path.resolve(p));
+  const root = path.parse(resolved).root;
+  // Avoid turning filesystem roots ("/", "C:\\") into empty strings (U34).
+  const trimmed = resolved === root ? resolved : resolved.replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
 }
 
 function isInsideDir(baseDir: string, targetPath: string): boolean {
   const base = normalizeForCompare(baseDir);
   const tgt = normalizeForCompare(targetPath);
-  return tgt === base || tgt.startsWith(base + path.sep);
+  if (!base || !tgt) return false;
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  return tgt === base || tgt.startsWith(prefix);
 }
 
 function isMarkdownFile(p: string): boolean {
-  return p.toLowerCase().endsWith(".md");
+  const lower = p.toLowerCase();
+  // Prompt templates are markdown, but agent definitions (*.agent.md) must not be treated as templates.
+  return lower.endsWith(".md") && !lower.endsWith(".agent.md");
 }
 
 /**

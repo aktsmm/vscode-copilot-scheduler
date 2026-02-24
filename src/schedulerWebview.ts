@@ -538,8 +538,9 @@ export class SchedulerWebview {
         );
         for (const [file, fileType] of entries) {
           if (fileType !== vscode.FileType.File) continue;
-          if (!file.endsWith(".md")) continue;
-          if (file.endsWith(".agent.md")) continue;
+          const lower = file.toLowerCase();
+          if (!lower.endsWith(".md")) continue;
+          if (lower.endsWith(".agent.md")) continue;
           templates.push({
             path: path.join(localPromptDir, file),
             name: path.basename(file, ".md"),
@@ -560,8 +561,9 @@ export class SchedulerWebview {
         );
         for (const [file, fileType] of entries) {
           if (fileType !== vscode.FileType.File) continue;
-          if (!file.endsWith(".md")) continue;
-          if (file.endsWith(".agent.md")) continue;
+          const lower = file.toLowerCase();
+          if (!lower.endsWith(".md")) continue;
+          if (lower.endsWith(".agent.md")) continue;
           templates.push({
             path: path.join(globalPath, file),
             name: path.basename(file, ".md"),
@@ -793,6 +795,7 @@ export class SchedulerWebview {
       webviewUnknown: messages.webviewUnknown(),
       webviewApiUnavailable: messages.webviewApiUnavailable(),
       webviewClientErrorPrefix: messages.webviewClientErrorPrefix(),
+      webviewSuccessPrefix: messages.webviewSuccessPrefix(),
 
       // Webview notes
       webviewJitterNote: messages.webviewJitterNote(),
@@ -815,6 +818,7 @@ export class SchedulerWebview {
       workspacePaths: (vscode.workspace.workspaceFolders || [])
         .map((f) => f.uri.fsPath)
         .filter(Boolean),
+      caseInsensitivePaths: process.platform === "win32",
       defaultJitterSeconds,
       locale: isJa ? "ja-JP" : "en-US",
       strings,
@@ -1022,12 +1026,12 @@ export class SchedulerWebview {
     
     .task-status.enabled {
       background-color: var(--vscode-testing-iconPassed);
-      color: white;
+      color: var(--vscode-button-foreground);
     }
     
     .task-status.disabled {
       background-color: var(--vscode-disabledForeground);
-      color: white;
+      color: var(--vscode-button-foreground);
     }
     
     .task-info {
@@ -1326,7 +1330,7 @@ export class SchedulerWebview {
   </div>
   
   <div id="list-tab" class="tab-content">
-    <div id="success-toast" style="display:none; background:var(--vscode-notificationsInfoIcon-foreground, #3794ff); color:#fff; padding:8px 14px; border-radius:4px; margin-bottom:12px; font-size:13px; opacity:1; transition:opacity 0.5s ease-out;"></div>
+    <div id="success-toast" style="display:none; background:var(--vscode-notificationsInfoIcon-foreground); color:var(--vscode-button-foreground); padding:8px 14px; border-radius:4px; margin-bottom:12px; font-size:13px; opacity:1; transition:opacity 0.5s ease-out;"></div>
     <div class="button-group" style="margin-bottom: 16px;">
       <button class="btn-secondary" id="refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
     </div>

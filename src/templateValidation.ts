@@ -26,7 +26,9 @@ export type TemplateLoadValidationResult =
 function isInside(baseDir: string, target: string): boolean {
   const base = normalizeForCompare(baseDir);
   const tgt = normalizeForCompare(target);
-  return tgt === base || tgt.startsWith(base + path.sep);
+  if (!base || !tgt) return false;
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  return tgt === base || tgt.startsWith(prefix);
 }
 
 export function validateTemplateLoadRequest(
@@ -39,6 +41,11 @@ export function validateTemplateLoadRequest(
   }
 
   if (!templatePath.toLowerCase().endsWith(".md")) {
+    return { ok: false, reason: "notMarkdown" };
+  }
+
+  // Do not allow agent definitions to be loaded as prompt templates.
+  if (templatePath.toLowerCase().endsWith(".agent.md")) {
     return { ok: false, reason: "notMarkdown" };
   }
 

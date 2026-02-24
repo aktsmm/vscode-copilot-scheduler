@@ -58,6 +58,7 @@
   var workspacePaths = Array.isArray(initialData.workspacePaths)
     ? initialData.workspacePaths
     : [];
+  var caseInsensitivePaths = !!initialData.caseInsensitivePaths;
   var editingTaskId = null;
   var pendingAgentValue = "";
   var pendingModelValue = "";
@@ -484,12 +485,17 @@
 
     function normalizePath(p) {
       if (!p) return "";
-      return String(p).replace(/\\/g, "/").toLowerCase();
+      var s = String(p).replace(/\\/g, "/");
+      // Preserve POSIX root path ("/") and avoid collapsing it to empty.
+      if (s === "/") return "/";
+      s = s.replace(/\/+$/, "");
+      if (s === "") return "/";
+      return caseInsensitivePaths ? s.toLowerCase() : s;
     }
 
     function basename(p) {
       if (!p) return "";
-      var s = String(p);
+      var s = String(p).replace(/[/\\]+$/, "");
       var parts = s.split(/[/\\]+/);
       return parts.length ? parts[parts.length - 1] || "" : s;
     }
@@ -527,8 +533,8 @@
           var scopeValue = task.scope || "workspace";
           var scopeLabel =
             scopeValue === "global"
-              ? strings.labelScopeGlobal || "Global"
-              : strings.labelScopeWorkspace || "Workspace";
+              ? strings.labelScopeGlobal || ""
+              : strings.labelScopeWorkspace || "";
           var wsPath =
             scopeValue === "workspace" ? task.workspacePath || "" : "";
           var wsName = wsPath ? basename(wsPath) : "";
@@ -539,14 +545,8 @@
                 (workspacePaths || []).some(function (p) {
                   return normalizePath(p) === normalizePath(wsPath);
                 });
-          var otherWsLabel =
-            strings.labelOtherWorkspaceShort ||
-            strings.labelOtherWorkspace ||
-            "Other workspace";
-          var thisWsLabel =
-            strings.labelThisWorkspaceShort ||
-            strings.labelThisWorkspace ||
-            "This workspace";
+          var otherWsLabel = strings.labelOtherWorkspaceShort || "";
+          var thisWsLabel = strings.labelThisWorkspaceShort || "";
           var scopeInfo =
             scopeValue === "global"
               ? "🌐 " + escapeHtml(scopeLabel)
@@ -595,7 +595,7 @@
               '<button class="btn-secondary btn-icon" data-action="move" data-id="' +
               taskIdEscaped +
               '" title="' +
-              escapeAttr(strings.actionMoveToCurrentWorkspace || "Move") +
+              escapeAttr(strings.actionMoveToCurrentWorkspace || "") +
               '">📌</button>';
           }
 
@@ -1351,7 +1351,8 @@
           if (message.successMessage) {
             var toast = document.getElementById("success-toast");
             if (toast) {
-              toast.textContent = "\u2714 " + message.successMessage;
+              var prefix = strings.webviewSuccessPrefix || "\u2714 ";
+              toast.textContent = prefix + message.successMessage;
               toast.style.display = "block";
               toast.style.opacity = "1";
               setTimeout(function () {
