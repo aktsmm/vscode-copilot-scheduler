@@ -59,6 +59,11 @@ export function sanitizeAbsolutePathDetails(message: string): string {
       (_m, p1: string) => `"${basenameFromPathLike(p1)}"`,
     )
     .replace(
+      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
+    )
+    .replace(
       /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^\s"'`]+)/g,
       (_m, prefix: string, p1: string) =>
         `${prefix}${basenameFromPathLike(p1)}`,
@@ -70,6 +75,11 @@ export function sanitizeAbsolutePathDetails(message: string): string {
     .replace(
       /"(\/[^"]+)"/g,
       (_m, p1: string) => `"${basenameFromPathLike(p1)}"`,
+    )
+    .replace(
+      /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
     )
     .replace(
       /(^|[\s(])(\/[^\s"'`]+)/g,

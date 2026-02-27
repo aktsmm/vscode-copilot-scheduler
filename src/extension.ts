@@ -147,9 +147,9 @@ export function notifyError(message: string, timeoutMs = 6000): void {
   const safeMessage = sanitizeErrorDetailsForLog(message);
   const displayMessage = safeMessage || messages.webviewUnknown() || "";
   const mode = getNotificationMode();
+  logError(displayMessage);
   if (mode === "silentStatus") {
     vscode.window.setStatusBarMessage(`⚠ ${displayMessage}`, timeoutMs);
-    logError(displayMessage);
     return;
   }
   if (mode === "silentToast") {
@@ -160,7 +160,6 @@ export function notifyError(message: string, timeoutMs = 6000): void {
       },
       () => new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     );
-    logError(displayMessage);
     return;
   }
   void vscode.window.showErrorMessage(displayMessage);

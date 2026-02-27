@@ -5,7 +5,6 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import { notifyError } from "./extension";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -567,9 +566,10 @@ export class SchedulerWebview {
           const lower = file.toLowerCase();
           if (!lower.endsWith(".md")) continue;
           if (lower.endsWith(".agent.md")) continue;
+          const displayName = path.basename(file, path.extname(file));
           templates.push({
             path: path.join(localPromptDir, file),
-            name: path.basename(file, ".md"),
+            name: displayName,
             source: "local",
           });
         }
@@ -590,9 +590,10 @@ export class SchedulerWebview {
           const lower = file.toLowerCase();
           if (!lower.endsWith(".md")) continue;
           if (lower.endsWith(".agent.md")) continue;
+          const displayName = path.basename(file, path.extname(file));
           templates.push({
             path: path.join(globalPath, file),
-            name: path.basename(file, ".md"),
+            name: displayName,
             source: "global",
           });
         }
@@ -658,7 +659,8 @@ export class SchedulerWebview {
         source,
         error: safeError,
       });
-      notifyError(messages.templateLoadError());
+      const message = messages.templateLoadError();
+      this.showError(message);
     }
   }
 

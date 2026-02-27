@@ -485,6 +485,7 @@ export class ScheduleManager {
       // Migration: add missing fields for older tasks
       if (!task.scope) {
         task.scope = "global";
+        needsSave = true;
       }
       {
         const promptPath =
@@ -538,9 +539,14 @@ export class ScheduleManager {
         }
       }
 
-      // Migration: add jitterSeconds if missing
-      if (task.jitterSeconds === undefined) {
-        task.jitterSeconds = 0;
+      // Migration: preserve undefined jitterSeconds so configured defaults
+      // continue to apply for legacy tasks.
+      if (task.jitterSeconds !== undefined) {
+        const normalizedJitter = this.clampJitterSeconds(task.jitterSeconds);
+        if (task.jitterSeconds !== normalizedJitter) {
+          task.jitterSeconds = normalizedJitter;
+          needsSave = true;
+        }
       }
 
       // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),

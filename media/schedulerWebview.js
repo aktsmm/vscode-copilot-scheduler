@@ -66,6 +66,12 @@
         .replace(/"((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"]+)"/g, function (_m, p1) {
           return '"' + basenameFromPathLike(p1) + '"';
         })
+        .replace(
+          /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+          function (_m, prefix, p1) {
+            return String(prefix) + basenameFromPathLike(p1);
+          },
+        )
         // Unquoted Windows absolute paths / UNC (no spaces)
         .replace(
           /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^\s"'`]+)/g,
@@ -80,6 +86,12 @@
         .replace(/"(\/[^\"]+)"/g, function (_m, p1) {
           return '"' + basenameFromPathLike(p1) + '"';
         })
+        .replace(
+          /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+          function (_m, prefix, p1) {
+            return String(prefix) + basenameFromPathLike(p1);
+          },
+        )
         // Unquoted POSIX absolute paths (no spaces) — only when preceded by start/whitespace/(
         .replace(/(^|[\s(])(\/[^\s"'`]+)/g, function (_m, prefix, p1) {
           return String(prefix) + basenameFromPathLike(p1);

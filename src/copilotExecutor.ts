@@ -21,9 +21,11 @@ import { resolveGlobalPromptsRoot } from "./promptResolver";
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
 
 // Timing constants for Copilot Chat interaction delays (ms)
-const DELAY_AFTER_FOCUS_MS = 150;
+const DELAY_AFTER_FOCUS_NEW_SESSION_MS = 150;
+const DELAY_AFTER_FOCUS_CONTINUE_SESSION_MS = 40;
 const DELAY_AFTER_MODEL_SELECT_MS = 100;
-const DELAY_AFTER_TYPE_MS = 50;
+const DELAY_AFTER_TYPE_NEW_SESSION_MS = 50;
+const DELAY_AFTER_TYPE_CONTINUE_SESSION_MS = 10;
 const DELAY_NEW_SESSION_MS = 200;
 
 /** Slash-command agents — prefixed with "/" instead of "@" */
@@ -86,7 +88,11 @@ export class CopilotExecutor {
       await vscode.commands.executeCommand(
         "workbench.panel.chat.view.copilot.focus",
       );
-      await this.delay(DELAY_AFTER_FOCUS_MS);
+      const focusDelayMs =
+        chatSession === "new"
+          ? DELAY_AFTER_FOCUS_NEW_SESSION_MS
+          : DELAY_AFTER_FOCUS_CONTINUE_SESSION_MS;
+      await this.delay(focusDelayMs);
 
       // Try to set model if specified
       if (options?.model && options.model !== "") {
@@ -113,7 +119,11 @@ export class CopilotExecutor {
 
       // Type the prompt using the type command
       await vscode.commands.executeCommand("type", { text: fullPrompt });
-      await this.delay(DELAY_AFTER_TYPE_MS);
+      const submitDelayMs =
+        chatSession === "new"
+          ? DELAY_AFTER_TYPE_NEW_SESSION_MS
+          : DELAY_AFTER_TYPE_CONTINUE_SESSION_MS;
+      await this.delay(submitDelayMs);
 
       // Submit the prompt
       await vscode.commands.executeCommand("workbench.action.chat.submit");

@@ -48,11 +48,14 @@ function createMockContextWithGlobalTasks(
   } as unknown as vscode.ExtensionContext;
 }
 
-function createManagerWithInvalidTimezone(storageRoot: string): ScheduleManager {
+function createManagerWithInvalidTimezone(
+  storageRoot: string,
+): ScheduleManager {
   const manager = new ScheduleManager(createMockContext(storageRoot));
   // Avoid VS Code configuration writes in tests; patch the instance instead.
-  (manager as unknown as { getTimeZone: () => string | undefined }).getTimeZone =
-    () => "Invalid/Timezone";
+  (
+    manager as unknown as { getTimeZone: () => string | undefined }
+  ).getTimeZone = () => "Invalid/Timezone";
   return manager;
 }
 
@@ -125,12 +128,17 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
   }
 
   test("migrates missing promptSource to local when promptPath is under .github/prompts", () => {
-    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-ws-"));
+    const wsRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-ws-"),
+    );
     const restoreWs = setWorkspaceFoldersForTest(wsRoot);
     const promptsDir = path.join(wsRoot, ".github", "prompts");
     fs.mkdirSync(promptsDir, { recursive: true });
 
-    const templatePath = path.join(promptsDir, "__test_prompt_source_migration__.md");
+    const templatePath = path.join(
+      promptsDir,
+      "__test_prompt_source_migration__.md",
+    );
 
     try {
       fs.writeFileSync(templatePath, "hello", "utf8");
@@ -186,12 +194,17 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
   });
 
   test("heals inline promptSource to local when promptPath exists under .github/prompts", () => {
-    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-ws-"));
+    const wsRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-ws-"),
+    );
     const restoreWs = setWorkspaceFoldersForTest(wsRoot);
     const promptsDir = path.join(wsRoot, ".github", "prompts");
     fs.mkdirSync(promptsDir, { recursive: true });
 
-    const templatePath = path.join(promptsDir, "__test_prompt_source_heal__.md");
+    const templatePath = path.join(
+      promptsDir,
+      "__test_prompt_source_heal__.md",
+    );
 
     try {
       fs.writeFileSync(templatePath, "hello", "utf8");
@@ -235,6 +248,103 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
       restoreWs();
       try {
         fs.rmSync(wsRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Jitter Migration Tests", () => {
+  test("keeps jitterSeconds undefined for legacy tasks that do not have the field", () => {
+    const now = new Date();
+    const rawTask = {
+      id: "t-jitter-legacy",
+      name: "legacy",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: false,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+      const loaded = manager.getTask(rawTask.id);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.jitterSeconds, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Scope Migration Persistence Tests", () => {
+  test("persists default scope for legacy tasks when scope is missing", async () => {
+    const now = new Date();
+    const rawTask = {
+      id: "t-scope-legacy",
+      name: "legacy-scope",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: false,
+      promptSource: "inline",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const storageFile = path.join(tmp, "scheduledTasks.json");
+      fs.writeFileSync(storageFile, JSON.stringify([rawTask]), "utf8");
+
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+
+      const loaded = manager.getTask(rawTask.id);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.scope, "global");
+
+      for (let i = 0; i < 20; i++) {
+        const persisted = JSON.parse(
+          fs.readFileSync(storageFile, "utf8"),
+        ) as Array<{ id?: string; scope?: string }>;
+        const persistedTask = persisted.find((t) => t.id === rawTask.id);
+        if (persistedTask?.scope === "global") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      const finalPersisted = JSON.parse(
+        fs.readFileSync(storageFile, "utf8"),
+      ) as Array<{ id?: string; scope?: string }>;
+      const finalTask = finalPersisted.find((t) => t.id === rawTask.id);
+      assert.ok(finalTask);
+      assert.strictEqual(finalTask?.scope, "global");
+    } finally {
+      try {
+        fs.rmSync(tmp, {
           recursive: true,
           force: true,
           maxRetries: 3,

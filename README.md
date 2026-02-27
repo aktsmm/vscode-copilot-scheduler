@@ -68,13 +68,19 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                       |
 | `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja)                                                                                |
 | `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                 |
-| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue)                                                                             |
+| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                              |
 | `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                           |
 | `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                |
 | `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                        |
 | `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.               |
 | `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting. |
 | `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                      |
+
+If execution feels sluggish when a task is triggered, try:
+
+- `copilotScheduler.chatSession = continue`
+- `copilotScheduler.notificationMode = silentStatus`
+- `copilotScheduler.logLevel = error` (or `none`)
 
 ## 📝 Prompt Placeholders
 

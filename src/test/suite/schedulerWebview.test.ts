@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import { SchedulerWebview } from "../../schedulerWebview";
+import { messages } from "../../i18n";
 
 type WebviewLike = {
   postMessage: (message: unknown) => Thenable<boolean>;
@@ -185,6 +186,60 @@ suite("SchedulerWebview showError Sanitization Tests", () => {
       wv.panel = originalPanel;
       wv.webviewReady = originalReady;
       wv.pendingMessages = originalPending;
+    }
+  });
+});
+
+suite("SchedulerWebview Template Load Error Feedback Tests", () => {
+  test("Template load failure posts showError to webview", async () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      cachedPromptTemplates?: unknown[];
+      loadPromptTemplateContent?: (
+        templatePath: string,
+        source: "local" | "global",
+      ) => Promise<void>;
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalTemplates = wv.cachedPromptTemplates;
+
+    const sent: unknown[] = [];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+      wv.cachedPromptTemplates = [];
+
+      assert.ok(typeof wv.loadPromptTemplateContent === "function");
+
+      await wv.loadPromptTemplateContent!(
+        "C:\\outside\\not-allowed.md",
+        "local",
+      );
+
+      const showErrorMessage = (
+        sent as Array<{ type?: unknown; text?: unknown }>
+      ).find((m) => m.type === "showError");
+      assert.ok(showErrorMessage);
+      assert.strictEqual(showErrorMessage?.text, messages.templateLoadError());
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.cachedPromptTemplates = originalTemplates;
     }
   });
 });

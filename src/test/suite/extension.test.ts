@@ -100,6 +100,12 @@ suite("Error Message Sanitization Tests", () => {
     assert.ok(!winUnquotedOut.includes("C:\\Users\\me"));
     assert.ok(winUnquotedOut.includes("a.md"));
 
+    const winUnquotedWithSpaces =
+      "ENOENT: no such file or directory, open C:/Users/me/secret folder/a b.md";
+    const winUnquotedWithSpacesOut = sanitize!(winUnquotedWithSpaces);
+    assert.ok(!winUnquotedWithSpacesOut.includes("C:/Users/me/secret folder"));
+    assert.ok(winUnquotedWithSpacesOut.includes("a b.md"));
+
     const posixQuoted =
       "ENOENT: no such file or directory, open '/Users/me/secret folder/a b.md'";
     const posixQuotedOut = sanitize!(posixQuoted);
@@ -110,6 +116,13 @@ suite("Error Message Sanitization Tests", () => {
     const posixUnquotedOut = sanitize!(posixUnquoted);
     assert.ok(!posixUnquotedOut.includes("/Users/me/"));
     assert.ok(posixUnquotedOut.includes("a.md"));
+
+    const posixUnquotedWithSpaces = "open /Users/me/secret folder/a b.md";
+    const posixUnquotedWithSpacesOut = sanitize!(posixUnquotedWithSpaces);
+    assert.ok(
+      !posixUnquotedWithSpacesOut.includes("/Users/me/secret folder"),
+    );
+    assert.ok(posixUnquotedWithSpacesOut.includes("a b.md"));
 
     const posixParen = "at foo (/Users/me/a.md:1:2)";
     const posixParenOut = sanitize!(posixParen);
