@@ -5,6 +5,18 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.15] - 2026-02-28
+
+### Fixed
+
+- **Webview error feedback robustness**: Hardened webview-side error rendering and fallback behavior so empty/invalid payloads reliably resolve to localized unknown text.
+- **Error detail sanitization**: Expanded sanitizer handling across extension/webview boundaries to reduce path/detail leakage risks while keeping actionable messages.
+- **Command registration/test alignment**: Updated command coverage checks to keep extension command registration and test expectations in sync.
+
+### Tests
+
+- Added shared sanitizer assertion helpers and expanded contract tests for scheduler webview error handling and sanitization parity.
+
 ## [1.0.13] - 2026-02-25
 
 ### Security
