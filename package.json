@@ -193,6 +193,19 @@
           ],
           "description": "%config.chatSession%"
         },
+        "copilotScheduler.manualRunNextRunPolicy": {
+          "type": "string",
+          "default": "advance",
+          "enum": [
+            "advance",
+            "fromNow"
+          ],
+          "enumDescriptions": [
+            "%config.manualRunNextRunPolicy.advance%",
+            "%config.manualRunNextRunPolicy.fromNow%"
+          ],
+          "description": "%config.manualRunNextRunPolicy%"
+        },
         "copilotScheduler.defaultScope": {
           "type": "string",
           "default": "workspace",

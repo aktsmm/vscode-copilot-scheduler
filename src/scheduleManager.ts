@@ -44,6 +44,8 @@ type TaskStorageMeta = {
   savedAt: string; // ISO string
 };
 
+type ManualRunNextRunPolicy = "advance" | "fromNow";
+
 function getLocalDateKey(date = new Date()): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -150,7 +152,7 @@ export class ScheduleManager {
     await this.context.globalState.update(STORAGE_SAVED_AT_KEY, meta.savedAt);
   }
 
-  private loadTasksFromFile(): { tasks: ScheduledTask[]; ok: boolean } {
+  private loadTasksFromFile(): { tasks: unknown[]; ok: boolean } {
     try {
       if (!this.storageFilePath) return { tasks: [], ok: false };
       if (!fs.existsSync(this.storageFilePath)) return { tasks: [], ok: false };
@@ -158,7 +160,7 @@ export class ScheduleManager {
       if (!raw.trim()) return { tasks: [], ok: true };
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return { tasks: [], ok: false };
-      return { tasks: parsed as ScheduledTask[], ok: true };
+      return { tasks: parsed as unknown[], ok: true };
     } catch (error) {
       logDebug(
         "[CopilotScheduler] Failed to load tasks from file:",
@@ -429,14 +431,29 @@ export class ScheduleManager {
     }
   }
 
+  private isPersistedTaskShape(value: unknown): value is ScheduledTask {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+
+    const candidate = value as Partial<ScheduledTask>;
+    return (
+      typeof candidate.id === "string" &&
+      candidate.id.trim().length > 0 &&
+      typeof candidate.name === "string" &&
+      typeof candidate.prompt === "string" &&
+      typeof candidate.cronExpression === "string"
+    );
+  }
+
   /**
    * Load tasks from globalState
    */
   private loadTasks(): void {
-    const savedTasks = this.context.globalState.get<ScheduledTask[]>(
-      STORAGE_KEY,
-      [],
-    );
+    const rawSavedTasks = this.context.globalState.get<unknown>(STORAGE_KEY);
+    const savedTasks = Array.isArray(rawSavedTasks) ? rawSavedTasks : [];
+    const globalTasksOk =
+      rawSavedTasks === undefined || Array.isArray(rawSavedTasks);
     const fileLoad = this.loadTasksFromFile();
     const fileTasks = fileLoad.tasks;
 
@@ -452,11 +469,11 @@ export class ScheduleManager {
       fs.existsSync(this.storageMetaFilePath) ||
       (typeof fileMeta.revision === "number" && fileMeta.revision > 0);
 
-    const selection = selectTaskStore<ScheduledTask>(
+    const selection = selectTaskStore<unknown>(
       {
         kind: "globalState",
         exists: globalStoreExists,
-        ok: true,
+        ok: globalTasksOk,
         tasks: savedTasks,
         revision: globalMeta.revision,
       },
@@ -475,8 +492,16 @@ export class ScheduleManager {
     this.storageRevision = selection.chosenRevision || 0;
 
     let needsSave = false;
+    const needsStoreHealing =
+      !globalTasksOk || (fileStoreExists && !fileLoad.ok);
 
-    for (const task of tasksToLoad) {
+    for (const rawTask of tasksToLoad) {
+      if (!this.isPersistedTaskShape(rawTask)) {
+        needsSave = true;
+        continue;
+      }
+
+      const task = rawTask;
       // Restore Date objects from JSON serialization
       task.createdAt = new Date(task.createdAt);
       task.updatedAt = new Date(task.updatedAt);
@@ -625,7 +650,11 @@ export class ScheduleManager {
       );
     } else {
       // Heal the other store if needed (best effort, do not bump revision)
-      if (selection.shouldHealFile || selection.shouldHealGlobalState) {
+      if (
+        needsStoreHealing ||
+        selection.shouldHealFile ||
+        selection.shouldHealGlobalState
+      ) {
         void this.saveTasks({ bumpRevision: false }).catch((error) =>
           logDebug(
             "[CopilotScheduler] Failed to sync task stores:",
@@ -731,6 +760,12 @@ export class ScheduleManager {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const tz = config.get<string>("timezone", "");
     return tz || undefined;
+  }
+
+  private getManualRunNextRunPolicy(): ManualRunNextRunPolicy {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const policy = config.get<string>("manualRunNextRunPolicy", "advance");
+    return policy === "fromNow" ? "fromNow" : "advance";
   }
 
   /**
@@ -1380,13 +1415,26 @@ export class ScheduleManager {
     }
 
     try {
+      const previousNextRun =
+        task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
+          ? new Date(task.nextRun.getTime())
+          : undefined;
+
       await this.onExecuteCallback(task);
 
       // Update lastRun and nextRun after manual execution
       const executedAt = new Date();
       task.lastRun = executedAt;
       if (task.enabled) {
-        task.nextRun = this.getNextRunForTask(task.cronExpression, executedAt);
+        const policy = this.getManualRunNextRunPolicy();
+        const shouldAdvanceFromExisting =
+          policy === "advance" &&
+          previousNextRun &&
+          previousNextRun.getTime() >= executedAt.getTime();
+        const nextRunBase = shouldAdvanceFromExisting
+          ? previousNextRun
+          : executedAt;
+        task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
       }
       await this.saveTasks();
 

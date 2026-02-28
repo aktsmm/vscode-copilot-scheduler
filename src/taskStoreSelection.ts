@@ -39,6 +39,7 @@ export function selectTaskStore<T>(
 ): TaskStoreSelection<T> {
   const globalRevision = toRevision(globalState.revision);
   const fileRevision = toRevision(file.revision);
+  const effectiveGlobalRevision = globalState.ok ? globalRevision : -1;
   const effectiveFileRevision = file.ok ? fileRevision : -1;
 
   let chosenKind: TaskStoreKind | "none" = "none";
@@ -46,24 +47,28 @@ export function selectTaskStore<T>(
   let chosenTasks: T[] = [];
 
   if (globalState.exists && file.exists) {
-    if (globalRevision > effectiveFileRevision) {
+    if (effectiveGlobalRevision > effectiveFileRevision) {
       chosenKind = "globalState";
       chosenRevision = globalRevision;
       chosenTasks = globalState.tasks;
-    } else if (effectiveFileRevision > globalRevision) {
+    } else if (effectiveFileRevision > effectiveGlobalRevision) {
       chosenKind = "file";
       chosenRevision = fileRevision;
       chosenTasks = file.tasks;
     } else {
-      // Same revision (or both legacy): prefer file if it parsed successfully.
+      // Same effective revision (or both invalid): prefer file, then globalState when valid.
       if (file.ok) {
         chosenKind = "file";
         chosenRevision = fileRevision;
         chosenTasks = file.tasks;
-      } else {
+      } else if (globalState.ok) {
         chosenKind = "globalState";
         chosenRevision = globalRevision;
         chosenTasks = globalState.tasks;
+      } else {
+        chosenKind = "none";
+        chosenRevision = 0;
+        chosenTasks = [];
       }
     }
   } else if (file.exists) {
@@ -78,6 +83,7 @@ export function selectTaskStore<T>(
 
   const shouldHealFile =
     chosenKind === "globalState" &&
+    globalState.ok &&
     globalState.exists &&
     // Heal if file is missing, older, or invalid.
     (file.exists === false ||
@@ -88,7 +94,9 @@ export function selectTaskStore<T>(
     chosenKind === "file" &&
     file.ok &&
     // Heal if globalState is missing or older.
-    (globalState.exists === false || globalRevision !== fileRevision);
+    (globalState.exists === false ||
+      globalState.ok === false ||
+      globalRevision !== fileRevision);
 
   return {
     chosenKind,

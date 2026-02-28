@@ -41,40 +41,41 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## 📋 Commands
 
-| Command                                            | Description                |
-| -------------------------------------------------- | -------------------------- |
-| `Copilot Scheduler: Create Scheduled Prompt`       | Create a new task (CLI)    |
-| `Copilot Scheduler: Create Scheduled Prompt (GUI)` | Create a new task (GUI)    |
-| `Copilot Scheduler: List Scheduled Tasks`          | View all tasks             |
-| `Copilot Scheduler: Edit Task`                     | Edit an existing task      |
-| `Copilot Scheduler: Delete Task`                   | Delete a task              |
-| `Copilot Scheduler: Toggle Task (Enable/Disable)`  | Enable/disable a task      |
-| `Copilot Scheduler: Enable Task`                   | Enable a task              |
-| `Copilot Scheduler: Disable Task`                  | Disable a task             |
-| `Copilot Scheduler: Run Now`                       | Execute a task immediately |
-| `Copilot Scheduler: Copy Prompt to Clipboard`      | Copy prompt to clipboard   |
-| `Copilot Scheduler: Duplicate Task`                | Duplicate a task           |
+| Command                                             | Description                |
+| --------------------------------------------------- | -------------------------- |
+| `Copilot Scheduler: Create Scheduled Prompt`        | Create a new task (CLI)    |
+| `Copilot Scheduler: Create Scheduled Prompt (GUI)`  | Create a new task (GUI)    |
+| `Copilot Scheduler: List Scheduled Tasks`           | View all tasks             |
+| `Copilot Scheduler: Edit Task`                      | Edit an existing task      |
+| `Copilot Scheduler: Delete Task`                    | Delete a task              |
+| `Copilot Scheduler: Toggle Task (Enable/Disable)`   | Enable/disable a task      |
+| `Copilot Scheduler: Enable Task`                    | Enable a task              |
+| `Copilot Scheduler: Disable Task`                   | Disable a task             |
+| `Copilot Scheduler: Run Now`                        | Execute a task immediately |
+| `Copilot Scheduler: Copy Prompt to Clipboard`       | Copy prompt to clipboard   |
+| `Copilot Scheduler: Duplicate Task`                 | Duplicate a task           |
 | `Copilot Scheduler: Move Task to Current Workspace` | Move a workspace task here |
-| `Copilot Scheduler: Open Settings`                 | Open extension settings    |
-| `Copilot Scheduler: Show Version`                  | Show extension version     |
+| `Copilot Scheduler: Open Settings`                  | Open extension settings    |
+| `Copilot Scheduler: Show Version`                   | Show extension version     |
 
 ## ⚙️ Settings
 
-| Setting                                   | Default     | Description                                                                                             |
-| ----------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------- |
-| `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                      |
-| `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                              |
-| `copilotScheduler.notificationMode`       | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                      |
-| `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                       |
-| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja)                                                                                |
-| `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                 |
-| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                              |
-| `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                           |
-| `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                |
-| `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                        |
-| `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.               |
-| `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting. |
-| `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                      |
+| Setting                                   | Default     | Description                                                                                              |
+| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
+| `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                       |
+| `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                               |
+| `copilotScheduler.notificationMode`       | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                       |
+| `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                        |
+| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja)                                                                                 |
+| `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                  |
+| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                               |
+| `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time) |
+| `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                            |
+| `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                 |
+| `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                         |
+| `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                |
+| `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.  |
+| `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                       |
 
 If execution feels sluggish when a task is triggered, try:
 

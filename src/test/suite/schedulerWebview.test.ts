@@ -278,7 +278,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const expectedTokensInOrder = [
       "raw = String(raw).split(/\\r?\\n/)[0];",
       "var safeRaw = sanitizeAbsolutePaths(raw);",
-      'var displayRaw = safeRaw.trim() ? safeRaw : String(strings.webviewUnknown || "");',
+      "var displayRaw = safeRaw.trim()",
+      "? safeRaw",
+      ': String(strings.webviewUnknown || "");',
       "showFormError(prefix + displayRaw);",
     ];
 

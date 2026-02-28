@@ -48,6 +48,18 @@ function createMockContextWithGlobalTasks(
   } as unknown as vscode.ExtensionContext;
 }
 
+function createMockContextWithGlobalStateValue(
+  storageRoot: string,
+  value: unknown,
+): vscode.ExtensionContext {
+  const memento = new MockMemento();
+  void memento.update("scheduledTasks", value);
+  return {
+    globalState: memento,
+    globalStorageUri: vscode.Uri.file(storageRoot),
+  } as unknown as vscode.ExtensionContext;
+}
+
 function createManagerWithInvalidTimezone(
   storageRoot: string,
 ): ScheduleManager {
@@ -357,6 +369,101 @@ suite("ScheduleManager Scope Migration Persistence Tests", () => {
   });
 });
 
+suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
+  test("does not throw when globalState scheduledTasks is not an array", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      assert.doesNotThrow(() => {
+        const manager = new ScheduleManager(
+          createMockContextWithGlobalStateValue(tmp, { invalid: true }),
+        );
+        assert.strictEqual(manager.getAllTasks().length, 0);
+      });
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("heals non-array globalState scheduledTasks to an array", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const context = createMockContextWithGlobalStateValue(tmp, {
+        invalid: true,
+      });
+      const manager = new ScheduleManager(context);
+      assert.strictEqual(manager.getAllTasks().length, 0);
+
+      for (let i = 0; i < 20; i++) {
+        const persisted = context.globalState.get<unknown>("scheduledTasks");
+        if (Array.isArray(persisted)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      const finalPersisted = context.globalState.get<unknown>("scheduledTasks");
+      assert.ok(Array.isArray(finalPersisted));
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("skips invalid task entries and keeps valid persisted tasks", () => {
+    const nowIso = new Date().toISOString();
+    const validTask = {
+      id: "t-valid",
+      name: "valid",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: false,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [42, { id: "bad" }, validTask]),
+      );
+
+      const tasks = manager.getAllTasks();
+      assert.strictEqual(tasks.length, 1);
+      assert.strictEqual(tasks[0].id, validTask.id);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
 suite("ScheduleManager Task Change Callback Tests", () => {
   test("notifies both primary and additional callbacks", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
@@ -412,6 +519,98 @@ suite("ScheduleManager Task Change Callback Tests", () => {
         notify.call(manager);
       });
       assert.strictEqual(secondaryCount, 1);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager RunNow Tests", () => {
+  test("runTaskNow advances nextRun when future nextRun already exists", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-next-run",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      const futureNextRun = new Date(Date.now() + 10 * 60 * 1000);
+      task.nextRun = futureNextRun;
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        // no-op
+      };
+
+      const ok = await manager.runTaskNow(task.id);
+      assert.strictEqual(ok, true);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() > futureNextRun.getTime());
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNow recalculates from now when policy is fromNow", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-from-now",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      const futureNextRun = new Date(Date.now() + 10 * 60 * 1000);
+      task.nextRun = futureNextRun;
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          getManualRunNextRunPolicy?: () => "advance" | "fromNow";
+        }
+      ).onExecuteCallback = async () => {
+        // no-op
+      };
+      (
+        manager as unknown as {
+          getManualRunNextRunPolicy?: () => "advance" | "fromNow";
+        }
+      ).getManualRunNextRunPolicy = () => "fromNow";
+
+      const ok = await manager.runTaskNow(task.id);
+      assert.strictEqual(ok, true);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() < futureNextRun.getTime());
     } finally {
       try {
         fs.rmSync(tmp, {

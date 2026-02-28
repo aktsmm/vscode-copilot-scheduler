@@ -185,6 +185,12 @@ let copilotExecutor: CopilotExecutor;
 let treeProvider: ScheduledTaskTreeProvider;
 let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 
+type PromptExecutionPayload = {
+  prompt: string;
+  agent?: string;
+  model?: string;
+};
+
 /**
  * Extension activation
  */
@@ -373,13 +379,12 @@ async function executeTask(task: ScheduledTask): Promise<void> {
   notifyInfo(messages.taskExecuting(task.name));
 
   try {
-    // Resolve prompt text
-    const promptText = await resolvePromptText(task);
+    const resolved = await resolvePromptExecution(task);
 
     // Execute the prompt
-    await copilotExecutor.executePrompt(promptText, {
-      agent: task.agent,
-      model: task.model,
+    await copilotExecutor.executePrompt(resolved.prompt, {
+      agent: resolved.agent,
+      model: resolved.model,
     });
 
     notifyInfo(messages.taskExecuted(task.name));
@@ -484,8 +489,91 @@ async function resolvePromptText(
   return task.prompt;
 }
 
+function parsePromptFrontmatter(promptText: string): PromptExecutionPayload {
+  const match = promptText.match(
+    /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)\r?\n?/,
+  );
+  if (!match) {
+    return { prompt: promptText };
+  }
+
+  const frontmatter = match[1];
+  const body = promptText.slice(match[0].length);
+  let agent: string | undefined;
+  let model: string | undefined;
+
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const parsed = line.match(/^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/);
+    if (!parsed) continue;
+
+    const key = parsed[1].toLowerCase();
+    let value = parsed[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1).trim();
+    }
+    if (!value) continue;
+
+    if (key === "agent") {
+      agent = value;
+      continue;
+    }
+    if (key === "model") {
+      model = value;
+    }
+  }
+
+  if (!agent && !model) {
+    return { prompt: promptText };
+  }
+
+  return {
+    prompt: body,
+    agent,
+    model,
+  };
+}
+
+function resolveExecutionOption(
+  taskValue: string | undefined,
+  frontmatterValue: string | undefined,
+): string | undefined {
+  const normalizedTaskValue =
+    typeof taskValue === "string" ? taskValue.trim() : "";
+  if (normalizedTaskValue) {
+    return normalizedTaskValue;
+  }
+
+  const normalizedFrontmatterValue =
+    typeof frontmatterValue === "string" ? frontmatterValue.trim() : "";
+  if (normalizedFrontmatterValue) {
+    return normalizedFrontmatterValue;
+  }
+
+  return undefined;
+}
+
+async function resolvePromptExecution(
+  task: ScheduledTask,
+  preferOpenDocument = true,
+): Promise<PromptExecutionPayload> {
+  const promptText = await resolvePromptText(task, preferOpenDocument);
+  const parsed = parsePromptFrontmatter(promptText);
+
+  return {
+    prompt: parsed.prompt,
+    agent: resolveExecutionOption(task.agent, parsed.agent),
+    model: resolveExecutionOption(task.model, parsed.model),
+  };
+}
+
 export const __testOnly = {
   resolvePromptText,
+  parsePromptFrontmatter,
+  resolveExecutionOption,
+  resolvePromptExecution,
   sanitizeErrorDetailsForLog,
   resolveDisplayErrorMessage,
 };
@@ -635,6 +723,9 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             notifyError(msg);
             SchedulerWebview.showError(msg);
             break;
+          }
+          if (task.enabled) {
+            await maybeShowDisclaimerOnce(task);
           }
           const updatedMsg = messages.taskUpdated(task.name);
           notifyInfo(updatedMsg);

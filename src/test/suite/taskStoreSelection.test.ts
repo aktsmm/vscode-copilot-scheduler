@@ -121,6 +121,53 @@ suite("Task Store Selection (revision) Tests", () => {
     assert.strictEqual(res.shouldHealGlobalState, false);
   });
 
+  test("Invalid globalState store never wins against an existing file store", () => {
+    const res = selectTaskStore<T>(
+      {
+        kind: "globalState",
+        exists: true,
+        ok: false,
+        tasks: [],
+        revision: 10,
+      },
+      {
+        kind: "file",
+        exists: true,
+        ok: true,
+        tasks: [{ id: "f9" }],
+        revision: 9,
+      },
+    );
+
+    assert.strictEqual(res.chosenKind, "file");
+    assert.strictEqual(res.chosenRevision, 9);
+    assert.deepStrictEqual(res.chosenTasks, [{ id: "f9" }]);
+    assert.strictEqual(res.shouldHealGlobalState, true);
+    assert.strictEqual(res.shouldHealFile, false);
+  });
+
+  test("Plans globalState healing when globalState is invalid even at equal revision", () => {
+    const res = selectTaskStore<T>(
+      {
+        kind: "globalState",
+        exists: true,
+        ok: false,
+        tasks: [],
+        revision: 9,
+      },
+      {
+        kind: "file",
+        exists: true,
+        ok: true,
+        tasks: [{ id: "f9" }],
+        revision: 9,
+      },
+    );
+
+    assert.strictEqual(res.chosenKind, "file");
+    assert.strictEqual(res.shouldHealGlobalState, true);
+  });
+
   test("Does not plan healing globalState from an invalid file store", () => {
     const res = selectTaskStore<T>(
       {

@@ -366,3 +366,156 @@ suite("resolvePromptText Tests", () => {
     }
   });
 });
+
+suite("Frontmatter Resolution Tests", () => {
+  test("Uses frontmatter agent/model when task options are not set", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-frontmatter-default",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: '---\nagent: "edit"\nmodel: gpt-4o\n---\nBody',
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body");
+    assert.strictEqual(resolved.agent, "edit");
+    assert.strictEqual(resolved.model, "gpt-4o");
+  });
+
+  test("Task agent/model override frontmatter values", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-frontmatter-override",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "---\nagent: ask\nmodel: gpt-4o\n---\nBody",
+      enabled: true,
+      agent: "edit",
+      model: "claude-sonnet-4",
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body");
+    assert.strictEqual(resolved.agent, "edit");
+    assert.strictEqual(resolved.model, "claude-sonnet-4");
+  });
+
+  test("Explicit empty task agent/model fallback to frontmatter", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-frontmatter-empty",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "---\nagent: ask\nmodel: gpt-4o\n---\nBody",
+      enabled: true,
+      agent: "",
+      model: "",
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body");
+    assert.strictEqual(resolved.agent, "ask");
+    assert.strictEqual(resolved.model, "gpt-4o");
+  });
+
+  test("Strips frontmatter even when prompt body is empty", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const rawPrompt = "---\nagent: ask\nmodel: gpt-4o\n---\n";
+    const task = {
+      id: "t-frontmatter-empty-body",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: rawPrompt,
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "");
+    assert.strictEqual(resolved.agent, "ask");
+    assert.strictEqual(resolved.model, "gpt-4o");
+  });
+
+  test("Does not strip frontmatter block when agent/model keys are missing", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const rawPrompt = "---\ndescription: sample\ntools: []\n---\nBody";
+    const task = {
+      id: "t-frontmatter-no-keys",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: rawPrompt,
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, rawPrompt);
+    assert.strictEqual(resolved.agent, undefined);
+    assert.strictEqual(resolved.model, undefined);
+  });
+});
