@@ -11,6 +11,7 @@ Thumbs.db
 output_sessions/
 
 # Development files
+.github/
 .github/temp/
 .github/agents/
 .github/skills/
