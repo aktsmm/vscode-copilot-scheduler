@@ -266,6 +266,7 @@
     if (i > 1800) return 1800;
     return i;
   })();
+  var defaultAutoMode = !!initialData.defaultAutoMode;
   var locale =
     typeof initialData.locale === "string" && initialData.locale
       ? initialData.locale
@@ -287,6 +288,7 @@
   var templateSelectGroup = document.getElementById("template-select-group");
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
   var promptGroup = document.getElementById("prompt-group");
+  var autoModeInput = document.getElementById("auto-mode");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
   var friendlyFrequency = document.getElementById("friendly-frequency");
   var friendlyInterval = document.getElementById("friendly-interval");
@@ -510,6 +512,7 @@
         promptSource: promptSourceValue,
         promptPath: promptPathValue,
         runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
+        autoMode: autoModeInput ? autoModeInput.checked : false,
         jitterSeconds: jitterSecondsInput
           ? Number(jitterSecondsInput.value || 0)
           : 0,
@@ -1201,6 +1204,7 @@
     if (friendlyFrequency) friendlyFrequency.value = "";
     if (jitterSecondsInput)
       jitterSecondsInput.value = String(defaultJitterSeconds);
+    if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     updateFriendlyVisibility();
     updateCronPreview();
   }
@@ -1429,6 +1433,10 @@
     // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
     var runFirstEl = document.getElementById("run-first");
     if (runFirstEl) runFirstEl.checked = false;
+
+    if (autoModeInput) {
+      autoModeInput.checked = task.autoMode === true;
+    }
 
     // Switch to edit tab (same form)
     switchTab("create");

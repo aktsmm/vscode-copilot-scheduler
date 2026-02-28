@@ -45,6 +45,21 @@ type TaskStorageMeta = {
 };
 
 type ManualRunNextRunPolicy = "advance" | "fromNow";
+type ManualRunFailureReason =
+  | "taskNotFound"
+  | "executorUnavailable"
+  | "executionFailed"
+  | "saveFailed";
+type ManualRunResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: ManualRunFailureReason;
+      errorMessage?: string;
+      userNotified?: boolean;
+    };
+
+const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
 
 function getLocalDateKey(date = new Date()): string {
   const y = date.getFullYear();
@@ -192,15 +207,18 @@ export class ScheduleManager {
     const updatePromise = Promise.resolve(updateThenable);
 
     let timerId: NodeJS.Timeout | undefined;
-    const result = await Promise.race([
-      updatePromise.then(() => "ok" as const),
-      new Promise<"timeout">((resolve) => {
-        timerId = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-
-    if (timerId !== undefined) {
-      clearTimeout(timerId);
+    let result: "ok" | "timeout";
+    try {
+      result = await Promise.race([
+        updatePromise.then(() => "ok" as const),
+        new Promise<"timeout">((resolve) => {
+          timerId = setTimeout(() => resolve("timeout"), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timerId !== undefined) {
+        clearTimeout(timerId);
+      }
     }
 
     if (result === "timeout") {
@@ -532,9 +550,25 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      // Migration/Safety: normalize persisted enabled flag.
+      // Corrupted values like "false" (string) are truthy at runtime and may
+      // accidentally execute tasks, so coerce non-boolean values to false.
+      if (typeof task.enabled !== "boolean") {
+        task.enabled = false;
+        needsSave = true;
+      }
+
       // Migration: add missing fields for older tasks
       if (!task.scope) {
         task.scope = "global";
+        needsSave = true;
+      } else if (task.scope !== "global" && task.scope !== "workspace") {
+        // Safety-first recovery for invalid scope values from corrupted storage.
+        // Normalize to a known value and disable to avoid unintended execution.
+        task.scope = "global";
+        if (task.enabled) {
+          task.enabled = false;
+        }
         needsSave = true;
       }
       {
@@ -597,6 +631,11 @@ export class ScheduleManager {
           task.jitterSeconds = normalizedJitter;
           needsSave = true;
         }
+      }
+
+      if (task.autoMode !== undefined && typeof task.autoMode !== "boolean") {
+        task.autoMode = false;
+        needsSave = true;
       }
 
       // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),
@@ -886,12 +925,17 @@ export class ScheduleManager {
     // Get defaults from configuration
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const defaultAutoMode = config.get<boolean>("autoModeDefault", false);
     const defaultJitter = this.clampJitterSeconds(
       config.get<number>("jitterSeconds", 600),
     );
 
     const enabled = input.enabled !== false;
     const effectiveScope = input.scope || defaultScope;
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (effectiveScope === "workspace" && !workspaceRoot) {
+      throw new Error(messages.noWorkspaceOpen());
+    }
 
     // Calculate next run (disabled tasks must not keep nextRun)
     let nextRun: Date | undefined;
@@ -916,12 +960,11 @@ export class ScheduleManager {
       agent: input.agent,
       model: input.model,
       scope: effectiveScope,
-      workspacePath:
-        effectiveScope === "workspace"
-          ? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-          : undefined,
+      workspacePath: effectiveScope === "workspace" ? workspaceRoot : undefined,
       promptSource: input.promptSource || "inline",
       promptPath: input.promptPath,
+      autoMode:
+        input.autoMode !== undefined ? Boolean(input.autoMode) : defaultAutoMode,
       jitterSeconds:
         input.jitterSeconds !== undefined
           ? this.clampJitterSeconds(input.jitterSeconds)
@@ -1003,6 +1046,15 @@ export class ScheduleManager {
       this.validateCronExpression(updates.cronExpression);
     }
 
+    // Safety: when re-enabling a task, validate the effective cron expression.
+    // This prevents invalid persisted cron values from being re-enabled via
+    // update paths that do not edit cronExpression directly.
+    const nextEnabled = updates.enabled ?? task.enabled;
+    const nextCronExpression = updates.cronExpression ?? task.cronExpression;
+    if (!task.enabled && nextEnabled) {
+      this.validateCronExpression(nextCronExpression);
+    }
+
     const now = new Date();
     const enabledBefore = task.enabled;
     let cronChanged = false;
@@ -1029,19 +1081,23 @@ export class ScheduleManager {
     }
     if (updates.scope !== undefined) {
       const nextScope = updates.scope;
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+      if (nextScope === "workspace" && !workspaceRoot) {
+        throw new Error(messages.noWorkspaceOpen());
+      }
 
       // Only adjust workspacePath when scope actually changes (or workspacePath is missing).
       // Webview submits scope on every save; we must not overwrite workspacePath on edits.
       if (nextScope !== task.scope) {
         task.scope = nextScope;
         if (nextScope === "workspace") {
-          task.workspacePath =
-            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          task.workspacePath = workspaceRoot;
         } else {
           task.workspacePath = undefined;
         }
       } else if (nextScope === "workspace" && !task.workspacePath) {
-        task.workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        task.workspacePath = workspaceRoot;
       }
     }
     if (updates.promptSource !== undefined) {
@@ -1049,6 +1105,9 @@ export class ScheduleManager {
     }
     if (updates.promptPath !== undefined) {
       task.promptPath = updates.promptPath;
+    }
+    if (updates.autoMode !== undefined) {
+      task.autoMode = Boolean(updates.autoMode);
     }
     if (updates.jitterSeconds !== undefined) {
       task.jitterSeconds = this.clampJitterSeconds(updates.jitterSeconds);
@@ -1102,7 +1161,12 @@ export class ScheduleManager {
       return undefined;
     }
 
-    task.enabled = !task.enabled;
+    const nextEnabled = !task.enabled;
+    if (nextEnabled) {
+      this.validateCronExpression(task.cronExpression);
+    }
+
+    task.enabled = nextEnabled;
     task.updatedAt = new Date();
 
     // Keep nextRun consistent with enabled state
@@ -1127,6 +1191,10 @@ export class ScheduleManager {
     const task = this.tasks.get(id);
     if (!task) {
       return undefined;
+    }
+
+    if (enabled) {
+      this.validateCronExpression(task.cronExpression);
     }
 
     task.enabled = enabled;
@@ -1163,6 +1231,7 @@ export class ScheduleManager {
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,
+      autoMode: original.autoMode,
       jitterSeconds: original.jitterSeconds,
     };
 
@@ -1409,42 +1478,85 @@ export class ScheduleManager {
    * Force run a task immediately
    */
   async runTaskNow(id: string): Promise<boolean> {
+    const result = await this.runTaskNowDetailed(id);
+    return result.ok;
+  }
+
+  /**
+   * Force run a task immediately and return a classified result.
+   */
+  async runTaskNowDetailed(id: string): Promise<ManualRunResult> {
     const task = this.tasks.get(id);
-    if (!task || !this.onExecuteCallback) {
-      return false;
+    if (!task) {
+      return { ok: false, reason: "taskNotFound" };
+    }
+    if (!this.onExecuteCallback) {
+      return { ok: false, reason: "executorUnavailable" };
+    }
+
+    const previousNextRun =
+      task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
+        ? new Date(task.nextRun.getTime())
+        : undefined;
+    const previousLastRun =
+      task.lastRun instanceof Date && !Number.isNaN(task.lastRun.getTime())
+        ? new Date(task.lastRun.getTime())
+        : undefined;
+
+    try {
+      await this.onExecuteCallback(task);
+    } catch (error) {
+      const details = toSafeErrorDetails(error);
+      const userNotified =
+        !!error &&
+        typeof error === "object" &&
+        (error as Record<string, unknown>)[
+          USER_NOTIFIED_EXECUTION_ERROR_FLAG
+        ] === true;
+      logError("[CopilotScheduler] runTaskNow failed:", details);
+      return {
+        ok: false,
+        reason: "executionFailed",
+        errorMessage: details,
+        userNotified,
+      };
+    }
+
+    // Update lastRun and nextRun after manual execution
+    const executedAt = new Date();
+    task.lastRun = executedAt;
+    if (task.enabled) {
+      const policy = this.getManualRunNextRunPolicy();
+      const shouldAdvanceFromExisting =
+        policy === "advance" &&
+        previousNextRun &&
+        previousNextRun.getTime() >= executedAt.getTime();
+      const nextRunBase = shouldAdvanceFromExisting
+        ? previousNextRun
+        : executedAt;
+      task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
     }
 
     try {
-      const previousNextRun =
-        task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
-          ? new Date(task.nextRun.getTime())
-          : undefined;
-
-      await this.onExecuteCallback(task);
-
-      // Update lastRun and nextRun after manual execution
-      const executedAt = new Date();
-      task.lastRun = executedAt;
-      if (task.enabled) {
-        const policy = this.getManualRunNextRunPolicy();
-        const shouldAdvanceFromExisting =
-          policy === "advance" &&
-          previousNextRun &&
-          previousNextRun.getTime() >= executedAt.getTime();
-        const nextRunBase = shouldAdvanceFromExisting
-          ? previousNextRun
-          : executedAt;
-        task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
-      }
       await this.saveTasks();
-
-      return true;
     } catch (error) {
-      logError(
-        "[CopilotScheduler] runTaskNow failed:",
-        toSafeErrorDetails(error),
-      );
-      return false;
+      // Keep in-memory state consistent with persisted state on save failures.
+      task.lastRun = previousLastRun
+        ? new Date(previousLastRun.getTime())
+        : undefined;
+      task.nextRun = previousNextRun
+        ? new Date(previousNextRun.getTime())
+        : undefined;
+
+      const details = toSafeErrorDetails(error);
+      logError("[CopilotScheduler] runTaskNow save failed:", details);
+      return {
+        ok: false,
+        reason: "saveFailed",
+        errorMessage: details,
+      };
     }
+
+    return { ok: true };
   }
 }

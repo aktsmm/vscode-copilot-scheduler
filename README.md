@@ -60,26 +60,29 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## ⚙️ Settings
 
-| Setting                                   | Default     | Description                                                                                              |
-| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
-| `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                       |
-| `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                               |
-| `copilotScheduler.notificationMode`       | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                       |
-| `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                        |
-| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja)                                                                                 |
-| `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                  |
-| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                               |
-| `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time) |
-| `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                            |
-| `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                 |
-| `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                         |
-| `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                |
-| `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.  |
-| `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                       |
+| Setting                                   | Default     | Description                                                                                                              |
+| ----------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                                       |
+| `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                                               |
+| `copilotScheduler.notificationMode`       | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                                       |
+| `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                                        |
+| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja)                                                                                                 |
+| `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                                  |
+| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                                               |
+| `copilotScheduler.autoModeDefault`        | `false`     | Default value for new tasks' auto-mode hint option (when enabled, appends `auto` to runtime prompt).                     |
+| `copilotScheduler.commandDelayFactor`     | `1.0`       | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments. |
+| `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                 |
+| `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                                            |
+| `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                                 |
+| `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                                         |
+| `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                |
+| `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.                  |
+| `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                                       |
 
 If execution feels sluggish when a task is triggered, try:
 
 - `copilotScheduler.chatSession = continue`
+- `copilotScheduler.commandDelayFactor = 0.6` (or `0.5`)
 - `copilotScheduler.notificationMode = silentStatus`
 - `copilotScheduler.logLevel = error` (or `none`)
 

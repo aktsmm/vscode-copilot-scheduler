@@ -27,6 +27,9 @@ const DELAY_AFTER_MODEL_SELECT_MS = 100;
 const DELAY_AFTER_TYPE_NEW_SESSION_MS = 50;
 const DELAY_AFTER_TYPE_CONTINUE_SESSION_MS = 10;
 const DELAY_NEW_SESSION_MS = 200;
+const COMMAND_DELAY_FACTOR_DEFAULT = 1;
+const COMMAND_DELAY_FACTOR_MIN = 0.1;
+const COMMAND_DELAY_FACTOR_MAX = 2;
 
 /** Slash-command agents — prefixed with "/" instead of "@" */
 const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
@@ -82,14 +85,15 @@ export class CopilotExecutor {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
     }
 
-    // Get chat session behavior
+    // Get chat session behavior and command delay factor once per execution
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
+    const delayFactor = this.getCommandDelayFactor(config);
 
     try {
       // Try to create new session if configured
       if (chatSession === "new") {
-        await this.tryCreateNewChatSession();
+        await this.tryCreateNewChatSession(delayFactor);
       }
 
       // Focus on Copilot Chat panel
@@ -100,7 +104,7 @@ export class CopilotExecutor {
         chatSession === "new"
           ? DELAY_AFTER_FOCUS_NEW_SESSION_MS
           : DELAY_AFTER_FOCUS_CONTINUE_SESSION_MS;
-      await this.delay(focusDelayMs);
+      await this.delay(this.getAdjustedDelayMs(focusDelayMs, delayFactor));
 
       // Try to set model if specified
       if (options?.model && options.model !== "") {
@@ -113,7 +117,9 @@ export class CopilotExecutor {
             options.model,
           );
           logDebug(`[CopilotScheduler] Model selection result:`, result);
-          await this.delay(DELAY_AFTER_MODEL_SELECT_MS);
+          await this.delay(
+            this.getAdjustedDelayMs(DELAY_AFTER_MODEL_SELECT_MS, delayFactor),
+          );
         } catch (error) {
           logError(
             `[CopilotScheduler] Model selection failed:`,
@@ -131,7 +137,7 @@ export class CopilotExecutor {
         chatSession === "new"
           ? DELAY_AFTER_TYPE_NEW_SESSION_MS
           : DELAY_AFTER_TYPE_CONTINUE_SESSION_MS;
-      await this.delay(submitDelayMs);
+      await this.delay(this.getAdjustedDelayMs(submitDelayMs, delayFactor));
 
       // Submit the prompt
       await vscode.commands.executeCommand("workbench.action.chat.submit");
@@ -157,14 +163,36 @@ export class CopilotExecutor {
   /**
    * Try to create a new chat session
    */
-  private async tryCreateNewChatSession(): Promise<boolean> {
+  private async tryCreateNewChatSession(delayFactor: number): Promise<boolean> {
     try {
       await vscode.commands.executeCommand("workbench.action.chat.newChat");
-      await this.delay(DELAY_NEW_SESSION_MS);
+      await this.delay(
+        this.getAdjustedDelayMs(DELAY_NEW_SESSION_MS, delayFactor),
+      );
       return true;
     } catch {
       return false;
     }
+  }
+
+  private getCommandDelayFactor(config: vscode.WorkspaceConfiguration): number {
+    const raw = config.get<number>(
+      "commandDelayFactor",
+      COMMAND_DELAY_FACTOR_DEFAULT,
+    );
+    const parsed = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return COMMAND_DELAY_FACTOR_DEFAULT;
+    }
+    return Math.min(
+      COMMAND_DELAY_FACTOR_MAX,
+      Math.max(COMMAND_DELAY_FACTOR_MIN, parsed),
+    );
+  }
+
+  private getAdjustedDelayMs(baseMs: number, factor: number): number {
+    const adjusted = Math.round(baseMs * factor);
+    return Math.max(0, adjusted);
   }
 
   /**

@@ -64,6 +64,9 @@ export interface ScheduledTask {
   /** Path to prompt file (when promptSource is not "inline") */
   promptPath?: string;
 
+  /** Whether to append an auto-mode hint to the runtime prompt. */
+  autoMode?: boolean;
+
   /** Max random delay in seconds applied before execution (0 = off). */
   jitterSeconds?: number;
 
@@ -117,6 +120,9 @@ export interface CreateTaskInput {
 
   /** Path to prompt file */
   promptPath?: string;
+
+  /** Whether to append an auto-mode hint to the runtime prompt. */
+  autoMode?: boolean;
 
   /** Max random delay in seconds applied before execution (0 = off; undefined = use configured default). */
   jitterSeconds?: number;

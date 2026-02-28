@@ -82,6 +82,18 @@ export const messages = {
       `Task "${name}" execution failed: ${error}`,
       `タスク「${name}」の実行に失敗しました: ${error}`,
     ),
+  manualRunSaveFailed: (name: string, error: string) =>
+    t(
+      `Task "${name}" ran, but failed to save run state: ${error}`,
+      `タスク「${name}」は実行されましたが、実行状態の保存に失敗しました: ${error}`,
+    ),
+  manualRunSaveFailedStatus: (name: string) =>
+    t(`Task "${name}" save failed`, `タスク「${name}」の保存に失敗`),
+  manualRunUnavailable: () =>
+    t(
+      "Task execution is currently unavailable",
+      "現在タスク実行を利用できません",
+    ),
   taskNotFound: () => t("Task not found", "タスクが見つかりません"),
   noTasksFound: () =>
     t("No scheduled tasks found", "スケジュールされたタスクがありません"),
@@ -108,7 +120,7 @@ export const messages = {
       "Enter cron expression (e.g., '0 9 * * 1-5' for weekdays at 9am)",
       "cron式を入力（例: '0 9 * * 1-5' で平日9時）",
     ),
-  selectAgent: () => t("Select agent", "エージェントを選択"),
+  selectAgent: () => t("Select agent", "Agentを選択"),
   selectModel: () => t("Select model", "モデルを選択"),
   selectScope: () => t("Select scope", "スコープを選択"),
   selectTask: () => t("Select a task", "タスクを選択"),
@@ -150,9 +162,9 @@ export const messages = {
   webviewSuccessPrefix: () => t("✔ ", "✔ "),
 
   // ==================== Webview Placeholders ====================
-  webviewSelectAgentPlaceholder: () => t("Select agent", "エージェントを選択"),
+  webviewSelectAgentPlaceholder: () => t("Select agent", "Agentを選択"),
   webviewNoAgentsAvailable: () =>
-    t("No agents available", "利用可能なエージェントがありません"),
+    t("No agents available", "利用可能なAgentがありません"),
   webviewSelectModelPlaceholder: () => t("Select model", "モデルを選択"),
   webviewNoModelsAvailable: () =>
     t("No models available", "利用可能なモデルがありません"),
@@ -201,11 +213,10 @@ export const messages = {
   // ==================== Agent / Model Descriptions ====================
   agentNoneName: () => t("None", "なし"),
   agentNoneDesc: () => t("Default behavior", "デフォルトの動作"),
-  agentAgentName: () => t("Agent", "エージェント"),
-  agentAskName: () => t("Ask", "質問"),
-  agentEditName: () => t("Edit", "編集"),
-  agentModeDesc: () =>
-    t("Agent mode with tool use", "ツール利用のエージェントモード"),
+  agentAgentName: () => t("Agent", "Agent"),
+  agentAskName: () => t("Ask", "Ask"),
+  agentEditName: () => t("Edit", "Edit"),
+  agentModeDesc: () => t("Agent mode with tool use", "ツール利用のAgentモード"),
   agentAskDesc: () => t("Questions about code", "コードに関する質問"),
   agentEditDesc: () => t("AI code editing", "AIでコード編集"),
   agentWorkspaceDesc: () => t("Codebase search", "コードベース検索"),
@@ -264,7 +275,7 @@ export const messages = {
   labelSelectMinute: () => t("Minute", "分"),
   labelSelectDay: () => t("Day of month", "日"),
   labelInterval: () => t("Interval", "間隔"),
-  labelAgent: () => t("Agent", "エージェント"),
+  labelAgent: () => t("Agent", "Agent"),
   labelModel: () => t("Model", "モデル"),
   labelModelNote: () =>
     t(
@@ -283,8 +294,14 @@ export const messages = {
   labelNever: () => t("Never", "なし"),
   labelRunFirstInOneMinute: () =>
     t("Run first execution in 3 minutes", "3分後に初回実行する"),
+  labelAutoMode: () => t("Auto Mode Hint", "オートモードヒント"),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
+  webviewAutoModeNote: () =>
+    t(
+      "When enabled, appends 'auto' to the runtime prompt.",
+      "有効時、実行時プロンプトの末尾に 'auto' を自動追加します。",
+    ),
   webviewJitterNote: () =>
     t(
       "0 disables jitter. Adds a random delay between 0 and the specified seconds before execution.",

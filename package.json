@@ -193,6 +193,18 @@
           ],
           "description": "%config.chatSession%"
         },
+        "copilotScheduler.autoModeDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.autoModeDefault%"
+        },
+        "copilotScheduler.commandDelayFactor": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.1,
+          "maximum": 2,
+          "description": "%config.commandDelayFactor%"
+        },
         "copilotScheduler.manualRunNextRunPolicy": {
           "type": "string",
           "default": "advance",

@@ -518,4 +518,88 @@ suite("Frontmatter Resolution Tests", () => {
     assert.strictEqual(resolved.agent, undefined);
     assert.strictEqual(resolved.model, undefined);
   });
+
+  test("Appends auto hint when task.autoMode is true", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-auto-mode-on",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      autoMode: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body\n\nauto");
+  });
+
+  test("Does not append auto hint when task.autoMode is false", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-auto-mode-off",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      autoMode: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body");
+  });
+
+  test("Does not duplicate auto hint when prompt already contains auto", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-auto-mode-no-dup",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body\n\nauto",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      autoMode: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body\n\nauto");
+  });
 });

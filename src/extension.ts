@@ -191,6 +191,88 @@ type PromptExecutionPayload = {
   model?: string;
 };
 
+type ManualRunFailureResult = {
+  ok: false;
+  reason:
+    | "taskNotFound"
+    | "executorUnavailable"
+    | "executionFailed"
+    | "saveFailed";
+  errorMessage?: string;
+  userNotified?: boolean;
+};
+
+const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
+
+function markExecutionErrorAsUserNotified(error: unknown): void {
+  if (!error || typeof error !== "object") {
+    return;
+  }
+
+  try {
+    (error as Record<string, unknown>)[USER_NOTIFIED_EXECUTION_ERROR_FLAG] =
+      true;
+  } catch {
+    // best-effort marker only
+  }
+}
+
+function handleManualRunFailure(
+  taskName: string,
+  runResult: ManualRunFailureResult,
+  options?: { showWebviewError?: boolean },
+): void {
+  const showWebviewError = options?.showWebviewError === true;
+
+  if (runResult.reason === "executionFailed") {
+    if (runResult.userNotified) {
+      return;
+    }
+    const msg = messages.taskExecutionFailed(
+      taskName,
+      runResult.errorMessage || messages.webviewUnknown(),
+    );
+    notifyError(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "saveFailed") {
+    const msg = messages.manualRunSaveFailed(
+      taskName,
+      runResult.errorMessage || messages.webviewUnknown(),
+    );
+    if (getNotificationMode() !== "silentStatus") {
+      vscode.window.setStatusBarMessage(
+        `⚠ ${messages.manualRunSaveFailedStatus(taskName)}`,
+        6000,
+      );
+    }
+    notifyError(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "executorUnavailable") {
+    const msg = messages.manualRunUnavailable();
+    notifyError(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  const msg = messages.taskNotFound();
+  notifyError(msg);
+  if (showWebviewError) {
+    SchedulerWebview.showError(msg);
+  }
+}
+
 /**
  * Extension activation
  */
@@ -382,10 +464,16 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     const resolved = await resolvePromptExecution(task);
 
     // Execute the prompt
-    await copilotExecutor.executePrompt(resolved.prompt, {
-      agent: resolved.agent,
-      model: resolved.model,
-    });
+    try {
+      await copilotExecutor.executePrompt(resolved.prompt, {
+        agent: resolved.agent,
+        model: resolved.model,
+      });
+    } catch (error) {
+      // executePrompt displays its own warning on failure.
+      markExecutionErrorAsUserNotified(error);
+      throw error;
+    }
 
     notifyInfo(messages.taskExecuted(task.name));
   } catch (error) {
@@ -555,6 +643,22 @@ function resolveExecutionOption(
   return undefined;
 }
 
+function hasAutoModeHint(promptText: string): boolean {
+  return /\bauto\b|オート|自動/i.test(promptText);
+}
+
+function applyAutoModeHint(promptText: string, enabled: boolean): string {
+  if (!enabled) {
+    return promptText;
+  }
+
+  if (hasAutoModeHint(promptText)) {
+    return promptText;
+  }
+
+  return `${promptText}\n\nauto`;
+}
+
 async function resolvePromptExecution(
   task: ScheduledTask,
   preferOpenDocument = true,
@@ -563,7 +667,7 @@ async function resolvePromptExecution(
   const parsed = parsePromptFrontmatter(promptText);
 
   return {
-    prompt: parsed.prompt,
+    prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
     agent: resolveExecutionOption(task.agent, parsed.agent),
     model: resolveExecutionOption(task.model, parsed.model),
   };
@@ -573,6 +677,7 @@ export const __testOnly = {
   resolvePromptText,
   parsePromptFrontmatter,
   resolveExecutionOption,
+  applyAutoModeHint,
   resolvePromptExecution,
   sanitizeErrorDetailsForLog,
   resolveDisplayErrorMessage,
@@ -632,11 +737,19 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
         }
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-        // runTaskNow returns false only when the task is missing or execution fails.
-        // On failure, executePrompt already shows a user-facing warning, so we do
-        // not retry (which would show the same error notification a second time).
-        await scheduleManager.runTaskNow(action.taskId);
-        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        // On execution failure, executePrompt already shows a warning with copy option.
+        const runResult = await scheduleManager.runTaskNowDetailed(
+          action.taskId,
+        );
+        if (!runResult.ok) {
+          handleManualRunFailure(runTask.name, runResult, {
+            showWebviewError: true,
+          });
+          break;
+        }
+        // Success path already persists via saveTasks(), which triggers
+        // onTasksChanged callback → SchedulerWebview.updateTasks once.
+        // Avoid sending a duplicate full task list here.
         break;
       }
 
@@ -1002,7 +1115,11 @@ function registerDeleteTaskCommand(): vscode.Disposable {
         );
 
         if (confirm === messages.confirmDeleteYes()) {
-          await scheduleManager.deleteTask(task.id);
+          const deleted = await scheduleManager.deleteTask(task.id);
+          if (!deleted) {
+            notifyError(messages.taskNotFound());
+            return;
+          }
           notifyInfo(messages.taskDeleted(task.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         }
@@ -1056,6 +1173,8 @@ function registerToggleTaskCommand(): vscode.Disposable {
             await maybeShowDisclaimerOnce(task);
           }
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        } else {
+          notifyError(messages.taskNotFound());
         }
       } catch (error) {
         const errorMessage =
@@ -1101,6 +1220,8 @@ function registerEnableTaskCommand(): vscode.Disposable {
           notifyInfo(messages.taskEnabled(task.name));
           await maybeShowDisclaimerOnce(task);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        } else {
+          notifyError(messages.taskNotFound());
         }
       } catch (error) {
         const errorMessage =
@@ -1145,6 +1266,8 @@ function registerDisableTaskCommand(): vscode.Disposable {
         if (task) {
           notifyInfo(messages.taskDisabled(task.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        } else {
+          notifyError(messages.taskNotFound());
         }
       } catch (error) {
         const errorMessage =
@@ -1191,9 +1314,14 @@ function registerRunNowCommand(): vscode.Disposable {
         }
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-        // Do not retry on failure — executePrompt already shows a warning.
-        await scheduleManager.runTaskNow(task.id);
-        SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        const runResult = await scheduleManager.runTaskNowDetailed(task.id);
+        if (!runResult.ok) {
+          handleManualRunFailure(task.name, runResult);
+          return;
+        }
+        // Success path already persists via saveTasks(), which triggers
+        // onTasksChanged callback → SchedulerWebview.updateTasks once.
+        // Avoid sending a duplicate full task list here.
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);

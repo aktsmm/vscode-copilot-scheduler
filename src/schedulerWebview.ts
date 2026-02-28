@@ -720,6 +720,7 @@ export class SchedulerWebview {
     const presets = getCronPresets();
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const defaultAutoMode = config.get<boolean>("autoModeDefault", false);
     const defaultJitterSecondsRaw = config.get<number>("jitterSeconds", 600);
     // Keep the Webview resilient even if settings are corrupted/out-of-range.
     const defaultJitterSeconds = (() => {
@@ -767,6 +768,7 @@ export class SchedulerWebview {
       labelLastRun: messages.labelLastRun(),
       labelNever: messages.labelNever(),
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
+      labelAutoMode: messages.labelAutoMode(),
       labelJitterSeconds: messages.labelJitterSeconds(),
       placeholderTaskName: messages.placeholderTaskName(),
       placeholderPrompt: messages.placeholderPrompt(),
@@ -847,6 +849,7 @@ export class SchedulerWebview {
       webviewSuccessPrefix: messages.webviewSuccessPrefix(),
 
       // Webview notes
+      webviewAutoModeNote: messages.webviewAutoModeNote(),
       webviewJitterNote: messages.webviewJitterNote(),
 
       labelThisWorkspaceShort: messages.labelThisWorkspaceShort(),
@@ -868,6 +871,7 @@ export class SchedulerWebview {
         .map((f) => f.uri.fsPath)
         .filter(Boolean),
       caseInsensitivePaths: process.platform === "win32",
+      defaultAutoMode,
       defaultJitterSeconds,
       locale: isJa ? "ja-JP" : "en-US",
       strings,
@@ -1362,6 +1366,14 @@ export class SchedulerWebview {
           <input type="checkbox" id="run-first">
           <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
         </div>
+      </div>
+
+      <div class="form-group">
+        <div class="checkbox-group">
+          <input type="checkbox" id="auto-mode" ${defaultAutoMode ? "checked" : ""}>
+          <label for="auto-mode">${escapeHtml(strings.labelAutoMode)}</label>
+        </div>
+        <p class="note">${escapeHtml(strings.webviewAutoModeNote)}</p>
       </div>
 
       <div class="form-group">

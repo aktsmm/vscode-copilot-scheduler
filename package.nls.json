@@ -33,6 +33,8 @@
   "config.chatSession": "Chat session behavior",
   "config.chatSession.new": "Create new chat session for each execution (more isolated, usually slower)",
   "config.chatSession.continue": "Continue in existing chat session (usually faster)",
+  "config.autoModeDefault": "Default value for new tasks' auto-mode hint option (appends 'auto' to runtime prompt when enabled)",
+  "config.commandDelayFactor": "Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster but may reduce stability in some environments.",
   "config.manualRunNextRunPolicy": "How to compute next run after Run Now",
   "config.manualRunNextRunPolicy.advance": "Advance from existing next run when possible (keeps queue progression)",
   "config.manualRunNextRunPolicy.fromNow": "Recalculate from current time (ignores existing future next run)",

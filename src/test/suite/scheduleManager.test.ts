@@ -71,6 +71,33 @@ function createManagerWithInvalidTimezone(
   return manager;
 }
 
+function overrideWorkspaceFoldersForTest(
+  value: Array<{ uri: vscode.Uri }> | undefined,
+): () => void {
+  const wsAny = vscode.workspace as unknown as {
+    workspaceFolders?: Array<{ uri: vscode.Uri }>;
+  };
+  const original = wsAny.workspaceFolders;
+  try {
+    Object.defineProperty(vscode.workspace, "workspaceFolders", {
+      value,
+      configurable: true,
+    });
+  } catch {
+    // Best-effort only.
+  }
+  return () => {
+    try {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: original,
+        configurable: true,
+      });
+    } catch {
+      // ignore
+    }
+  };
+}
+
 suite("ScheduleManager Minimum Interval Tests", () => {
   test("checkMinimumInterval falls back to local time when timezone is invalid", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
@@ -462,6 +489,335 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
       }
     }
   });
+
+  test("normalizes non-boolean enabled values to false", () => {
+    const nowIso = new Date().toISOString();
+    const rawTask = {
+      id: "t-invalid-enabled",
+      name: "invalid-enabled",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: "false",
+      scope: "global",
+      promptSource: "inline",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+
+      const loaded = manager.getTask(rawTask.id);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.enabled, false);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("normalizes invalid scope and disables task for safety", () => {
+    const nowIso = new Date().toISOString();
+    const rawTask = {
+      id: "t-invalid-scope",
+      name: "invalid-scope",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: true,
+      scope: "broken",
+      promptSource: "inline",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+
+      const loaded = manager.getTask(rawTask.id);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.scope, "global");
+      assert.strictEqual(loaded?.enabled, false);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Workspace Scope Validation Tests", () => {
+  test("createTask rejects workspace scope when no workspace is open", async () => {
+    const restoreWs = overrideWorkspaceFoldersForTest(undefined);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+
+      await assert.rejects(
+        manager.createTask({
+          name: "workspace-without-folder",
+          prompt: "hello",
+          cronExpression: "0 * * * *",
+          scope: "workspace",
+          promptSource: "inline",
+          enabled: true,
+        }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.noWorkspaceOpen(),
+      );
+    } finally {
+      restoreWs();
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask rejects switching to workspace scope when no workspace is open", async () => {
+    const restoreWs = overrideWorkspaceFoldersForTest(undefined);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "global-task",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      await assert.rejects(
+        manager.updateTask(task.id, { scope: "workspace" }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.noWorkspaceOpen(),
+      );
+    } finally {
+      restoreWs();
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Auto Mode Tests", () => {
+  test("createTask uses autoModeDefault=false when autoMode is omitted", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "auto-mode-default-off",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      assert.strictEqual(task.autoMode, false);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask can change autoMode", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "auto-mode-update",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      const updated = await manager.updateTask(task.id, { autoMode: true });
+      assert.ok(updated);
+      assert.strictEqual(updated?.autoMode, true);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Invalid Cron Enable Safety Tests", () => {
+  function createManagerWithDisabledInvalidCronTask(
+    tmp: string,
+    taskId: string,
+  ): ScheduleManager {
+    const nowIso = new Date().toISOString();
+    const rawTask = {
+      id: taskId,
+      name: `task-${taskId}`,
+      prompt: "hello",
+      cronExpression: "invalid cron",
+      enabled: false,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    return new ScheduleManager(
+      createMockContextWithGlobalTasks(tmp, [rawTask]),
+    );
+  }
+
+  test("toggleTask rejects enabling task with invalid cron expression", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = createManagerWithDisabledInvalidCronTask(
+        tmp,
+        "t-toggle-invalid-cron",
+      );
+
+      await assert.rejects(
+        manager.toggleTask("t-toggle-invalid-cron"),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.invalidCronExpression(),
+      );
+
+      const task = manager.getTask("t-toggle-invalid-cron");
+      assert.ok(task);
+      assert.strictEqual(task?.enabled, false);
+      assert.strictEqual(task?.nextRun, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("setTaskEnabled rejects enabling task with invalid cron expression", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = createManagerWithDisabledInvalidCronTask(
+        tmp,
+        "t-set-enabled-invalid-cron",
+      );
+
+      await assert.rejects(
+        manager.setTaskEnabled("t-set-enabled-invalid-cron", true),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.invalidCronExpression(),
+      );
+
+      const task = manager.getTask("t-set-enabled-invalid-cron");
+      assert.ok(task);
+      assert.strictEqual(task?.enabled, false);
+      assert.strictEqual(task?.nextRun, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask rejects enabling task with invalid cron expression", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = createManagerWithDisabledInvalidCronTask(
+        tmp,
+        "t-update-enabled-invalid-cron",
+      );
+
+      await assert.rejects(
+        manager.updateTask("t-update-enabled-invalid-cron", { enabled: true }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.invalidCronExpression(),
+      );
+
+      const task = manager.getTask("t-update-enabled-invalid-cron");
+      assert.ok(task);
+      assert.strictEqual(task?.enabled, false);
+      assert.strictEqual(task?.nextRun, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
 });
 
 suite("ScheduleManager Task Change Callback Tests", () => {
@@ -535,6 +891,318 @@ suite("ScheduleManager Task Change Callback Tests", () => {
 });
 
 suite("ScheduleManager RunNow Tests", () => {
+  test("runTaskNowDetailed returns taskNotFound when task does not exist", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+
+      const result = await manager.runTaskNowDetailed("missing-task-id");
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "taskNotFound");
+      }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed returns executorUnavailable when callback is missing", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-executor-unavailable",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "executorUnavailable");
+      }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed returns executionFailed when callback throws", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-exec-fail",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        throw new Error("execute failed");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "executionFailed");
+        assert.ok(typeof result.errorMessage === "string");
+        assert.ok(result.errorMessage.length > 0);
+        assert.strictEqual(result.userNotified, false);
+      }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed returns saveFailed when saveTasks throws", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-save-fail",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          saveTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        // no-op
+      };
+      (
+        manager as unknown as {
+          saveTasks?: () => Promise<void>;
+        }
+      ).saveTasks = async () => {
+        throw new Error("save failed");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "saveFailed");
+        assert.ok(typeof result.errorMessage === "string");
+        assert.ok(result.errorMessage.length > 0);
+      }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed rolls back lastRun/nextRun when saveTasks throws", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-rollback",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      const previousLastRun = new Date(Date.now() - 20 * 60 * 1000);
+      const previousNextRun = new Date(Date.now() + 15 * 60 * 1000);
+      task.lastRun = previousLastRun;
+      task.nextRun = previousNextRun;
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          saveTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        // no-op
+      };
+      (
+        manager as unknown as {
+          saveTasks?: () => Promise<void>;
+        }
+      ).saveTasks = async () => {
+        throw new Error("save failed");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "saveFailed");
+      }
+
+      assert.ok(task.lastRun instanceof Date);
+      assert.strictEqual(
+        (task.lastRun as Date).getTime(),
+        previousLastRun.getTime(),
+      );
+      assert.ok(task.nextRun instanceof Date);
+      assert.strictEqual(
+        (task.nextRun as Date).getTime(),
+        previousNextRun.getTime(),
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed keeps undefined run state when saveTasks throws", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-rollback-undefined",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      task.lastRun = undefined;
+      task.nextRun = undefined;
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          saveTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        // no-op
+      };
+      (
+        manager as unknown as {
+          saveTasks?: () => Promise<void>;
+        }
+      ).saveTasks = async () => {
+        throw new Error("save failed");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "saveFailed");
+      }
+
+      assert.strictEqual(task.lastRun, undefined);
+      assert.strictEqual(task.nextRun, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed preserves user-notified marker on execution failure", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-exec-fail-notified",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        const err = new Error("execute failed (notified)");
+        (err as unknown as Record<string, unknown>)[
+          "copilotSchedulerUserNotified"
+        ] = true;
+        throw err;
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "executionFailed");
+        assert.strictEqual(result.userNotified, true);
+      }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("runTaskNow advances nextRun when future nextRun already exists", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
