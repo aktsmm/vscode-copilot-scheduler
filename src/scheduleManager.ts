@@ -106,6 +106,15 @@ export class ScheduleManager {
 
   private static readonly FIRST_RUN_DELAY_MINUTES = 3;
 
+  private static millisecondsUntilNextMinute(now: Date): number {
+    const elapsedMsInMinute =
+      now.getSeconds() * 1000 + now.getMilliseconds();
+    if (elapsedMsInMinute === 0) {
+      return 0;
+    }
+    return 60 * 1000 - elapsedMsInMinute;
+  }
+
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.storageFilePath = path.join(
@@ -1297,8 +1306,7 @@ export class ScheduleManager {
 
     // Align to next minute boundary
     const now = new Date();
-    const msToNextMinute =
-      (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+    const msToNextMinute = ScheduleManager.millisecondsUntilNextMinute(now);
 
     // Start after alignment
     this.schedulerTimeout = setTimeout(() => {

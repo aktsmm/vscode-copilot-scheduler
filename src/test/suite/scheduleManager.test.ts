@@ -1293,3 +1293,25 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 });
+
+suite("ScheduleManager Scheduler Alignment Tests", () => {
+  test("millisecondsUntilNextMinute returns 0 at exact minute boundary", () => {
+    const delay = (
+      ScheduleManager as unknown as {
+        millisecondsUntilNextMinute: (now: Date) => number;
+      }
+    ).millisecondsUntilNextMinute(new Date("2026-02-28T10:20:00.000Z"));
+
+    assert.strictEqual(delay, 0);
+  });
+
+  test("millisecondsUntilNextMinute returns remaining time within minute", () => {
+    const delay = (
+      ScheduleManager as unknown as {
+        millisecondsUntilNextMinute: (now: Date) => number;
+      }
+    ).millisecondsUntilNextMinute(new Date("2026-02-28T10:20:12.250Z"));
+
+    assert.strictEqual(delay, 47750);
+  });
+});

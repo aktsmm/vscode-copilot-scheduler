@@ -132,8 +132,8 @@ async function syncPromptTemplatesIfNeeded(
       : false;
 
   if (updated) {
-    SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
-    // treeProvider.refresh() is already triggered by updateTaskPrompts → saveTasks → notifyTasksChanged callback.
+    // updateTaskPrompts -> saveTasks -> notifyTasksChanged callback already
+    // refreshes both TreeView and Webview. Avoid duplicate task-list pushes.
   }
 
   await context.globalState.update(PROMPT_SYNC_DATE_KEY, todayKey);
@@ -1410,6 +1410,8 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
         if (duplicated) {
           notifyInfo(messages.taskDuplicated(duplicated.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        } else {
+          notifyError(messages.taskNotFound());
         }
       } catch (error) {
         const errorMessage =
