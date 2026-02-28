@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -123,42 +123,18 @@
           "default": true,
           "description": "%config.enabled%"
         },
-        "copilotScheduler.showNotifications": {
-          "type": "boolean",
-          "default": true,
-          "description": "%config.showNotifications%"
-        },
-        "copilotScheduler.notificationMode": {
+        "copilotScheduler.defaultScope": {
           "type": "string",
-          "default": "sound",
+          "default": "workspace",
           "enum": [
-            "sound",
-            "silentToast",
-            "silentStatus"
+            "global",
+            "workspace"
           ],
           "enumDescriptions": [
-            "%config.notificationMode.sound%",
-            "%config.notificationMode.silentToast%",
-            "%config.notificationMode.silentStatus%"
+            "%config.defaultScope.global%",
+            "%config.defaultScope.workspace%"
           ],
-          "description": "%config.notificationMode%"
-        },
-        "copilotScheduler.logLevel": {
-          "type": "string",
-          "default": "info",
-          "enum": [
-            "none",
-            "error",
-            "info",
-            "debug"
-          ],
-          "enumDescriptions": [
-            "%config.logLevel.none%",
-            "%config.logLevel.error%",
-            "%config.logLevel.info%",
-            "%config.logLevel.debug%"
-          ],
-          "description": "%config.logLevel%"
+          "description": "%config.defaultScope%"
         },
         "copilotScheduler.language": {
           "type": "string",
@@ -179,6 +155,26 @@
           "type": "string",
           "default": "",
           "description": "%config.timezone%"
+        },
+        "copilotScheduler.jitterSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "maximum": 1800,
+          "description": "%config.jitterSeconds%"
+        },
+        "copilotScheduler.manualRunNextRunPolicy": {
+          "type": "string",
+          "default": "advance",
+          "enum": [
+            "advance",
+            "fromNow"
+          ],
+          "enumDescriptions": [
+            "%config.manualRunNextRunPolicy.advance%",
+            "%config.manualRunNextRunPolicy.fromNow%"
+          ],
+          "description": "%config.manualRunNextRunPolicy%"
         },
         "copilotScheduler.chatSession": {
           "type": "string",
@@ -205,38 +201,25 @@
           "maximum": 2,
           "description": "%config.commandDelayFactor%"
         },
-        "copilotScheduler.manualRunNextRunPolicy": {
+        "copilotScheduler.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.showNotifications%"
+        },
+        "copilotScheduler.notificationMode": {
           "type": "string",
-          "default": "advance",
+          "default": "sound",
           "enum": [
-            "advance",
-            "fromNow"
+            "sound",
+            "silentToast",
+            "silentStatus"
           ],
           "enumDescriptions": [
-            "%config.manualRunNextRunPolicy.advance%",
-            "%config.manualRunNextRunPolicy.fromNow%"
+            "%config.notificationMode.sound%",
+            "%config.notificationMode.silentToast%",
+            "%config.notificationMode.silentStatus%"
           ],
-          "description": "%config.manualRunNextRunPolicy%"
-        },
-        "copilotScheduler.defaultScope": {
-          "type": "string",
-          "default": "workspace",
-          "enum": [
-            "global",
-            "workspace"
-          ],
-          "enumDescriptions": [
-            "%config.defaultScope.global%",
-            "%config.defaultScope.workspace%"
-          ],
-          "description": "%config.defaultScope%"
-        },
-        "copilotScheduler.jitterSeconds": {
-          "type": "number",
-          "default": 600,
-          "minimum": 0,
-          "maximum": 1800,
-          "description": "%config.jitterSeconds%"
+          "description": "%config.notificationMode%"
         },
         "copilotScheduler.maxDailyExecutions": {
           "type": "number",
@@ -259,6 +242,23 @@
           "type": "string",
           "default": "",
           "description": "%config.globalAgentsPath%"
+        },
+        "copilotScheduler.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "none",
+            "error",
+            "info",
+            "debug"
+          ],
+          "enumDescriptions": [
+            "%config.logLevel.none%",
+            "%config.logLevel.error%",
+            "%config.logLevel.info%",
+            "%config.logLevel.debug%"
+          ],
+          "description": "%config.logLevel%"
         },
         "copilotScheduler.reportIssue": {
           "type": "null",

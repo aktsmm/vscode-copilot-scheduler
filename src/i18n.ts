@@ -299,8 +299,8 @@ export const messages = {
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
   webviewAutoModeNote: () =>
     t(
-      "When enabled, appends 'auto' to the runtime prompt.",
-      "有効時、実行時プロンプトの末尾に 'auto' を自動追加します。",
+      "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present).",
+      "有効時、実行時プロンプトの先頭（フロントマターがあればその直後）に自律実行の指示を自動挿入します。",
     ),
   webviewJitterNote: () =>
     t(

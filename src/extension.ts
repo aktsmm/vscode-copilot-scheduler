@@ -643,6 +643,9 @@ function resolveExecutionOption(
   return undefined;
 }
 
+const AUTO_MODE_HINT =
+  "[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.";
+
 function hasAutoModeHint(promptText: string): boolean {
   return /\bauto\b|オート|自動/i.test(promptText);
 }
@@ -656,7 +659,17 @@ function applyAutoModeHint(promptText: string, enabled: boolean): string {
     return promptText;
   }
 
-  return `${promptText}\n\nauto`;
+  // If frontmatter is still present (no agent/model was extracted),
+  // insert after the closing fence; otherwise prepend.
+  const fmMatch = promptText.match(
+    /^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\r?\n?/,
+  );
+  if (fmMatch) {
+    const after = promptText.slice(fmMatch[0].length);
+    return `${fmMatch[0]}${AUTO_MODE_HINT}\n\n${after}`;
+  }
+
+  return `${AUTO_MODE_HINT}\n\n${promptText}`;
 }
 
 async function resolvePromptExecution(

@@ -544,7 +544,10 @@ suite("Frontmatter Resolution Tests", () => {
     } satisfies ScheduledTask;
 
     const resolved = await resolvePromptExecution(task, true);
-    assert.strictEqual(resolved.prompt, "Body\n\nauto");
+    assert.strictEqual(
+      resolved.prompt,
+      "[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.\n\nBody",
+    );
   });
 
   test("Does not append auto hint when task.autoMode is false", async () => {
@@ -600,6 +603,7 @@ suite("Frontmatter Resolution Tests", () => {
     } satisfies ScheduledTask;
 
     const resolved = await resolvePromptExecution(task, true);
+    // Already contains 'auto' word, so no hint is added
     assert.strictEqual(resolved.prompt, "Body\n\nauto");
   });
 });

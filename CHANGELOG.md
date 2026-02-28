@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.19] - 2026-02-28
+
+### Improved
+
+- **Auto Mode Hint**: Strengthened autonomous-execution instruction and changed insertion position to the beginning of the prompt (after frontmatter, if present) instead of appending to the end.
+- **Settings order**: Reorganized settings UI order by logical category (Basic → Schedule → Execution → Notification → Safety → Paths → Debug).
+
+### Changed
+
+- Updated i18n descriptions, package.nls, and README to reflect the new auto mode behavior.
+
 ## [1.0.15] - 2026-02-28
 
 ### Fixed
