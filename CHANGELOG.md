@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-02-28
+
+### Improved
+
+- **Auto Mode hint detection**: Refined duplicate detection to avoid suppressing insertion on generic natural-language mentions, while still preventing duplicate instruction injection.
+- **Test coverage**: Added a frontmatter-preserved scenario test to validate insertion right after the closing frontmatter fence.
+
+### Changed
+
+- Synced settings table order in README/README_ja with the actual VS Code settings display order.
+
 ## [1.0.19] - 2026-02-28
 
 ### Improved

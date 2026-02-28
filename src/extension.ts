@@ -647,7 +647,11 @@ const AUTO_MODE_HINT =
   "[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.";
 
 function hasAutoModeHint(promptText: string): boolean {
-  return /\bauto\b|オート|自動/i.test(promptText);
+  if (promptText.toLowerCase().includes(AUTO_MODE_HINT.toLowerCase())) {
+    return true;
+  }
+
+  return /(?:^|\r?\n)\s*(?:\[auto\]|auto)\s*(?:\r?\n|$)/i.test(promptText);
 }
 
 function applyAutoModeHint(promptText: string, enabled: boolean): string {
@@ -659,8 +663,6 @@ function applyAutoModeHint(promptText: string, enabled: boolean): string {
     return promptText;
   }
 
-  // If frontmatter is still present (no agent/model was extracted),
-  // insert after the closing fence; otherwise prepend.
   const fmMatch = promptText.match(
     /^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\r?\n?/,
   );

@@ -519,7 +519,38 @@ suite("Frontmatter Resolution Tests", () => {
     assert.strictEqual(resolved.model, undefined);
   });
 
-  test("Appends auto hint when task.autoMode is true", async () => {
+  test("Inserts auto hint after frontmatter when frontmatter has no agent/model", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{ prompt: string; agent?: string; model?: string }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-auto-mode-frontmatter-no-keys",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "---\ndescription: sample\ntools: []\n---\nBody",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      autoMode: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(
+      resolved.prompt,
+      "---\ndescription: sample\ntools: []\n---\n[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.\n\nBody",
+    );
+  });
+
+  test("Inserts auto hint at beginning when task.autoMode is true", async () => {
     const { __testOnly } = await import("../../extension");
     const resolvePromptExecution = __testOnly.resolvePromptExecution as
       | ((
@@ -550,7 +581,7 @@ suite("Frontmatter Resolution Tests", () => {
     );
   });
 
-  test("Does not append auto hint when task.autoMode is false", async () => {
+  test("Does not insert auto hint when task.autoMode is false", async () => {
     const { __testOnly } = await import("../../extension");
     const resolvePromptExecution = __testOnly.resolvePromptExecution as
       | ((
@@ -603,7 +634,6 @@ suite("Frontmatter Resolution Tests", () => {
     } satisfies ScheduledTask;
 
     const resolved = await resolvePromptExecution(task, true);
-    // Already contains 'auto' word, so no hint is added
     assert.strictEqual(resolved.prompt, "Body\n\nauto");
   });
 });
