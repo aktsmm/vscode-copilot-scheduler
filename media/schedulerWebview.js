@@ -1,6 +1,10 @@
 (function () {
   var vscode = null;
   var strings = {};
+  var MAX_SANITIZE_OUTPUT_CHARS = 8000;
+  var MAX_SANITIZE_INPUT_CHARS = 16000;
+  var REDACTED_PLACEHOLDER = "[REDACTED]";
+  var formErrorHideTimer = null;
 
   // Initial data (JSON from inline script tag)
   var initialData = {};
@@ -14,6 +18,12 @@
   }
 
   strings = initialData.strings || {};
+  if (
+    typeof strings.redactedPlaceholder === "string" &&
+    strings.redactedPlaceholder
+  ) {
+    REDACTED_PLACEHOLDER = strings.redactedPlaceholder;
+  }
 
   function basenameAny(p) {
     if (!p) return "";
@@ -43,81 +53,161 @@
     return basenameAny(s);
   }
 
+  function sanitizeSensitiveDetails(text) {
+    return String(text)
+      .replace(
+        /(\bAuthorization\s*:\s*(?:Bearer|Basic|Token)\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        function (_m, prefix) {
+          return String(prefix) + REDACTED_PLACEHOLDER;
+        },
+      )
+      .replace(
+        /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|password|passwd)=)[^&\s]+/gi,
+        function (_m, prefix) {
+          return String(prefix) + REDACTED_PLACEHOLDER;
+        },
+      )
+      .replace(
+        /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|password|passwd)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        function (_m, prefix) {
+          return String(prefix) + REDACTED_PLACEHOLDER;
+        },
+      );
+  }
+
   function sanitizeAbsolutePaths(text) {
     if (!text) return "";
-    var s = String(text);
-    return (
-      s
-        // Quoted file URIs (may include spaces)
-        .replace(/'(file:\/\/[^']+)'/gi, function (_m, p1) {
-          return "'" + basenameFromPathLike(p1) + "'";
-        })
-        .replace(/"(file:\/\/[^"]+)"/gi, function (_m, p1) {
-          return '"' + basenameFromPathLike(p1) + '"';
-        })
-        // Unquoted file URIs (no spaces)
-        .replace(/file:\/\/[^\s"'`]+/gi, function (m) {
-          return basenameFromPathLike(m);
-        })
-        // Quoted Windows absolute paths / UNC (may include spaces)
-        .replace(/'((?:[A-Za-z]:(?:\\|\/)|\\\\)[^']+)'/g, function (_m, p1) {
-          return "'" + basenameFromPathLike(p1) + "'";
-        })
-        .replace(/"((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"]+)"/g, function (_m, p1) {
-          return '"' + basenameFromPathLike(p1) + '"';
-        })
-        .replace(
-          /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
-          function (_m, prefix, p1) {
-            return String(prefix) + basenameFromPathLike(p1);
-          },
-        )
-        // Unquoted Windows absolute paths / UNC (no spaces)
-        .replace(
-          /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^\s"'`]+)/g,
-          function (_m, prefix, p1) {
-            return String(prefix) + basenameFromPathLike(p1);
-          },
-        )
-        // Quoted POSIX absolute paths (may include spaces)
-        .replace(/'(\/[^']+)'/g, function (_m, p1) {
-          return "'" + basenameFromPathLike(p1) + "'";
-        })
-        .replace(/"(\/[^\"]+)"/g, function (_m, p1) {
-          return '"' + basenameFromPathLike(p1) + '"';
-        })
-        .replace(
-          /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
-          function (_m, prefix, p1) {
-            return String(prefix) + basenameFromPathLike(p1);
-          },
-        )
-        // Unquoted POSIX absolute paths (no spaces) — only when preceded by start/whitespace/(
-        .replace(/(^|[\s(])(\/[^\s"'`]+)/g, function (_m, prefix, p1) {
+    var input = String(text);
+    if (input.length > MAX_SANITIZE_INPUT_CHARS) {
+      input = input.slice(0, MAX_SANITIZE_INPUT_CHARS);
+    }
+    var maskedInput = sanitizeSensitiveDetails(input);
+    var sanitized = maskedInput
+      // Quoted file URIs (may include spaces)
+      .replace(/'(file:\/\/[^']+)'/gi, function (_m, p1) {
+        return "'" + basenameFromPathLike(p1) + "'";
+      })
+      .replace(/"(file:\/\/[^"]+)"/gi, function (_m, p1) {
+        return '"' + basenameFromPathLike(p1) + '"';
+      })
+      // Unquoted file URIs (no spaces)
+      .replace(/file:\/\/[^\s"'`]+/gi, function (m) {
+        return basenameFromPathLike(m);
+      })
+      // Quoted Windows absolute paths / UNC (may include spaces)
+      .replace(/'((?:[A-Za-z]:(?:\\|\/)|\\\\)[^']+)'/g, function (_m, p1) {
+        return "'" + basenameFromPathLike(p1) + "'";
+      })
+      .replace(/"((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"]+)"/g, function (_m, p1) {
+        return '"' + basenameFromPathLike(p1) + '"';
+      })
+      .replace(
+        /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)(?:[^\\\/:"'`\r\n]+[\\/])+[^"'`\r\n]*\s+[^"'`\r\n]*?)(?=$|[)\],:;.!?])/g,
+        function (_m, prefix, p1) {
           return String(prefix) + basenameFromPathLike(p1);
-        })
-    );
+        },
+      )
+      .replace(
+        /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;.!?])/g,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      // Unquoted Windows absolute paths / UNC (no spaces)
+      .replace(
+        /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)(?:[^\s"'`\\/]+[\\/])+[^\s"'`\\/]+)/g,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      .replace(
+        /(\b(?:open|stat|lstat|scandir|unlink|readFile|writeFile|rename|mkdir|rmdir|readdir|readlink|realpath|opendir|copyfile|access|chmod)\s+)((?:[A-Za-z]:(?:\\|\/))[^\s"'`\\/]+)(?=$|[\s)\],:;.!?])/gi,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      // Quoted POSIX absolute paths (may include spaces)
+      .replace(/'(\/[^']+)'/g, function (_m, p1) {
+        return "'" + basenameFromPathLike(p1) + "'";
+      })
+      .replace(/"(\/[^\"]+)"/g, function (_m, p1) {
+        return '"' + basenameFromPathLike(p1) + '"';
+      })
+      .replace(
+        /(^|[\s(])(\/(?:[^\/:"'`\r\n]+\/)+[^"'`\r\n]*\s+[^"'`\r\n]*?)(?=$|[)\],:;.!?])/g,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      .replace(
+        /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;.!?])/g,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      .replace(
+        /(\b(?:open|stat|lstat|scandir|unlink|readFile|writeFile|rename|mkdir|rmdir|readdir|readlink|realpath|opendir|copyfile|access|chmod)\s+)(\/[^\s"'`\/]+)(?=$|[\s)\],:;.!?])/gi,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      )
+      // Unquoted POSIX absolute paths (no spaces) — only when preceded by start/whitespace/(
+      .replace(
+        /(^|[\s(])(\/[^\s"'`\/]+(?:\/[^\s"'`\/]+)+)/g,
+        function (_m, prefix, p1) {
+          return String(prefix) + basenameFromPathLike(p1);
+        },
+      );
+    return sanitized.length > MAX_SANITIZE_OUTPUT_CHARS
+      ? sanitized.slice(0, MAX_SANITIZE_OUTPUT_CHARS)
+      : sanitized;
+  }
+
+  function showFormError(text, autoHideMs) {
+    var errDiv = document.getElementById("form-error");
+    if (!errDiv) return;
+
+    errDiv.textContent = String(text || "");
+    errDiv.style.display = "block";
+
+    if (formErrorHideTimer) {
+      clearTimeout(formErrorHideTimer);
+      formErrorHideTimer = null;
+    }
+
+    if (typeof autoHideMs === "number" && autoHideMs > 0) {
+      formErrorHideTimer = setTimeout(function () {
+        errDiv.style.display = "none";
+        formErrorHideTimer = null;
+      }, autoHideMs);
+    }
+  }
+
+  function clearPendingSubmitState() {
+    pendingSubmit = false;
+    if (submitBtn) submitBtn.disabled = false;
   }
 
   // Global error handler for debugging (kept minimal to avoid breaking the UI)
   window.onerror = function (msg, url, line, col, error) {
-    var errDiv = document.getElementById("form-error");
-    if (!errDiv) return;
     var prefix = strings.webviewScriptErrorPrefix || "";
     var linePrefix = strings.webviewLinePrefix || "";
     var lineSuffix = strings.webviewLineSuffix || "";
-    errDiv.textContent =
-      prefix +
-      sanitizeAbsolutePaths(String(msg)) +
-      linePrefix +
-      String(line) +
-      lineSuffix;
-    errDiv.style.display = "block";
+    var rawMsg =
+      msg == null ? String(strings.webviewUnknown || "") : String(msg);
+    rawMsg = rawMsg.split(/\r?\n/)[0];
+    var safeMsg = sanitizeAbsolutePaths(rawMsg);
+    var displayMsg = safeMsg.trim()
+      ? safeMsg
+      : String(strings.webviewUnknown || "");
+    var lineInfo =
+      typeof line === "number" ? linePrefix + String(line) + lineSuffix : "";
+    showFormError(prefix + displayMsg + lineInfo);
+    clearPendingSubmitState();
+    switchTab("create");
   };
 
   window.onunhandledrejection = function (ev) {
-    var errDiv = document.getElementById("form-error");
-    if (!errDiv) return;
     var prefix = strings.webviewUnhandledErrorPrefix || "";
     var unknown = strings.webviewUnknown || "";
     var reason = ev && ev.reason ? ev.reason : null;
@@ -133,8 +223,13 @@
     }
     // Avoid showing multi-line stack traces in UI; keep only the first line.
     raw = String(raw).split(/\r?\n/)[0];
-    errDiv.textContent = prefix + sanitizeAbsolutePaths(raw);
-    errDiv.style.display = "block";
+    var safeRaw = sanitizeAbsolutePaths(raw);
+    var displayRaw = safeRaw.trim()
+      ? safeRaw
+      : String(strings.webviewUnknown || "");
+    showFormError(prefix + displayRaw);
+    clearPendingSubmitState();
+    switchTab("create");
   };
 
   if (typeof acquireVsCodeApi === "function") {
@@ -142,11 +237,7 @@
   } else {
     // Keep UI usable even if VS Code API is unavailable
     vscode = { postMessage: function () {} };
-    var errDiv = document.getElementById("form-error");
-    if (errDiv) {
-      errDiv.textContent = strings.webviewApiUnavailable || "";
-      errDiv.style.display = "block";
-    }
+    showFormError(strings.webviewApiUnavailable || "");
   }
 
   var tasks = Array.isArray(initialData.tasks) ? initialData.tasks : [];
@@ -1463,8 +1554,7 @@
           if (promptTextEl) promptTextEl.value = message.content;
           break;
         case "switchToList":
-          pendingSubmit = false;
-          if (submitBtn) submitBtn.disabled = false;
+          clearPendingSubmitState();
           resetForm();
           switchTab("list");
           if (message.successMessage) {
@@ -1509,8 +1599,7 @@
           }
           break;
         case "startCreateTask":
-          pendingSubmit = false;
-          if (submitBtn) submitBtn.disabled = false;
+          clearPendingSubmitState();
           resetForm();
           switchTab("create");
           setTimeout(function () {
@@ -1525,32 +1614,30 @@
           }, 0);
           break;
         case "showError":
-          if (message.text) {
-            var errDiv = document.getElementById("form-error");
-            if (errDiv) {
-              errDiv.textContent = message.text;
-              errDiv.style.display = "block";
-              pendingSubmit = false;
-              if (submitBtn) submitBtn.disabled = false;
-              switchTab("create");
-              setTimeout(function () {
-                errDiv.style.display = "none";
-              }, 8000);
-            }
-          }
+          var rawText =
+            message.text == null
+              ? String(strings.webviewUnknown || "")
+              : String(message.text);
+          var safeText = sanitizeAbsolutePaths(rawText.split(/\r?\n/)[0]);
+          var displayText = safeText.trim()
+            ? safeText
+            : String(strings.webviewUnknown || "");
+          showFormError(displayText, 8000);
+          clearPendingSubmitState();
+          switchTab("create");
           break;
       }
     } catch (e) {
-      var errDiv = document.getElementById("form-error");
-      if (errDiv) {
-        var prefix = strings.webviewClientErrorPrefix || "";
-        var rawError = e && e.message ? e.message : e;
-        rawError = String(rawError).split(/\r?\n/)[0];
-        errDiv.textContent = prefix + sanitizeAbsolutePaths(rawError);
-        errDiv.style.display = "block";
-      }
-      pendingSubmit = false;
-      if (submitBtn) submitBtn.disabled = false;
+      var prefix = strings.webviewClientErrorPrefix || "";
+      var rawError = e && e.message ? e.message : e;
+      rawError = String(rawError).split(/\r?\n/)[0];
+      var safeError = sanitizeAbsolutePaths(rawError);
+      var displayError = safeError.trim()
+        ? safeError
+        : String(strings.webviewUnknown || "");
+      showFormError(prefix + displayError);
+      clearPendingSubmitState();
+      switchTab("create");
     }
   });
 

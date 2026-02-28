@@ -31,7 +31,11 @@ const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
 
 function sanitizeErrorDetailsForLog(message: string): string {
-  return sanitizeAbsolutePathDetails(message);
+  const sanitized = sanitizeAbsolutePathDetails(
+    message,
+    messages.redactedPlaceholder(),
+  );
+  return sanitized.trim() ? sanitized : messages.webviewUnknown();
 }
 
 function shouldNotify(): boolean {
@@ -47,6 +51,16 @@ function getNotificationMode(): NotificationMode {
     return "silentStatus";
   }
   return mode || "sound";
+}
+
+function resolveDisplayErrorMessage(message: string): string {
+  const safeMessage = sanitizeErrorDetailsForLog(message);
+  return resolveDisplayErrorMessageFromSanitized(safeMessage);
+}
+
+function resolveDisplayErrorMessageFromSanitized(safeMessage: string): string {
+  const firstLine = safeMessage.split(/\r?\n/)[0] ?? "";
+  return firstLine.trim() ? firstLine : messages.webviewUnknown();
 }
 
 async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
@@ -145,9 +159,9 @@ export function notifyInfo(message: string, timeoutMs = 4000): void {
 
 export function notifyError(message: string, timeoutMs = 6000): void {
   const safeMessage = sanitizeErrorDetailsForLog(message);
-  const displayMessage = safeMessage || messages.webviewUnknown() || "";
+  const displayMessage = resolveDisplayErrorMessageFromSanitized(safeMessage);
   const mode = getNotificationMode();
-  logError(displayMessage);
+  logError(safeMessage);
   if (mode === "silentStatus") {
     vscode.window.setStatusBarMessage(`⚠ ${displayMessage}`, timeoutMs);
     return;
@@ -202,6 +216,9 @@ export function activate(context: vscode.ExtensionContext): void {
   scheduleManager = new ScheduleManager(context);
   copilotExecutor = new CopilotExecutor();
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
+  scheduleManager.addOnTasksChangedCallback(() => {
+    SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+  });
 
   // Register TreeView
   const treeView = vscode.window.createTreeView("copilotSchedulerTasks", {
@@ -372,8 +389,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     // Re-throw so callers (checkAndExecuteTasks / runTaskNow) can distinguish
     // success from failure and avoid recording lastRun on failure (U15).
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const safeErrorMessage =
-      sanitizeErrorDetailsForLog(errorMessage) || errorMessage;
+    const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);
     logError(messages.taskExecutionFailed(task.name, safeErrorMessage));
     throw error;
   }
@@ -471,6 +487,7 @@ async function resolvePromptText(
 export const __testOnly = {
   resolvePromptText,
   sanitizeErrorDetailsForLog,
+  resolveDisplayErrorMessage,
 };
 
 function getWorkspaceFolderPaths(): string[] {
@@ -754,8 +771,7 @@ function registerCreateTaskGuiCommand(
             } catch (error) {
               const errorMessage =
                 error instanceof Error ? error.message : String(error);
-              const safeErrorMessage =
-                sanitizeErrorDetailsForLog(errorMessage) || errorMessage;
+              const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);
               logError(
                 `[CopilotScheduler] Test prompt failed: ${safeErrorMessage}`,
               );

@@ -8,6 +8,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import type { ScheduledTask } from "../../types";
+import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
 
 suite("Extension Test Suite", () => {
   test("Extension should be present", () => {
@@ -82,76 +83,104 @@ suite("i18n Tests", () => {
 suite("Error Message Sanitization Tests", () => {
   test("Sanitizes absolute paths to basenames (Windows and POSIX)", async () => {
     const { __testOnly } = await import("../../extension");
+    const { messages } = await import("../../i18n");
     const sanitize = __testOnly.sanitizeErrorDetailsForLog as
       | ((message: string) => string)
       | undefined;
 
     assert.ok(typeof sanitize === "function");
+    runSharedSanitizerCases(sanitize!, messages.redactedPlaceholder());
+  });
 
-    const winQuoted =
-      "EACCES: permission denied, open 'C:\\Users\\me\\secret folder\\a b.md'";
-    const winQuotedOut = sanitize!(winQuoted);
-    assert.ok(!winQuotedOut.includes("C:\\Users\\me"));
-    assert.ok(winQuotedOut.includes("'a b.md'"));
+  test("Falls back to localized unknown on empty/whitespace outputs", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { messages } = await import("../../i18n");
+    const sanitize = __testOnly.sanitizeErrorDetailsForLog as
+      | ((message: string) => string)
+      | undefined;
 
-    const winUnquoted =
-      "ENOENT: no such file or directory, open C:\\Users\\me\\a.md";
-    const winUnquotedOut = sanitize!(winUnquoted);
-    assert.ok(!winUnquotedOut.includes("C:\\Users\\me"));
-    assert.ok(winUnquotedOut.includes("a.md"));
+    assert.ok(typeof sanitize === "function");
+    assert.strictEqual(sanitize!(""), messages.webviewUnknown());
+    assert.strictEqual(sanitize!("   \t\n"), messages.webviewUnknown());
+  });
+});
 
-    const winUnquotedWithSpaces =
-      "ENOENT: no such file or directory, open C:/Users/me/secret folder/a b.md";
-    const winUnquotedWithSpacesOut = sanitize!(winUnquotedWithSpaces);
-    assert.ok(!winUnquotedWithSpacesOut.includes("C:/Users/me/secret folder"));
-    assert.ok(winUnquotedWithSpacesOut.includes("a b.md"));
+suite("Error Message Display Fallback Tests", () => {
+  test("Falls back to localized unknown when message is whitespace only", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { messages } = await import("../../i18n");
+    const resolveDisplay = __testOnly.resolveDisplayErrorMessage as
+      | ((message: string) => string)
+      | undefined;
 
-    const posixQuoted =
-      "ENOENT: no such file or directory, open '/Users/me/secret folder/a b.md'";
-    const posixQuotedOut = sanitize!(posixQuoted);
-    assert.ok(!posixQuotedOut.includes("/Users/me/secret folder"));
-    assert.ok(posixQuotedOut.includes("'a b.md'"));
+    assert.ok(typeof resolveDisplay === "function");
+    assert.strictEqual(resolveDisplay!("   \t\n"), messages.webviewUnknown());
+  });
 
-    const posixUnquoted = "open /Users/me/a.md";
-    const posixUnquotedOut = sanitize!(posixUnquoted);
-    assert.ok(!posixUnquotedOut.includes("/Users/me/"));
-    assert.ok(posixUnquotedOut.includes("a.md"));
+  test("Keeps non-empty message after sanitization", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolveDisplay = __testOnly.resolveDisplayErrorMessage as
+      | ((message: string) => string)
+      | undefined;
 
-    const posixUnquotedWithSpaces = "open /Users/me/secret folder/a b.md";
-    const posixUnquotedWithSpacesOut = sanitize!(posixUnquotedWithSpaces);
-    assert.ok(
-      !posixUnquotedWithSpacesOut.includes("/Users/me/secret folder"),
+    assert.ok(typeof resolveDisplay === "function");
+    const display = resolveDisplay!(
+      "ENOENT: no such file or directory, open 'C:\\Users\\me\\secret folder\\a b.md'",
     );
-    assert.ok(posixUnquotedWithSpacesOut.includes("a b.md"));
+    assert.ok(display.includes("a b.md"));
+    assert.ok(!display.includes("C:\\Users\\me"));
+  });
 
-    const posixParen = "at foo (/Users/me/a.md:1:2)";
-    const posixParenOut = sanitize!(posixParen);
-    assert.ok(!posixParenOut.includes("/Users/me/"));
-    assert.ok(posixParenOut.includes("(a.md:1:2)"));
+  test("Uses first line only for multi-line errors", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolveDisplay = __testOnly.resolveDisplayErrorMessage as
+      | ((message: string) => string)
+      | undefined;
 
-    const winForward = "open C:/Users/me/a.md";
-    const winForwardOut = sanitize!(winForward);
-    assert.ok(!winForwardOut.includes("C:/Users/me/"));
-    assert.ok(winForwardOut.includes("a.md"));
+    assert.ok(typeof resolveDisplay === "function");
+    const display = resolveDisplay!("First line\nSecond line");
+    assert.strictEqual(display, "First line");
+  });
+});
 
-    const uncPath = "open \\\\server\\share\\secret\\a.md";
-    const uncOut = sanitize!(uncPath);
-    assert.ok(!uncOut.includes("\\\\server\\share"));
-    assert.ok(uncOut.includes("a.md"));
+suite("toSafeErrorDetails Fallback Tests", () => {
+  test("CopilotExecutor toSafeErrorDetails falls back to localized unknown on whitespace", async () => {
+    const { __testOnly } = await import("../../copilotExecutor");
+    const { messages } = await import("../../i18n");
+    const toSafe = __testOnly.toSafeErrorDetails as
+      | ((error: unknown) => string)
+      | undefined;
 
-    const fileUri = "open file:///C:/Users/me/secret%20folder/a%20b.md";
-    const fileUriOut = sanitize!(fileUri);
-    assert.ok(!fileUriOut.includes("file:///C:/Users/me"));
-    assert.ok(fileUriOut.includes("a b.md"));
+    assert.ok(typeof toSafe === "function");
+    assert.strictEqual(toSafe!(""), messages.webviewUnknown());
+    assert.strictEqual(toSafe!("   \t\n"), messages.webviewUnknown());
 
-    const fileUriHost = "open file://server/share/secret/a.md";
-    const fileUriHostOut = sanitize!(fileUriHost);
-    assert.ok(!fileUriHostOut.includes("file://server/share"));
-    assert.ok(fileUriHostOut.includes("a.md"));
+    const sanitized = toSafe!("Authorization:Bearer abc.def.ghi");
+    assert.ok(!sanitized.includes("abc.def.ghi"));
+    assert.ok(
+      sanitized.includes(
+        `Authorization:Bearer ${messages.redactedPlaceholder()}`,
+      ),
+    );
+  });
 
-    const webUrl = "see https://example.com/path";
-    const webUrlOut = sanitize!(webUrl);
-    assert.strictEqual(webUrlOut, webUrl);
+  test("ScheduleManager toSafeErrorDetails masks Authorization and falls back on empty", async () => {
+    const { __testOnly } = await import("../../scheduleManager");
+    const { messages } = await import("../../i18n");
+    const toSafe = __testOnly.toSafeErrorDetails as
+      | ((error: unknown) => string)
+      | undefined;
+
+    assert.ok(typeof toSafe === "function");
+    assert.strictEqual(toSafe!(""), messages.webviewUnknown());
+
+    const sanitized = toSafe!("Authorization:Bearer abc.def.ghi");
+    assert.ok(!sanitized.includes("abc.def.ghi"));
+    assert.ok(
+      sanitized.includes(
+        `Authorization:Bearer ${messages.redactedPlaceholder()}`,
+      ),
+    );
   });
 });
 

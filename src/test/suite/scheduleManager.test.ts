@@ -356,3 +356,73 @@ suite("ScheduleManager Scope Migration Persistence Tests", () => {
     }
   });
 });
+
+suite("ScheduleManager Task Change Callback Tests", () => {
+  test("notifies both primary and additional callbacks", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      let primaryCount = 0;
+      let secondaryCount = 0;
+
+      manager.setOnTasksChangedCallback(() => {
+        primaryCount++;
+      });
+      manager.addOnTasksChangedCallback(() => {
+        secondaryCount++;
+      });
+
+      const notify = (manager as unknown as { notifyTasksChanged: () => void })
+        .notifyTasksChanged;
+      notify.call(manager);
+
+      assert.strictEqual(primaryCount, 1);
+      assert.strictEqual(secondaryCount, 1);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("continues notifying remaining callbacks when one callback throws", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      let secondaryCount = 0;
+
+      manager.setOnTasksChangedCallback(() => {
+        throw new Error("callback failed");
+      });
+      manager.addOnTasksChangedCallback(() => {
+        secondaryCount++;
+      });
+
+      const notify = (manager as unknown as { notifyTasksChanged: () => void })
+        .notifyTasksChanged;
+
+      assert.doesNotThrow(() => {
+        notify.call(manager);
+      });
+      assert.strictEqual(secondaryCount, 1);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});

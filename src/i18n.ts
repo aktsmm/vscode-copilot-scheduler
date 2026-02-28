@@ -138,6 +138,7 @@ export const messages = {
   webviewLinePrefix: () => t(" (line ", "（行 "),
   webviewLineSuffix: () => t(")", "）"),
   webviewUnknown: () => t("unknown", "不明"),
+  redactedPlaceholder: () => t("[REDACTED]", "[REDACTED]"),
   webviewApiUnavailable: () =>
     t(
       "VS Code Webview API (acquireVsCodeApi) is unavailable. Check CSP/initialization.",

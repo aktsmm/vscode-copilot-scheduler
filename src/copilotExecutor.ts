@@ -37,8 +37,16 @@ const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
 
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
-  return sanitizeAbsolutePathDetails(raw) || raw;
+  const sanitized = sanitizeAbsolutePathDetails(
+    raw,
+    messages.redactedPlaceholder(),
+  );
+  return sanitized.trim() ? sanitized : messages.webviewUnknown();
 }
+
+export const __testOnly = {
+  toSafeErrorDetails,
+};
 
 /**
  * Executes prompts through GitHub Copilot Chat

@@ -1,5 +1,9 @@
 import * as path from "path";
 
+const MAX_SANITIZE_OUTPUT_CHARS = 8000;
+const MAX_SANITIZE_INPUT_CHARS = 16000;
+const REDACTED_PLACEHOLDER = "[REDACTED]";
+
 function basenameFromPathLike(raw: string): string {
   const value = typeof raw === "string" ? raw : String(raw ?? "");
   if (!value) return "";
@@ -36,11 +40,38 @@ function basenameFromPathLike(raw: string): string {
   return path.basename(value);
 }
 
-export function sanitizeAbsolutePathDetails(message: string): string {
-  const text = typeof message === "string" ? message : String(message ?? "");
-  if (!text) return "";
+function sanitizeSensitiveDetails(
+  input: string,
+  redactedPlaceholder: string,
+): string {
+  return input
+    .replace(
+      /(\bAuthorization\s*:\s*(?:Bearer|Basic|Token)\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      (_m, prefix: string) => `${prefix}${redactedPlaceholder}`,
+    )
+    .replace(
+      /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|password|passwd)=)[^&\s]+/gi,
+      (_m, prefix: string) => `${prefix}${redactedPlaceholder}`,
+    )
+    .replace(
+      /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|password|passwd)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      (_m, prefix: string) => `${prefix}${redactedPlaceholder}`,
+    );
+}
 
-  return text
+export function sanitizeAbsolutePathDetails(
+  message: string,
+  redactedPlaceholder = REDACTED_PLACEHOLDER,
+): string {
+  const rawText = typeof message === "string" ? message : String(message ?? "");
+  if (!rawText) return "";
+  const input =
+    rawText.length > MAX_SANITIZE_INPUT_CHARS
+      ? rawText.slice(0, MAX_SANITIZE_INPUT_CHARS)
+      : rawText;
+  const maskedInput = sanitizeSensitiveDetails(input, redactedPlaceholder);
+
+  const sanitized = maskedInput
     .replace(
       /'(file:\/\/[^']+)'/gi,
       (_m, p1: string) => `'${basenameFromPathLike(p1)}'`,
@@ -59,12 +90,22 @@ export function sanitizeAbsolutePathDetails(message: string): string {
       (_m, p1: string) => `"${basenameFromPathLike(p1)}"`,
     )
     .replace(
-      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)(?:[^\\\/:"'`\r\n]+[\\/])+[^"'`\r\n]*\s+[^"'`\r\n]*?)(?=$|[)\],:;.!?])/g,
       (_m, prefix: string, p1: string) =>
         `${prefix}${basenameFromPathLike(p1)}`,
     )
     .replace(
-      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^\s"'`]+)/g,
+      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;.!?])/g,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
+    )
+    .replace(
+      /(^|[^A-Za-z0-9_])((?:[A-Za-z]:(?:\\|\/)|\\\\)(?:[^\s"'`\\/]+[\\/])+[^\s"'`\\/]+)/g,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
+    )
+    .replace(
+      /(\b(?:open|stat|lstat|scandir|unlink|readFile|writeFile|rename|mkdir|rmdir|readdir|readlink|realpath|opendir|copyfile|access|chmod)\s+)((?:[A-Za-z]:(?:\\|\/))[^\s"'`\\/]+)(?=$|[\s)\],:;.!?])/gi,
       (_m, prefix: string, p1: string) =>
         `${prefix}${basenameFromPathLike(p1)}`,
     )
@@ -77,13 +118,27 @@ export function sanitizeAbsolutePathDetails(message: string): string {
       (_m, p1: string) => `"${basenameFromPathLike(p1)}"`,
     )
     .replace(
-      /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;])/g,
+      /(^|[\s(])(\/(?:[^\/:"'`\r\n]+\/)+[^"'`\r\n]*\s+[^"'`\r\n]*?)(?=$|[)\],:;.!?])/g,
       (_m, prefix: string, p1: string) =>
         `${prefix}${basenameFromPathLike(p1)}`,
     )
     .replace(
-      /(^|[\s(])(\/[^\s"'`]+)/g,
+      /(^|[\s(])(\/[^"'`\r\n]*?\.[A-Za-z0-9]{1,16})(?=$|[\s)\],:;.!?])/g,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
+    )
+    .replace(
+      /(\b(?:open|stat|lstat|scandir|unlink|readFile|writeFile|rename|mkdir|rmdir|readdir|readlink|realpath|opendir|copyfile|access|chmod)\s+)(\/[^\s"'`\/]+)(?=$|[\s)\],:;.!?])/gi,
+      (_m, prefix: string, p1: string) =>
+        `${prefix}${basenameFromPathLike(p1)}`,
+    )
+    .replace(
+      /(^|[\s(])(\/[^\s"'`\/]+(?:\/[^\s"'`\/]+)+)/g,
       (_m, prefix: string, p1: string) =>
         `${prefix}${basenameFromPathLike(p1)}`,
     );
+
+  return sanitized.length > MAX_SANITIZE_OUTPUT_CHARS
+    ? sanitized.slice(0, MAX_SANITIZE_OUTPUT_CHARS)
+    : sanitized;
 }

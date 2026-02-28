@@ -53,8 +53,16 @@ function getLocalDateKey(date = new Date()): string {
 
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
-  return sanitizeAbsolutePathDetails(raw) || raw;
+  const sanitized = sanitizeAbsolutePathDetails(
+    raw,
+    messages.redactedPlaceholder(),
+  );
+  return sanitized.trim() ? sanitized : messages.webviewUnknown();
 }
+
+export const __testOnly = {
+  toSafeErrorDetails,
+};
 
 /**
  * Manages scheduled tasks including CRUD operations, cron parsing, and persistence
@@ -68,7 +76,7 @@ export class ScheduleManager {
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
-  private onTasksChangedCallback: (() => void) | undefined;
+  private onTasksChangedCallbacks: Array<() => void> = [];
   private onExecuteCallback:
     | ((task: ScheduledTask) => Promise<void>)
     | undefined;
@@ -392,15 +400,32 @@ export class ScheduleManager {
    * Set callback for when tasks change
    */
   setOnTasksChangedCallback(callback: () => void): void {
-    this.onTasksChangedCallback = callback;
+    this.onTasksChangedCallbacks = [callback];
+  }
+
+  /**
+   * Add callback for when tasks change
+   */
+  addOnTasksChangedCallback(callback: () => void): void {
+    if (this.onTasksChangedCallbacks.includes(callback)) {
+      return;
+    }
+    this.onTasksChangedCallbacks.push(callback);
   }
 
   /**
    * Notify that tasks have changed
    */
   private notifyTasksChanged(): void {
-    if (this.onTasksChangedCallback) {
-      this.onTasksChangedCallback();
+    for (const callback of this.onTasksChangedCallbacks) {
+      try {
+        callback();
+      } catch (error) {
+        logError(
+          "[CopilotScheduler] onTasksChanged callback failed:",
+          toSafeErrorDetails(error),
+        );
+      }
     }
   }
 

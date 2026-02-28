@@ -1,6 +1,12 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
+import {
+  runSanitizerParityCases,
+  runSharedSanitizerCases,
+} from "./helpers/sanitizerAssertions";
 
 type WebviewLike = {
   postMessage: (message: unknown) => Thenable<boolean>;
@@ -9,6 +15,90 @@ type WebviewLike = {
 type WebviewPanelLike = {
   webview: WebviewLike;
 };
+
+function extractFunctionSource(source: string, functionName: string): string {
+  const signatures = [
+    `function ${functionName}(`,
+    `export function ${functionName}(`,
+  ];
+  let start = -1;
+  for (const signature of signatures) {
+    start = source.indexOf(signature);
+    if (start >= 0) {
+      break;
+    }
+  }
+  assert.ok(
+    start >= 0,
+    `Function not found in webview script: ${functionName}`,
+  );
+
+  const braceStart = source.indexOf("{", start);
+  assert.ok(
+    braceStart >= 0,
+    `Function opening brace not found for: ${functionName}`,
+  );
+
+  let depth = 0;
+  let end = -1;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+
+  assert.ok(
+    end > braceStart,
+    `Function closing brace not found for: ${functionName}`,
+  );
+  return source.slice(start, end);
+}
+
+function extractVarAssignment(source: string, varName: string): string {
+  const pattern = new RegExp(`var\\s+${varName}\\s*=\\s*[^;]+;`);
+  const match = source.match(pattern);
+  assert.ok(
+    match?.[0],
+    `Variable assignment not found in webview script: ${varName}`,
+  );
+  return match![0];
+}
+
+function loadWebviewSanitizeFunction(
+  redactedPlaceholder = "[REDACTED]",
+): (message: string) => string {
+  const scriptPath = path.resolve(
+    __dirname,
+    "../../../media/schedulerWebview.js",
+  );
+  const source = fs.readFileSync(scriptPath, "utf8");
+
+  const snippet = [
+    extractVarAssignment(source, "MAX_SANITIZE_OUTPUT_CHARS"),
+    extractVarAssignment(source, "MAX_SANITIZE_INPUT_CHARS"),
+    extractVarAssignment(source, "REDACTED_PLACEHOLDER"),
+    extractFunctionSource(source, "basenameAny"),
+    extractFunctionSource(source, "basenameFromPathLike"),
+    extractFunctionSource(source, "sanitizeSensitiveDetails"),
+    extractFunctionSource(source, "sanitizeAbsolutePaths"),
+    "REDACTED_PLACEHOLDER = __redactedPlaceholder;",
+    "return sanitizeAbsolutePaths;",
+  ].join("\n");
+
+  const factory = new Function("URL", "__redactedPlaceholder", snippet) as (
+    urlCtor: typeof URL,
+    placeholder: string,
+  ) => (message: string) => string;
+
+  return factory(URL, redactedPlaceholder);
+}
 
 suite("SchedulerWebview Message Queue Tests", () => {
   test("Queues messages until ready and flushes (dedup by type)", () => {
@@ -88,6 +178,202 @@ suite("SchedulerWebview Message Queue Tests", () => {
   });
 });
 
+suite("SchedulerWebview Script Contract Tests", () => {
+  test("Message handler catch keeps create-tab recovery flow", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const messageHandlerStart = source.indexOf(
+      'window.addEventListener("message",',
+    );
+    assert.ok(messageHandlerStart >= 0, "Message handler was not found.");
+
+    const handlerEnd = source.indexOf(
+      'vscode.postMessage({ type: "webviewReady" });',
+      messageHandlerStart,
+    );
+    assert.ok(
+      handlerEnd > messageHandlerStart,
+      "Message handler end anchor was not found.",
+    );
+
+    const handlerSource = source.slice(messageHandlerStart, handlerEnd);
+    const outerCatchPattern = /\n\s*\}\s*catch\s*\(e\)\s*\{/g;
+    let catchStart = -1;
+    let match: RegExpExecArray | null = null;
+    while ((match = outerCatchPattern.exec(handlerSource)) !== null) {
+      catchStart = match.index;
+    }
+    assert.ok(
+      catchStart >= 0,
+      "Expected outer message-handler catch block was not found.",
+    );
+
+    const catchBraceStart = handlerSource.indexOf("{", catchStart);
+    assert.ok(
+      catchBraceStart >= 0,
+      "Expected opening brace for catch block was not found.",
+    );
+
+    let depth = 0;
+    let catchEnd = -1;
+    for (let i = catchBraceStart; i < handlerSource.length; i++) {
+      const ch = handlerSource[i];
+      if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          catchEnd = i + 1;
+          break;
+        }
+      }
+    }
+    assert.ok(catchEnd > catchBraceStart, "Catch block end was not found.");
+
+    const catchSource = handlerSource.slice(catchStart, catchEnd);
+
+    const recoveryTokensInOrder = [
+      "sanitizeAbsolutePaths(rawError)",
+      "showFormError(prefix + displayError)",
+      "clearPendingSubmitState()",
+      'switchTab("create")',
+    ];
+
+    let cursor = 0;
+    for (const token of recoveryTokensInOrder) {
+      const index = catchSource.indexOf(token, cursor);
+      assert.ok(index >= 0, `Expected token not found in catch flow: ${token}`);
+      cursor = index + token.length;
+    }
+  });
+
+  test("Unhandled rejection path falls back to localized unknown text", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const unhandledStart = source.indexOf("window.onunhandledrejection");
+    assert.ok(
+      unhandledStart >= 0,
+      "onunhandledrejection handler was not found.",
+    );
+
+    const acquireApiAnchor = source.indexOf(
+      'if (typeof acquireVsCodeApi === "function")',
+      unhandledStart,
+    );
+    assert.ok(
+      acquireApiAnchor > unhandledStart,
+      "onunhandledrejection handler end anchor was not found.",
+    );
+
+    const unhandledSource = source.slice(unhandledStart, acquireApiAnchor);
+
+    const expectedTokensInOrder = [
+      "raw = String(raw).split(/\\r?\\n/)[0];",
+      "var safeRaw = sanitizeAbsolutePaths(raw);",
+      'var displayRaw = safeRaw.trim() ? safeRaw : String(strings.webviewUnknown || "");',
+      "showFormError(prefix + displayRaw);",
+    ];
+
+    let cursor = 0;
+    for (const token of expectedTokensInOrder) {
+      const index = unhandledSource.indexOf(token, cursor);
+      assert.ok(
+        index >= 0,
+        `Expected token not found in unhandled rejection flow: ${token}`,
+      );
+      cursor = index + token.length;
+    }
+  });
+});
+
+suite("Sanitizer Contract Sync Tests", () => {
+  test("Critical sanitizer token sets stay aligned between extension and webview", () => {
+    const webviewScriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const extensionSanitizerPath = path.resolve(
+      __dirname,
+      "../../../src/errorSanitizer.ts",
+    );
+
+    const webviewSource = fs.readFileSync(webviewScriptPath, "utf8");
+    const extensionSource = fs.readFileSync(extensionSanitizerPath, "utf8");
+
+    const webviewSensitiveSource = extractFunctionSource(
+      webviewSource,
+      "sanitizeSensitiveDetails",
+    );
+    const extensionSensitiveSource = extractFunctionSource(
+      extensionSource,
+      "sanitizeSensitiveDetails",
+    );
+    const webviewPathSource = extractFunctionSource(
+      webviewSource,
+      "sanitizeAbsolutePaths",
+    );
+    const extensionPathSource = extractFunctionSource(
+      extensionSource,
+      "sanitizeAbsolutePathDetails",
+    );
+
+    const sensitiveTokens = [
+      "Authorization\\s*:\\s*(?:Bearer|Basic|Token)",
+      "access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|password|passwd",
+    ];
+    const pathTokens = [
+      "open|stat|lstat|scandir|unlink|readFile|writeFile|rename|mkdir|rmdir|readdir|readlink|realpath|opendir|copyfile|access|chmod",
+    ];
+
+    for (const token of sensitiveTokens) {
+      assert.ok(
+        extensionSensitiveSource.includes(token),
+        `Extension sensitive-detail sanitizer is missing token set: ${token}`,
+      );
+      assert.ok(
+        webviewSensitiveSource.includes(token),
+        `Webview sensitive-detail sanitizer is missing token set: ${token}`,
+      );
+    }
+
+    for (const token of pathTokens) {
+      assert.ok(
+        extensionPathSource.includes(token),
+        `Extension path sanitizer is missing token set: ${token}`,
+      );
+      assert.ok(
+        webviewPathSource.includes(token),
+        `Webview path sanitizer is missing token set: ${token}`,
+      );
+    }
+  });
+});
+
+suite("Sanitizer Behavior Parity Tests", () => {
+  test("Extension and webview sanitizers produce identical outputs", async () => {
+    const { __testOnly } = await import("../../extension");
+    const extSanitize = __testOnly.sanitizeErrorDetailsForLog as
+      | ((message: string) => string)
+      | undefined;
+    const webviewSanitize = loadWebviewSanitizeFunction(
+      messages.redactedPlaceholder(),
+    );
+
+    assert.ok(typeof extSanitize === "function");
+    assert.ok(typeof webviewSanitize === "function");
+
+    runSanitizerParityCases(extSanitize!, webviewSanitize);
+  });
+});
+
 suite("SchedulerWebview Error Detail Sanitization Tests", () => {
   test("Sanitizes absolute paths to basenames (Windows and POSIX)", () => {
     const wv = SchedulerWebview as unknown as {
@@ -98,51 +384,19 @@ suite("SchedulerWebview Error Detail Sanitization Tests", () => {
 
     const sanitize = wv.sanitizeErrorDetailsForUser!;
 
-    const win =
-      "ENOENT: no such file or directory, open 'C:\\Users\\me\\secret folder\\a b.md'";
-    const winOut = sanitize(win);
-    assert.ok(!winOut.includes("C:\\Users\\me"));
-    assert.ok(winOut.includes("'a b.md'"));
+    runSharedSanitizerCases(sanitize, messages.redactedPlaceholder());
+  });
 
-    const posix =
-      "ENOENT: no such file or directory, open '/Users/me/secret folder/a b.md'";
-    const posixOut = sanitize(posix);
-    assert.ok(!posixOut.includes("/Users/me/secret folder"));
-    assert.ok(posixOut.includes("'a b.md'"));
+  test("Falls back to localized unknown on empty/whitespace outputs", () => {
+    const wv = SchedulerWebview as unknown as {
+      sanitizeErrorDetailsForUser?: (message: string) => string;
+    };
 
-    const posixUnquoted = "open /Users/me/a.md";
-    const posixUnquotedOut = sanitize(posixUnquoted);
-    assert.ok(!posixUnquotedOut.includes("/Users/me/"));
-    assert.ok(posixUnquotedOut.includes("a.md"));
+    assert.ok(typeof wv.sanitizeErrorDetailsForUser === "function");
+    const sanitize = wv.sanitizeErrorDetailsForUser!;
 
-    const posixParen = "at foo (/Users/me/a.md:1:2)";
-    const posixParenOut = sanitize(posixParen);
-    assert.ok(!posixParenOut.includes("/Users/me/"));
-    assert.ok(posixParenOut.includes("(a.md:1:2)"));
-
-    const winForward = "open C:/Users/me/a.md";
-    const winForwardOut = sanitize(winForward);
-    assert.ok(!winForwardOut.includes("C:/Users/me/"));
-    assert.ok(winForwardOut.includes("a.md"));
-
-    const uncPath = "open \\\\server\\share\\secret\\a.md";
-    const uncOut = sanitize(uncPath);
-    assert.ok(!uncOut.includes("\\\\server\\share"));
-    assert.ok(uncOut.includes("a.md"));
-
-    const fileUri = "open file:///C:/Users/me/secret%20folder/a%20b.md";
-    const fileUriOut = sanitize(fileUri);
-    assert.ok(!fileUriOut.includes("file:///C:/Users/me"));
-    assert.ok(fileUriOut.includes("a b.md"));
-
-    const fileUriHost = "open file://server/share/secret/a.md";
-    const fileUriHostOut = sanitize(fileUriHost);
-    assert.ok(!fileUriHostOut.includes("file://server/share"));
-    assert.ok(fileUriHostOut.includes("a.md"));
-
-    const webUrl = "see https://example.com/path";
-    const webUrlOut = sanitize(webUrl);
-    assert.strictEqual(webUrlOut, webUrl);
+    assert.strictEqual(sanitize(""), messages.webviewUnknown());
+    assert.strictEqual(sanitize("   \t\n"), messages.webviewUnknown());
   });
 });
 
@@ -182,6 +436,82 @@ suite("SchedulerWebview showError Sanitization Tests", () => {
       assert.ok(typeof m.text === "string");
       assert.ok(!(m.text as string).includes("C:\\Users\\me"));
       assert.ok((m.text as string).includes("a b.md"));
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+    }
+  });
+
+  test("showError falls back to localized unknown text when message is empty", () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+
+    const sent: unknown[] = [];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+
+      SchedulerWebview.showError("");
+
+      assert.strictEqual(sent.length, 1);
+      const m = sent[0] as { type?: unknown; text?: unknown };
+      assert.strictEqual(m.type, "showError");
+      assert.strictEqual(m.text, messages.webviewUnknown());
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+    }
+  });
+
+  test("showError falls back to localized unknown text when message is whitespace only", () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+
+    const sent: unknown[] = [];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+
+      SchedulerWebview.showError("   ");
+
+      assert.strictEqual(sent.length, 1);
+      const m = sent[0] as { type?: unknown; text?: unknown };
+      assert.strictEqual(m.type, "showError");
+      assert.strictEqual(m.text, messages.webviewUnknown());
     } finally {
       wv.panel = originalPanel;
       wv.webviewReady = originalReady;

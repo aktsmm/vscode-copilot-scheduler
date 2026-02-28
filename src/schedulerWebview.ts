@@ -206,22 +206,16 @@ export class SchedulerWebview {
           try {
             await this.handleMessage(message);
           } catch (error) {
-            const rawDetailsForLog =
+            const rawDetails =
               error instanceof Error ? error.message : String(error ?? "");
-            const detailsForLog =
-              this.sanitizeErrorDetailsForUser(rawDetailsForLog);
-            const rawDetailsForUser =
-              error instanceof Error ? error.message : String(error ?? "");
-            const detailsForUser =
-              this.sanitizeErrorDetailsForUser(rawDetailsForUser);
+            const detailsForLog = this.sanitizeErrorDetailsForUser(rawDetails);
+            const detailsForUser = this.resolveDisplayErrorMessage(rawDetails);
             logError("[CopilotScheduler] Webview message handling failed:", {
               type: (message as { type?: unknown } | undefined)?.type,
               error: detailsForLog,
             });
             this.showError(
-              messages.webviewMessageHandlingFailed(
-                detailsForUser || messages.webviewUnknown(),
-              ),
+              messages.webviewMessageHandlingFailed(detailsForUser),
             );
           }
         },
@@ -255,15 +249,25 @@ export class SchedulerWebview {
    * Show an error message inside the webview
    */
   static showError(errorMessage: string): void {
-    const safe = this.sanitizeErrorDetailsForUser(errorMessage);
+    const text = this.resolveDisplayErrorMessage(errorMessage);
     this.postMessage({
       type: "showError",
-      text: safe || messages.webviewUnknown(),
+      text,
     });
   }
 
   private static sanitizeErrorDetailsForUser(message: string): string {
-    return sanitizeAbsolutePathDetails(message);
+    const sanitized = sanitizeAbsolutePathDetails(
+      message,
+      messages.redactedPlaceholder(),
+    );
+    return sanitized.trim() ? sanitized : messages.webviewUnknown();
+  }
+
+  private static resolveDisplayErrorMessage(message: string): string {
+    const safe = this.sanitizeErrorDetailsForUser(message);
+    const firstLine = safe.split(/\r?\n/)[0] ?? "";
+    return firstLine.trim() ? firstLine : messages.webviewUnknown();
   }
 
   /**
@@ -652,8 +656,7 @@ export class SchedulerWebview {
       const templateFile = path.basename(templatePath);
       const rawError =
         error instanceof Error ? error.message : String(error ?? "");
-      const safeError =
-        this.sanitizeErrorDetailsForUser(rawError) || messages.webviewUnknown();
+      const safeError = this.sanitizeErrorDetailsForUser(rawError);
       logError("[CopilotScheduler] Template load failed:", {
         templateFile,
         source,
@@ -837,6 +840,7 @@ export class SchedulerWebview {
       webviewLinePrefix: messages.webviewLinePrefix(),
       webviewLineSuffix: messages.webviewLineSuffix(),
       webviewUnknown: messages.webviewUnknown(),
+      redactedPlaceholder: messages.redactedPlaceholder(),
       webviewApiUnavailable: messages.webviewApiUnavailable(),
       webviewClientErrorPrefix: messages.webviewClientErrorPrefix(),
       webviewSuccessPrefix: messages.webviewSuccessPrefix(),
