@@ -107,8 +107,7 @@ export class ScheduleManager {
   private static readonly FIRST_RUN_DELAY_MINUTES = 3;
 
   private static millisecondsUntilNextMinute(now: Date): number {
-    const elapsedMsInMinute =
-      now.getSeconds() * 1000 + now.getMilliseconds();
+    const elapsedMsInMinute = now.getSeconds() * 1000 + now.getMilliseconds();
     if (elapsedMsInMinute === 0) {
       return 0;
     }
@@ -973,7 +972,9 @@ export class ScheduleManager {
       promptSource: input.promptSource || "inline",
       promptPath: input.promptPath,
       autoMode:
-        input.autoMode !== undefined ? Boolean(input.autoMode) : defaultAutoMode,
+        input.autoMode !== undefined
+          ? Boolean(input.autoMode)
+          : defaultAutoMode,
       jitterSeconds:
         input.jitterSeconds !== undefined
           ? this.clampJitterSeconds(input.jitterSeconds)
