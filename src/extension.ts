@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
+import { parseExpression } from "cron-parser";
 import { ScheduleManager } from "./scheduleManager";
 import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
@@ -26,9 +27,23 @@ import type {
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
+type ExecutionTrigger = "auto" | "manual";
+type ExecutionHistoryStatus = "success" | "failed";
+
+type ExecutionHistoryEntry = {
+  taskId: string;
+  taskName: string;
+  trigger: ExecutionTrigger;
+  status: ExecutionHistoryStatus;
+  executedAt: string;
+  nextRunAt?: string;
+  detail?: string;
+};
 
 const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
+const EXECUTION_HISTORY_KEY = "executionHistory";
+const EXECUTION_HISTORY_DEFAULT_LIMIT = 50;
 
 function sanitizeErrorDetailsForLog(message: string): string {
   const sanitized = sanitizeAbsolutePathDetails(
@@ -179,11 +194,175 @@ export function notifyError(message: string, timeoutMs = 6000): void {
   void vscode.window.showErrorMessage(displayMessage);
 }
 
+function getExecutionHistoryLimit(): number {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const raw = config.get<number>(
+    "executionHistoryLimit",
+    EXECUTION_HISTORY_DEFAULT_LIMIT,
+  );
+  const n = Number.isFinite(raw)
+    ? Math.floor(raw)
+    : EXECUTION_HISTORY_DEFAULT_LIMIT;
+  return Math.min(Math.max(n, 10), 500);
+}
+
+function getNotificationNextRun(
+  task: ScheduledTask,
+  baseTime = new Date(),
+): Date | undefined {
+  const tz = vscode.workspace
+    .getConfiguration("copilotScheduler")
+    .get<string>("timezone", "");
+  const currentDate = baseTime;
+  try {
+    const options: { currentDate: Date; tz?: string } = { currentDate };
+    if (tz) {
+      options.tz = tz;
+    }
+    const interval = parseExpression(task.cronExpression, options);
+    return interval.next().toDate();
+  } catch {
+    if (tz) {
+      try {
+        const interval = parseExpression(task.cronExpression, { currentDate });
+        return interval.next().toDate();
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+}
+
+function formatNextRunText(date?: Date): string {
+  if (!date || Number.isNaN(date.getTime())) {
+    return messages.labelNever();
+  }
+  return messages.formatDateTime(date);
+}
+
+function buildExecutionSummary(
+  taskName: string,
+  status: ExecutionHistoryStatus,
+  nextRunDate?: Date,
+): string {
+  const resultLabel =
+    status === "success"
+      ? messages.executionResultSuccess()
+      : messages.executionResultFailed();
+  return messages.taskExecutionSummary(
+    taskName,
+    resultLabel,
+    formatNextRunText(nextRunDate),
+  );
+}
+
+async function appendExecutionHistory(
+  entry: ExecutionHistoryEntry,
+): Promise<void> {
+  if (!extensionContextRef) {
+    return;
+  }
+  const limit = getExecutionHistoryLimit();
+  const current = extensionContextRef.globalState.get<unknown[]>(
+    EXECUTION_HISTORY_KEY,
+    [],
+  );
+  const safeCurrent = Array.isArray(current)
+    ? current.filter(
+        (item): item is ExecutionHistoryEntry =>
+          !!item &&
+          typeof item === "object" &&
+          typeof (item as ExecutionHistoryEntry).taskId === "string" &&
+          typeof (item as ExecutionHistoryEntry).taskName === "string" &&
+          typeof (item as ExecutionHistoryEntry).status === "string" &&
+          typeof (item as ExecutionHistoryEntry).executedAt === "string",
+      )
+    : [];
+
+  const next = [entry, ...safeCurrent].slice(0, limit);
+  await extensionContextRef.globalState.update(EXECUTION_HISTORY_KEY, next);
+}
+
+function enqueueExecutionHistory(entry: ExecutionHistoryEntry): Promise<void> {
+  const op = executionHistorySaveQueue.then(() =>
+    appendExecutionHistory(entry),
+  );
+  executionHistorySaveQueue = op.catch((error) => {
+    const errorMessage =
+      error instanceof Error ? error.message : String(error ?? "");
+    logError(
+      "[CopilotScheduler] Failed to persist execution history:",
+      sanitizeErrorDetailsForLog(errorMessage),
+    );
+  });
+  return executionHistorySaveQueue;
+}
+
+function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
+  if (!extensionContextRef) {
+    return [];
+  }
+  const current = extensionContextRef.globalState.get<unknown[]>(
+    EXECUTION_HISTORY_KEY,
+    [],
+  );
+  if (!Array.isArray(current)) {
+    return [];
+  }
+  return current.filter(
+    (item): item is ExecutionHistoryEntry =>
+      !!item &&
+      typeof item === "object" &&
+      typeof (item as ExecutionHistoryEntry).taskId === "string" &&
+      typeof (item as ExecutionHistoryEntry).taskName === "string" &&
+      typeof (item as ExecutionHistoryEntry).status === "string" &&
+      typeof (item as ExecutionHistoryEntry).executedAt === "string",
+  );
+}
+
+async function showExecutionHistoryView(): Promise<void> {
+  const history = getExecutionHistoryEntries();
+  if (history.length === 0) {
+    notifyInfo(messages.executionHistoryEmpty());
+    return;
+  }
+
+  const picks = history.map((entry) => {
+    const icon = entry.status === "success" ? "✅" : "❌";
+    const statusLabel =
+      entry.status === "success"
+        ? messages.executionResultSuccess()
+        : messages.executionResultFailed();
+    const triggerLabel =
+      entry.trigger === "manual"
+        ? messages.executionTriggerManual()
+        : messages.executionTriggerAuto();
+    const executedAt = new Date(entry.executedAt);
+    const nextRun = entry.nextRunAt ? new Date(entry.nextRunAt) : undefined;
+    const description = `${messages.formatDateTime(executedAt)} · ${triggerLabel} · ${statusLabel} · ${messages.labelNextRun()}: ${formatNextRunText(nextRun)}`;
+    return {
+      label: `${icon} ${entry.taskName}`,
+      description,
+      detail: entry.detail || "",
+    };
+  });
+
+  await vscode.window.showQuickPick(picks, {
+    placeHolder: messages.executionHistoryPickPlaceholder(),
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+}
+
 // Global instances
 let scheduleManager: ScheduleManager;
 let copilotExecutor: CopilotExecutor;
 let treeProvider: ScheduledTaskTreeProvider;
 let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
+let extensionContextRef: vscode.ExtensionContext | undefined;
+const manualRunInFlightTaskIds = new Set<string>();
+let executionHistorySaveQueue: Promise<void> = Promise.resolve();
 
 type PromptExecutionPayload = {
   prompt: string;
@@ -273,10 +452,57 @@ function handleManualRunFailure(
   }
 }
 
+async function appendManualRunHistory(
+  task: ScheduledTask,
+  runResult: { ok: true } | ManualRunFailureResult,
+): Promise<void> {
+  if (runResult.ok) {
+    const latestTask = scheduleManager.getTask(task.id) ?? task;
+    const nextRunDate =
+      latestTask.nextRun instanceof Date &&
+      !Number.isNaN(latestTask.nextRun.getTime())
+        ? latestTask.nextRun
+        : undefined;
+    notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
+    const nextRunAt =
+      latestTask.nextRun instanceof Date &&
+      !Number.isNaN(latestTask.nextRun.getTime())
+        ? latestTask.nextRun.toISOString()
+        : undefined;
+    await enqueueExecutionHistory({
+      taskId: task.id,
+      taskName: task.name,
+      trigger: "manual",
+      status: "success",
+      executedAt: new Date().toISOString(),
+      nextRunAt,
+    });
+    return;
+  }
+
+  const detail =
+    runResult.reason === "executionFailed" || runResult.reason === "saveFailed"
+      ? runResult.errorMessage || messages.webviewUnknown()
+      : runResult.reason === "executorUnavailable"
+        ? messages.manualRunUnavailable()
+        : messages.taskNotFound();
+  await enqueueExecutionHistory({
+    taskId: task.id,
+    taskName: task.name,
+    trigger: "manual",
+    status: "failed",
+    executedAt: new Date().toISOString(),
+    nextRunAt: undefined,
+    detail: resolveDisplayErrorMessage(detail),
+  });
+}
+
 /**
  * Extension activation
  */
 export function activate(context: vscode.ExtensionContext): void {
+  extensionContextRef = context;
+
   // Prompt reload when the extension has been updated
   {
     const currentVersion =
@@ -330,6 +556,7 @@ export function activate(context: vscode.ExtensionContext): void {
     registerMoveToCurrentWorkspaceCommand(),
     registerOpenSettingsCommand(),
     registerShowVersionCommand(context),
+    registerShowExecutionHistoryCommand(),
   ];
 
   // Start scheduler
@@ -450,6 +677,9 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   scheduleManager?.stopScheduler();
   SchedulerWebview.dispose();
+  extensionContextRef = undefined;
+  manualRunInFlightTaskIds.clear();
+  executionHistorySaveQueue = Promise.resolve();
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
 }
 
@@ -457,6 +687,9 @@ export function deactivate(): void {
  * Execute a scheduled task
  */
 async function executeTask(task: ScheduledTask): Promise<void> {
+  const trigger: ExecutionTrigger = manualRunInFlightTaskIds.has(task.id)
+    ? "manual"
+    : "auto";
   // notifyInfo already checks shouldNotify() internally — no need for an outer guard.
   notifyInfo(messages.taskExecuting(task.name));
 
@@ -475,7 +708,18 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       throw error;
     }
 
-    notifyInfo(messages.taskExecuted(task.name));
+    if (trigger === "auto") {
+      const nextRunDate = getNotificationNextRun(task, new Date());
+      notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
+      void enqueueExecutionHistory({
+        taskId: task.id,
+        taskName: task.name,
+        trigger,
+        status: "success",
+        executedAt: new Date().toISOString(),
+        nextRunAt: nextRunDate?.toISOString(),
+      });
+    }
   } catch (error) {
     // executePrompt already shows a warning with copy-to-clipboard option,
     // so only log the error here to avoid double notification.
@@ -484,6 +728,22 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);
     logError(messages.taskExecutionFailed(task.name, safeErrorMessage));
+
+    if (trigger === "auto") {
+      const nextRunDate = getNotificationNextRun(task, new Date());
+      const summary = buildExecutionSummary(task.name, "failed", nextRunDate);
+      vscode.window.setStatusBarMessage(`⚠ ${summary}`, 6000);
+      void enqueueExecutionHistory({
+        taskId: task.id,
+        taskName: task.name,
+        trigger,
+        status: "failed",
+        executedAt: new Date().toISOString(),
+        nextRunAt: nextRunDate?.toISOString(),
+        detail: resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
+      });
+    }
+
     throw error;
   }
 }
@@ -753,15 +1013,20 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
         // On execution failure, executePrompt already shows a warning with copy option.
-        const runResult = await scheduleManager.runTaskNowDetailed(
-          action.taskId,
-        );
+        manualRunInFlightTaskIds.add(action.taskId);
+        const runResult = await scheduleManager
+          .runTaskNowDetailed(action.taskId)
+          .finally(() => {
+            manualRunInFlightTaskIds.delete(action.taskId);
+          });
         if (!runResult.ok) {
+          await appendManualRunHistory(runTask, runResult);
           handleManualRunFailure(runTask.name, runResult, {
             showWebviewError: true,
           });
           break;
         }
+        await appendManualRunHistory(runTask, runResult);
         // Success path already persists via saveTasks(), which triggers
         // onTasksChanged callback → SchedulerWebview.updateTasks once.
         // Avoid sending a duplicate full task list here.
@@ -1329,11 +1594,18 @@ function registerRunNowCommand(): vscode.Disposable {
         }
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-        const runResult = await scheduleManager.runTaskNowDetailed(task.id);
+        manualRunInFlightTaskIds.add(task.id);
+        const runResult = await scheduleManager
+          .runTaskNowDetailed(task.id)
+          .finally(() => {
+            manualRunInFlightTaskIds.delete(task.id);
+          });
         if (!runResult.ok) {
+          await appendManualRunHistory(task, runResult);
           handleManualRunFailure(task.name, runResult);
           return;
         }
+        await appendManualRunHistory(task, runResult);
         // Success path already persists via saveTasks(), which triggers
         // onTasksChanged callback → SchedulerWebview.updateTasks once.
         // Avoid sending a duplicate full task list here.
@@ -1535,6 +1807,21 @@ function registerShowVersionCommand(
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
+        notifyError(errorMessage);
+      }
+    },
+  );
+}
+
+function registerShowExecutionHistoryCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand(
+    "copilotScheduler.showExecutionHistory",
+    async () => {
+      try {
+        await showExecutionHistoryView();
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error ?? "");
         notifyError(errorMessage);
       }
     },

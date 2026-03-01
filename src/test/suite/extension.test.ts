@@ -43,6 +43,7 @@ suite("Extension Test Suite", () => {
       "copilotScheduler.moveToCurrentWorkspace",
       "copilotScheduler.openSettings",
       "copilotScheduler.showVersion",
+      "copilotScheduler.showExecutionHistory",
     ];
 
     for (const cmd of expectedCommands) {

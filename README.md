@@ -57,6 +57,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `Copilot Scheduler: Move Task to Current Workspace` | Move a workspace task here |
 | `Copilot Scheduler: Open Settings`                  | Open extension settings    |
 | `Copilot Scheduler: Show Version`                   | Show extension version     |
+| `Copilot Scheduler: Show Execution History`         | View recent run history    |
 
 ## ⚙️ Settings
 
@@ -78,8 +79,11 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code user prompts folder)                                                          |
 | `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                                                  |
 | `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                                                 |
+| `copilotScheduler.executionHistoryLimit`  | `50`        | Max number of execution history entries kept for the history view (10–500)                                                        |
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
+
+Task-level controls (`Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form.
 
 If execution feels sluggish when a task is triggered, try:
 

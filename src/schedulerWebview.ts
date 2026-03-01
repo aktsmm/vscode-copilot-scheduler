@@ -770,10 +770,15 @@ export class SchedulerWebview {
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
       labelAutoMode: messages.labelAutoMode(),
       labelJitterSeconds: messages.labelJitterSeconds(),
+      labelMaxExecutionsPerDay: messages.labelMaxExecutionsPerDay(),
+      labelAllowedTimeWindow: messages.labelAllowedTimeWindow(),
+      labelAllowedTimeStart: messages.labelAllowedTimeStart(),
+      labelAllowedTimeEnd: messages.labelAllowedTimeEnd(),
       placeholderTaskName: messages.placeholderTaskName(),
       placeholderPrompt: messages.placeholderPrompt(),
       placeholderCron: messages.placeholderCron(),
       invalidCronExpression: messages.invalidCronExpression(),
+      invalidTimeWindowFormat: messages.invalidTimeWindowFormat(),
       taskNameRequired: messages.taskNameRequired(),
       promptRequired: messages.promptRequired(),
       templateRequired: messages.templateRequired(),
@@ -851,6 +856,8 @@ export class SchedulerWebview {
       // Webview notes
       webviewAutoModeNote: messages.webviewAutoModeNote(),
       webviewJitterNote: messages.webviewJitterNote(),
+      webviewMaxExecutionsPerDayNote: messages.webviewMaxExecutionsPerDayNote(),
+      webviewAllowedTimeWindowNote: messages.webviewAllowedTimeWindowNote(),
 
       labelThisWorkspaceShort: messages.labelThisWorkspaceShort(),
       labelOtherWorkspaceShort: messages.labelOtherWorkspaceShort(),
@@ -1380,6 +1387,27 @@ export class SchedulerWebview {
         <label for="jitter-seconds">${escapeHtml(strings.labelJitterSeconds)}</label>
         <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
         <p class="note">${escapeHtml(strings.webviewJitterNote)}</p>
+      </div>
+
+      <div class="form-group">
+        <label for="max-executions-per-day">${escapeHtml(strings.labelMaxExecutionsPerDay)}</label>
+        <input type="number" id="max-executions-per-day" min="0" max="100" value="0">
+        <p class="note">${escapeHtml(strings.webviewMaxExecutionsPerDayNote)}</p>
+      </div>
+
+      <div class="form-group">
+        <label>${escapeHtml(strings.labelAllowedTimeWindow)}</label>
+        <div class="inline-group">
+          <div class="form-group">
+            <label for="allowed-time-start">${escapeHtml(strings.labelAllowedTimeStart)}</label>
+            <input type="time" id="allowed-time-start" step="60">
+          </div>
+          <div class="form-group">
+            <label for="allowed-time-end">${escapeHtml(strings.labelAllowedTimeEnd)}</label>
+            <input type="time" id="allowed-time-end" step="60">
+          </div>
+        </div>
+        <p class="note">${escapeHtml(strings.webviewAllowedTimeWindowNote)}</p>
       </div>
       
       <div class="button-group">

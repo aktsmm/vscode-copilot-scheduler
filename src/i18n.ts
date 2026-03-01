@@ -77,6 +77,19 @@ export const messages = {
       `Task "${name}" executed successfully`,
       `タスク「${name}」を実行しました`,
     ),
+  taskExecutionSummary: (name: string, result: string, nextRun: string) =>
+    t(
+      `Task "${name}": ${result} (Next run: ${nextRun})`,
+      `タスク「${name}」: ${result}（次回実行: ${nextRun}）`,
+    ),
+  executionResultSuccess: () => t("Success", "成功"),
+  executionResultFailed: () => t("Failed", "失敗"),
+  executionTriggerAuto: () => t("Auto", "自動"),
+  executionTriggerManual: () => t("Manual", "手動"),
+  executionHistoryEmpty: () =>
+    t("Execution history is empty", "実行履歴はまだありません"),
+  executionHistoryPickPlaceholder: () =>
+    t("Recent execution history (latest first)", "実行履歴（新しい順）"),
   taskExecutionFailed: (name: string, error: string) =>
     t(
       `Task "${name}" execution failed: ${error}`,
@@ -110,6 +123,11 @@ export const messages = {
     ),
   cronExpressionRequired: () =>
     t("Cron expression is required", "cron式を入力してください"),
+  invalidTimeWindowFormat: () =>
+    t(
+      "Invalid time window format. Use HH:mm (e.g., 22:00)",
+      "時間帯の形式が不正です。HH:mm（例: 22:00）で入力してください",
+    ),
 
   // ==================== Prompts ====================
   enterTaskName: () => t("Enter task name", "タスク名を入力"),
@@ -297,6 +315,11 @@ export const messages = {
   labelAutoMode: () => t("Auto Mode Hint", "オートモードヒント"),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
+  labelMaxExecutionsPerDay: () =>
+    t("Task Max Runs/Day (0=unlimited)", "タスク上限/日（0=無制限）"),
+  labelAllowedTimeWindow: () => t("Allowed Time Window", "実行許可時間帯"),
+  labelAllowedTimeStart: () => t("Start (HH:mm)", "開始（HH:mm）"),
+  labelAllowedTimeEnd: () => t("End (HH:mm)", "終了（HH:mm）"),
   webviewAutoModeNote: () =>
     t(
       "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present).",
@@ -306,6 +329,16 @@ export const messages = {
     t(
       "0 disables jitter. Adds a random delay between 0 and the specified seconds before execution.",
       "0で無効。値を入れると0〜その秒数でランダム遅延します。",
+    ),
+  webviewMaxExecutionsPerDayNote: () =>
+    t(
+      "Per-task daily execution cap. 0 means unlimited for this task.",
+      "タスクごとの1日上限。0 はこのタスクを無制限にします。",
+    ),
+  webviewAllowedTimeWindowNote: () =>
+    t(
+      "Runs only during this local time range. Leave blank to allow all day.",
+      "このローカル時刻範囲内のみ実行します。空欄なら終日実行可能です。",
     ),
 
   // Friendly cron builder / day labels

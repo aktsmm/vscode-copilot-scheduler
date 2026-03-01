@@ -36,6 +36,8 @@ const STORAGE_REVISION_KEY = "scheduledTasksRevision";
 const STORAGE_SAVED_AT_KEY = "scheduledTasksSavedAt";
 const DAILY_EXEC_COUNT_KEY = "dailyExecCount";
 const DAILY_EXEC_DATE_KEY = "dailyExecDate";
+const DAILY_TASK_EXEC_COUNTS_KEY = "dailyTaskExecCounts";
+const DAILY_TASK_EXEC_DATE_KEY = "dailyTaskExecDate";
 const DAILY_LIMIT_NOTIFIED_DATE_KEY = "dailyLimitNotifiedDate";
 const DISCLAIMER_ACCEPTED_KEY = "disclaimerAccepted";
 
@@ -77,8 +79,80 @@ function toSafeErrorDetails(error: unknown): string {
   return sanitized.trim() ? sanitized : messages.webviewUnknown();
 }
 
+function normalizeTimeWindowHHMM(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const text = value.trim();
+  if (!text) {
+    return undefined;
+  }
+  const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+  if (!match) {
+    return undefined;
+  }
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
+    return undefined;
+  }
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return undefined;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function timeWindowToMinutes(value: string): number {
+  const normalized = normalizeTimeWindowHHMM(value);
+  if (!normalized) {
+    return -1;
+  }
+  const [hour, minute] = normalized.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function isNowWithinAllowedTimeWindow(
+  now: Date,
+  start?: string,
+  end?: string,
+): boolean {
+  const startNormalized = normalizeTimeWindowHHMM(start);
+  const endNormalized = normalizeTimeWindowHHMM(end);
+  if (!startNormalized && !endNormalized) {
+    return true;
+  }
+
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = startNormalized
+    ? timeWindowToMinutes(startNormalized)
+    : undefined;
+  const endMinutes = endNormalized
+    ? timeWindowToMinutes(endNormalized)
+    : undefined;
+
+  if (startMinutes !== undefined && endMinutes !== undefined) {
+    if (startMinutes === endMinutes) {
+      return true;
+    }
+    if (startMinutes < endMinutes) {
+      return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+    }
+    return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+  }
+
+  if (startMinutes !== undefined) {
+    return nowMinutes >= startMinutes;
+  }
+  if (endMinutes !== undefined) {
+    return nowMinutes < endMinutes;
+  }
+  return true;
+}
+
 export const __testOnly = {
   toSafeErrorDetails,
+  normalizeTimeWindowHHMM,
+  isNowWithinAllowedTimeWindow,
 };
 
 /**
@@ -99,6 +173,8 @@ export class ScheduleManager {
     | undefined;
   private dailyExecCount = 0;
   private dailyExecDate = "";
+  private dailyTaskExecCounts: Record<string, number> = {};
+  private dailyTaskExecDate = "";
   private dailyLimitNotifiedDate = "";
 
   private storageRevision = 0;
@@ -125,6 +201,7 @@ export class ScheduleManager {
       STORAGE_META_FILE_NAME,
     );
     this.loadDailyExecCount();
+    this.loadDailyTaskExecCounts();
     this.dailyLimitNotifiedDate = this.context.globalState.get<string>(
       DAILY_LIMIT_NOTIFIED_DATE_KEY,
       "",
@@ -274,22 +351,101 @@ export class ScheduleManager {
     this.dailyExecDate = today;
   }
 
-  private incrementDailyExecCountInMemory(date = new Date()): void {
+  private loadDailyTaskExecCounts(): void {
+    const today = getLocalDateKey();
+    const savedDate = this.context.globalState.get<string>(
+      DAILY_TASK_EXEC_DATE_KEY,
+      "",
+    );
+    if (savedDate === today) {
+      const saved = this.context.globalState.get<unknown>(
+        DAILY_TASK_EXEC_COUNTS_KEY,
+        {},
+      );
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        const normalized: Record<string, number> = {};
+        for (const [taskId, count] of Object.entries(
+          saved as Record<string, unknown>,
+        )) {
+          const value = Number(count);
+          if (!Number.isFinite(value)) {
+            continue;
+          }
+          const integer = Math.floor(value);
+          if (integer > 0) {
+            normalized[taskId] = integer;
+          }
+        }
+        this.dailyTaskExecCounts = normalized;
+      } else {
+        this.dailyTaskExecCounts = {};
+      }
+    } else {
+      this.dailyTaskExecCounts = {};
+      void this.context.globalState
+        .update(DAILY_TASK_EXEC_COUNTS_KEY, {})
+        .then(undefined, (error: unknown) =>
+          logError(
+            "[CopilotScheduler] Failed to reset task daily execution counts:",
+            toSafeErrorDetails(error),
+          ),
+        );
+      void this.context.globalState
+        .update(DAILY_TASK_EXEC_DATE_KEY, today)
+        .then(undefined, (error: unknown) =>
+          logError(
+            "[CopilotScheduler] Failed to reset task daily execution date:",
+            toSafeErrorDetails(error),
+          ),
+        );
+    }
+    this.dailyTaskExecDate = today;
+  }
+
+  private ensureDailyCountersDate(date = new Date()): void {
     const today = getLocalDateKey(date);
     if (this.dailyExecDate !== today) {
       this.dailyExecCount = 0;
       this.dailyExecDate = today;
     }
+    if (this.dailyTaskExecDate !== today) {
+      this.dailyTaskExecCounts = {};
+      this.dailyTaskExecDate = today;
+    }
+  }
+
+  private incrementDailyExecCountInMemory(date = new Date()): void {
+    this.ensureDailyCountersDate(date);
     this.dailyExecCount++;
   }
 
+  private incrementTaskDailyExecCountInMemory(
+    taskId: string,
+    date = new Date(),
+  ): void {
+    this.ensureDailyCountersDate(date);
+    const current = this.dailyTaskExecCounts[taskId] ?? 0;
+    this.dailyTaskExecCounts[taskId] = current + 1;
+  }
+
+  private getTaskDailyExecCount(taskId: string, date = new Date()): number {
+    this.ensureDailyCountersDate(date);
+    return this.dailyTaskExecCounts[taskId] ?? 0;
+  }
+
   private async persistDailyExecCount(): Promise<void> {
+    this.ensureDailyCountersDate();
     const today = this.dailyExecDate || getLocalDateKey();
     await this.context.globalState.update(
       DAILY_EXEC_COUNT_KEY,
       this.dailyExecCount,
     );
     await this.context.globalState.update(DAILY_EXEC_DATE_KEY, today);
+    await this.context.globalState.update(
+      DAILY_TASK_EXEC_COUNTS_KEY,
+      this.dailyTaskExecCounts,
+    );
+    await this.context.globalState.update(DAILY_TASK_EXEC_DATE_KEY, today);
   }
 
   /**
@@ -334,11 +490,7 @@ export class ScheduleManager {
     if (maxDailyLimit === 0) {
       return false;
     }
-    const today = getLocalDateKey();
-    if (this.dailyExecDate !== today) {
-      this.dailyExecCount = 0;
-      this.dailyExecDate = today;
-    }
+    this.ensureDailyCountersDate();
     return this.dailyExecCount >= maxDailyLimit;
   }
 
@@ -349,6 +501,35 @@ export class ScheduleManager {
     if (!Number.isFinite(n)) return 0;
     const i = Math.floor(n);
     return Math.min(Math.max(i, 0), 1800);
+  }
+
+  private clampTaskMaxExecutionsPerDay(value: unknown): number | undefined {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    const i = Math.floor(n);
+    return Math.min(Math.max(i, 0), 100);
+  }
+
+  private normalizeTimeWindowOrThrow(value: unknown): string | undefined {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+    const normalized = normalizeTimeWindowHHMM(value);
+    if (!normalized) {
+      throw new Error(messages.invalidTimeWindowFormat());
+    }
+    return normalized;
+  }
+
+  private isTaskDailyLimitReached(task: ScheduledTask, now: Date): boolean {
+    const limit = this.clampTaskMaxExecutionsPerDay(task.maxExecutionsPerDay);
+    if (limit === undefined || limit === 0) {
+      return false;
+    }
+    return this.getTaskDailyExecCount(task.id, now) >= limit;
   }
 
   /**
@@ -641,6 +822,32 @@ export class ScheduleManager {
         }
       }
 
+      if (task.maxExecutionsPerDay !== undefined) {
+        const normalizedMax = this.clampTaskMaxExecutionsPerDay(
+          task.maxExecutionsPerDay,
+        );
+        if (task.maxExecutionsPerDay !== normalizedMax) {
+          task.maxExecutionsPerDay = normalizedMax;
+          needsSave = true;
+        }
+      }
+
+      if (task.allowedTimeStart !== undefined) {
+        const normalizedStart = normalizeTimeWindowHHMM(task.allowedTimeStart);
+        if (task.allowedTimeStart !== normalizedStart) {
+          task.allowedTimeStart = normalizedStart;
+          needsSave = true;
+        }
+      }
+
+      if (task.allowedTimeEnd !== undefined) {
+        const normalizedEnd = normalizeTimeWindowHHMM(task.allowedTimeEnd);
+        if (task.allowedTimeEnd !== normalizedEnd) {
+          task.allowedTimeEnd = normalizedEnd;
+          needsSave = true;
+        }
+      }
+
       if (task.autoMode !== undefined && typeof task.autoMode !== "boolean") {
         task.autoMode = false;
         needsSave = true;
@@ -927,6 +1134,16 @@ export class ScheduleManager {
     // Validate cron expression
     this.validateCronExpression(input.cronExpression);
 
+    const maxExecutionsPerDay = this.clampTaskMaxExecutionsPerDay(
+      input.maxExecutionsPerDay,
+    );
+    const allowedTimeStart = this.normalizeTimeWindowOrThrow(
+      input.allowedTimeStart,
+    );
+    const allowedTimeEnd = this.normalizeTimeWindowOrThrow(
+      input.allowedTimeEnd,
+    );
+
     const now = new Date();
     const id = this.generateId();
 
@@ -979,6 +1196,9 @@ export class ScheduleManager {
         input.jitterSeconds !== undefined
           ? this.clampJitterSeconds(input.jitterSeconds)
           : defaultJitter,
+      maxExecutionsPerDay,
+      allowedTimeStart,
+      allowedTimeEnd,
       nextRun,
       createdAt: now,
       updatedAt: now,
@@ -1055,6 +1275,12 @@ export class ScheduleManager {
     if (updates.cronExpression !== undefined) {
       this.validateCronExpression(updates.cronExpression);
     }
+    if (updates.allowedTimeStart !== undefined) {
+      this.normalizeTimeWindowOrThrow(updates.allowedTimeStart);
+    }
+    if (updates.allowedTimeEnd !== undefined) {
+      this.normalizeTimeWindowOrThrow(updates.allowedTimeEnd);
+    }
 
     // Safety: when re-enabling a task, validate the effective cron expression.
     // This prevents invalid persisted cron values from being re-enabled via
@@ -1121,6 +1347,21 @@ export class ScheduleManager {
     }
     if (updates.jitterSeconds !== undefined) {
       task.jitterSeconds = this.clampJitterSeconds(updates.jitterSeconds);
+    }
+    if (updates.maxExecutionsPerDay !== undefined) {
+      task.maxExecutionsPerDay = this.clampTaskMaxExecutionsPerDay(
+        updates.maxExecutionsPerDay,
+      );
+    }
+    if (updates.allowedTimeStart !== undefined) {
+      task.allowedTimeStart = this.normalizeTimeWindowOrThrow(
+        updates.allowedTimeStart,
+      );
+    }
+    if (updates.allowedTimeEnd !== undefined) {
+      task.allowedTimeEnd = this.normalizeTimeWindowOrThrow(
+        updates.allowedTimeEnd,
+      );
     }
 
     const enabledAfter = task.enabled;
@@ -1243,6 +1484,9 @@ export class ScheduleManager {
       promptPath: original.promptPath,
       autoMode: original.autoMode,
       jitterSeconds: original.jitterSeconds,
+      maxExecutionsPerDay: original.maxExecutionsPerDay,
+      allowedTimeStart: original.allowedTimeStart,
+      allowedTimeEnd: original.allowedTimeEnd,
     };
 
     return this.createTask(input);
@@ -1411,6 +1655,30 @@ export class ScheduleManager {
 
       // Check if due
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
+        if (
+          !isNowWithinAllowedTimeWindow(
+            now,
+            task.allowedTimeStart,
+            task.allowedTimeEnd,
+          )
+        ) {
+          logDebug(
+            `[CopilotScheduler] Outside allowed time window, skipping task: ${task.name}`,
+          );
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          needsSave = true;
+          continue;
+        }
+
+        if (this.isTaskDailyLimitReached(task, now)) {
+          logDebug(
+            `[CopilotScheduler] Per-task daily limit reached, skipping task: ${task.name}`,
+          );
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          needsSave = true;
+          continue;
+        }
+
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached(maxDailyLimit)) {
           logDebug(
@@ -1447,6 +1715,7 @@ export class ScheduleManager {
             await this.onExecuteCallback(task);
             // Track daily execution count
             this.incrementDailyExecCountInMemory(new Date());
+            this.incrementTaskDailyExecCountInMemory(task.id, new Date());
             executedCount++;
             // Only record lastRun on successful execution
             task.lastRun = new Date();

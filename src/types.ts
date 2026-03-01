@@ -70,6 +70,15 @@ export interface ScheduledTask {
   /** Max random delay in seconds applied before execution (0 = off). */
   jitterSeconds?: number;
 
+  /** Per-task max executions per day (0 = unlimited). */
+  maxExecutionsPerDay?: number;
+
+  /** Allowed execution start time in local clock (HH:mm). */
+  allowedTimeStart?: string;
+
+  /** Allowed execution end time in local clock (HH:mm). */
+  allowedTimeEnd?: string;
+
   /** Last execution time */
   lastRun?: Date;
 
@@ -126,6 +135,15 @@ export interface CreateTaskInput {
 
   /** Max random delay in seconds applied before execution (0 = off; undefined = use configured default). */
   jitterSeconds?: number;
+
+  /** Per-task max executions per day (0 = unlimited). */
+  maxExecutionsPerDay?: number;
+
+  /** Allowed execution start time in local clock (HH:mm). */
+  allowedTimeStart?: string;
+
+  /** Allowed execution end time in local clock (HH:mm). */
+  allowedTimeEnd?: string;
 }
 
 /**

@@ -290,6 +290,11 @@
   var promptGroup = document.getElementById("prompt-group");
   var autoModeInput = document.getElementById("auto-mode");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
+  var maxExecutionsPerDayInput = document.getElementById(
+    "max-executions-per-day",
+  );
+  var allowedTimeStartInput = document.getElementById("allowed-time-start");
+  var allowedTimeEndInput = document.getElementById("allowed-time-end");
   var friendlyFrequency = document.getElementById("friendly-frequency");
   var friendlyInterval = document.getElementById("friendly-interval");
   var friendlyMinute = document.getElementById("friendly-minute");
@@ -516,6 +521,15 @@
         jitterSeconds: jitterSecondsInput
           ? Number(jitterSecondsInput.value || 0)
           : 0,
+        maxExecutionsPerDay: maxExecutionsPerDayInput
+          ? Number(maxExecutionsPerDayInput.value || 0)
+          : 0,
+        allowedTimeStart: allowedTimeStartInput
+          ? String(allowedTimeStartInput.value || "").trim()
+          : "",
+        allowedTimeEnd: allowedTimeEndInput
+          ? String(allowedTimeEndInput.value || "").trim()
+          : "",
         enabled: editingTaskId ? editingTaskEnabled : true,
       };
 
@@ -553,6 +567,32 @@
             strings.cronExpressionRequired ||
             strings.invalidCronExpression ||
             "";
+          formErr.style.display = "block";
+        }
+        return;
+      }
+
+      var isValidHHmm = function (value) {
+        if (!value) return true;
+        var m = /^(\d{2}):(\d{2})$/.exec(String(value));
+        if (!m) return false;
+        var hh = Number(m[1]);
+        var mm = Number(m[2]);
+        return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59;
+      };
+      if (
+        taskData.allowedTimeStart &&
+        !isValidHHmm(taskData.allowedTimeStart)
+      ) {
+        if (formErr) {
+          formErr.textContent = strings.invalidTimeWindowFormat || "";
+          formErr.style.display = "block";
+        }
+        return;
+      }
+      if (taskData.allowedTimeEnd && !isValidHHmm(taskData.allowedTimeEnd)) {
+        if (formErr) {
+          formErr.textContent = strings.invalidTimeWindowFormat || "";
           formErr.style.display = "block";
         }
         return;
@@ -769,6 +809,21 @@
               " • " + escapeHtml(inThisWorkspace ? thisWsLabel : otherWsLabel);
           }
 
+          var taskDailyLimit = Number(task.maxExecutionsPerDay || 0);
+          var hasTaskDailyLimit =
+            isFinite(taskDailyLimit) && taskDailyLimit > 0;
+          var timeStart = task.allowedTimeStart || "";
+          var timeEnd = task.allowedTimeEnd || "";
+          var timeWindowInfo =
+            timeStart || timeEnd
+              ? "🕒 " +
+                escapeHtml(strings.labelAllowedTimeWindow || "") +
+                ": " +
+                escapeHtml(
+                  (timeStart || "--:--") + " - " + (timeEnd || "--:--"),
+                )
+              : "";
+
           // Escape for HTML attributes to avoid broken inline handlers
           var taskIdEscaped = escapeAttr(task.id || "");
 
@@ -851,6 +906,14 @@
             ": " +
             escapeHtml(nextRun) +
             "</span>" +
+            (hasTaskDailyLimit
+              ? "<span>🔢 " +
+                escapeHtml(strings.labelMaxExecutionsPerDay || "") +
+                ": " +
+                escapeHtml(String(taskDailyLimit)) +
+                "</span>"
+              : "") +
+            (timeWindowInfo ? "<span>" + timeWindowInfo + "</span>" : "") +
             "<span>" +
             scopeInfo +
             "</span>" +
@@ -1204,6 +1267,15 @@
     if (friendlyFrequency) friendlyFrequency.value = "";
     if (jitterSecondsInput)
       jitterSecondsInput.value = String(defaultJitterSeconds);
+    if (maxExecutionsPerDayInput) {
+      maxExecutionsPerDayInput.value = "0";
+    }
+    if (allowedTimeStartInput) {
+      allowedTimeStartInput.value = "";
+    }
+    if (allowedTimeEndInput) {
+      allowedTimeEndInput.value = "";
+    }
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     updateFriendlyVisibility();
     updateCronPreview();
@@ -1428,6 +1500,15 @@
       jitterSecondsInput.value = String(
         task.jitterSeconds ?? defaultJitterSeconds,
       );
+    }
+    if (maxExecutionsPerDayInput) {
+      maxExecutionsPerDayInput.value = String(task.maxExecutionsPerDay ?? 0);
+    }
+    if (allowedTimeStartInput) {
+      allowedTimeStartInput.value = task.allowedTimeStart || "";
+    }
+    if (allowedTimeEndInput) {
+      allowedTimeEndInput.value = task.allowedTimeEnd || "";
     }
 
     // Clear "run first" checkbox in edit mode (not applicable for existing tasks)

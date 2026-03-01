@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { ScheduleManager } from "../../scheduleManager";
+import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
 
 class MockMemento implements vscode.Memento {
@@ -97,6 +97,44 @@ function overrideWorkspaceFoldersForTest(
     }
   };
 }
+
+suite("ScheduleManager Time Window Helper Tests", () => {
+  test("normalizeTimeWindowHHMM accepts and pads valid inputs", () => {
+    const normalize = __testOnly.normalizeTimeWindowHHMM as
+      | ((value: unknown) => string | undefined)
+      | undefined;
+    assert.ok(typeof normalize === "function");
+
+    assert.strictEqual(normalize!("9:05"), "09:05");
+    assert.strictEqual(normalize!("23:59"), "23:59");
+  });
+
+  test("normalizeTimeWindowHHMM rejects invalid values", () => {
+    const normalize = __testOnly.normalizeTimeWindowHHMM as
+      | ((value: unknown) => string | undefined)
+      | undefined;
+    assert.ok(typeof normalize === "function");
+
+    assert.strictEqual(normalize!("24:00"), undefined);
+    assert.strictEqual(normalize!("aa:bb"), undefined);
+    assert.strictEqual(normalize!(""), undefined);
+  });
+
+  test("isNowWithinAllowedTimeWindow supports overnight windows", () => {
+    const isWithin = __testOnly.isNowWithinAllowedTimeWindow as
+      | ((now: Date, start?: string, end?: string) => boolean)
+      | undefined;
+    assert.ok(typeof isWithin === "function");
+
+    const night = new Date("2026-03-01T23:00:00");
+    const morning = new Date("2026-03-01T06:30:00");
+    const noon = new Date("2026-03-01T12:00:00");
+
+    assert.strictEqual(isWithin!(night, "22:00", "07:00"), true);
+    assert.strictEqual(isWithin!(morning, "22:00", "07:00"), true);
+    assert.strictEqual(isWithin!(noon, "22:00", "07:00"), false);
+  });
+});
 
 suite("ScheduleManager Minimum Interval Tests", () => {
   test("checkMinimumInterval falls back to local time when timezone is invalid", () => {
@@ -682,6 +720,200 @@ suite("ScheduleManager Auto Mode Tests", () => {
       const updated = await manager.updateTask(task.id, { autoMode: true });
       assert.ok(updated);
       assert.strictEqual(updated?.autoMode, true);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+});
+
+suite("ScheduleManager Task-Level Control Tests", () => {
+  function toHHmm(date: Date): string {
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+
+  test("createTask persists per-task run limit and time window", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "task-control-create",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        maxExecutionsPerDay: 3,
+        allowedTimeStart: "09:00",
+        allowedTimeEnd: "18:00",
+      });
+
+      assert.strictEqual(task.maxExecutionsPerDay, 3);
+      assert.strictEqual(task.allowedTimeStart, "09:00");
+      assert.strictEqual(task.allowedTimeEnd, "18:00");
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask rejects invalid time window format", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "task-control-update",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      await assert.rejects(
+        manager.updateTask(task.id, { allowedTimeStart: "25:00" }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.invalidTimeWindowFormat(),
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks skips execution outside allowed time window", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const now = new Date();
+      const start = new Date(now.getTime() + 60 * 60 * 1000);
+      const end = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+      const task = await manager.createTask({
+        name: "task-window-skip",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+        allowedTimeStart: toHHmm(start),
+        allowedTimeEnd: toHHmm(end),
+      });
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+
+      let executed = 0;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executed++;
+      };
+
+      await (
+        manager as unknown as {
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).checkAndExecuteTasks?.();
+
+      assert.strictEqual(executed, 0);
+      assert.strictEqual(task.lastRun, undefined);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks skips execution when per-task daily limit reached", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "task-limit-skip",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+        maxExecutionsPerDay: 1,
+      });
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+
+      const today = new Date();
+      const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      (
+        manager as unknown as {
+          dailyTaskExecDate?: string;
+          dailyTaskExecCounts?: Record<string, number>;
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).dailyTaskExecDate = dateKey;
+      (
+        manager as unknown as {
+          dailyTaskExecCounts?: Record<string, number>;
+        }
+      ).dailyTaskExecCounts = { [task.id]: 1 };
+
+      let executed = 0;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executed++;
+      };
+
+      await (
+        manager as unknown as {
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).checkAndExecuteTasks?.();
+
+      assert.strictEqual(executed, 0);
+      assert.strictEqual(task.lastRun, undefined);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
     } finally {
       try {
         fs.rmSync(tmp, {

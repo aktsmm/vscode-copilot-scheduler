@@ -113,6 +113,12 @@
         "title": "%command.showVersion%",
         "category": "%extension.title%",
         "icon": "$(info)"
+      },
+      {
+        "command": "copilotScheduler.showExecutionHistory",
+        "title": "%command.showExecutionHistory%",
+        "category": "%extension.title%",
+        "icon": "$(history)"
       }
     ],
     "configuration": {
@@ -260,6 +266,13 @@
           ],
           "description": "%config.logLevel%"
         },
+        "copilotScheduler.executionHistoryLimit": {
+          "type": "number",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "%config.executionHistoryLimit%"
+        },
         "copilotScheduler.reportIssue": {
           "type": "null",
           "markdownDescription": "%config.reportIssue%"
@@ -297,9 +310,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "copilotScheduler.showVersion",
+          "command": "copilotScheduler.showExecutionHistory",
           "when": "view == copilotSchedulerTasks",
           "group": "navigation@3"
+        },
+        {
+          "command": "copilotScheduler.showVersion",
+          "when": "view == copilotSchedulerTasks",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
