@@ -192,7 +192,7 @@
         "copilotScheduler.autoModeDefault": {
           "type": "boolean",
           "default": false,
-          "description": "%config.autoModeDefault%"
+          "markdownDescription": "%config.autoModeDefault%"
         },
         "copilotScheduler.commandDelayFactor": {
           "type": "number",

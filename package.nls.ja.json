@@ -33,7 +33,7 @@
   "config.chatSession": "チャットセッションの動作",
   "config.chatSession.new": "実行ごとに新しいチャットセッションを作成（分離しやすいが通常は遅め）",
   "config.chatSession.continue": "既存のチャットセッションを継続（通常は高速）",
-  "config.autoModeDefault": "新規タスクのオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）",
+  "config.autoModeDefault": "新規タスクのオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）。AI が適用した編集を自動で保持するには #chat.editing.autoAcceptDelay# を設定してください。",
   "config.commandDelayFactor": "Copilotコマンド実行時の待機時間倍率（0.1〜2.0）。小さいほど高速ですが、環境によっては安定性が低下する場合があります。",
   "config.manualRunNextRunPolicy": "「今すぐ実行」後の次回実行時刻の計算方法",
   "config.manualRunNextRunPolicy.advance": "可能なら既存の次回実行から進める（キュー進行を維持）",

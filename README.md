@@ -79,6 +79,8 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path                                                                                                  |
 | `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                                                 |
 
+To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
+
 If execution feels sluggish when a task is triggered, try:
 
 - `copilotScheduler.chatSession = continue`
