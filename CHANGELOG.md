@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.21] - 2026-03-01
+
+### Improved
+
+- **Language setting description**: Added reload behavior note to `copilotScheduler.language` in settings UI, README, and README_ja so users know extension Webview/Tree updates instantly while settings descriptions may require a window reload.
+
 ## [1.0.20] - 2026-02-28
 
 ### Improved

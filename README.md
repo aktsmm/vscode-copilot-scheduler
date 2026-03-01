@@ -64,7 +64,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 | ----------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                                                |
 | `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                                                     |
-| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.         |
+| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.           |
 | `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                                           |
 | `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                         |
 | `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                          |
