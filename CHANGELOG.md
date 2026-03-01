@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.22] - 2026-03-01
+
+### Improved
+
+- **Auto-keep guidance**: Clarified that AI-applied edit auto-keep is controlled by VS Code setting `chat.editing.autoAcceptDelay`, and documented the recommended initial value (`5`) in README/README_ja.
+
+### Changed
+
+- Updated `copilotScheduler.autoModeDefault` setting description to `markdownDescription` so the settings UI can link users directly to `#chat.editing.autoAcceptDelay#`.
+
 ## [1.0.21] - 2026-03-01
 
 ### Improved
