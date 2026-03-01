@@ -35,7 +35,7 @@
   "config.chatSession": "Chat session behavior",
   "config.chatSession.new": "Create new chat session for each execution (more isolated, usually slower)",
   "config.chatSession.continue": "Continue in existing chat session (usually faster)",
-  "config.autoModeDefault": "Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt). To automatically keep AI-applied edits, configure #chat.editing.autoAcceptDelay#.",
+  "config.autoModeDefault": "Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt). To automatically keep AI-applied edits, configure [chat.editing.autoAcceptDelay](#chat.editing.autoAcceptDelay#). If the link does not open, search for chat.editing.autoAcceptDelay in Settings.",
   "config.commandDelayFactor": "Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster but may reduce stability in some environments.",
   "config.manualRunNextRunPolicy": "How to compute next run after Run Now",
   "config.manualRunNextRunPolicy.advance": "Advance from existing next run when possible (keeps queue progression)",

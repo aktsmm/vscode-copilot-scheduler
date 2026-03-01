@@ -81,6 +81,51 @@ suite("i18n Tests", () => {
   });
 });
 
+suite("Webview Test Prompt Wiring Tests", () => {
+  test("List/Edit webview commands pass test-prompt callback", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const createGuiStart = source.indexOf("function registerCreateTaskGuiCommand(");
+    assert.ok(createGuiStart >= 0, "registerCreateTaskGuiCommand not found");
+    const createGuiEnd = source.indexOf(
+      "function registerListTasksCommand(",
+      createGuiStart,
+    );
+    assert.ok(createGuiEnd > createGuiStart, "registerCreateTaskGuiCommand end not found");
+    const createGuiBlock = source.slice(createGuiStart, createGuiEnd);
+    assert.ok(
+      createGuiBlock.includes("handleTestPromptAction"),
+      "registerCreateTaskGuiCommand should pass handleTestPromptAction to SchedulerWebview.show",
+    );
+
+    const listCmdStart = createGuiEnd;
+    assert.ok(listCmdStart >= 0, "registerListTasksCommand not found");
+    const listCmdEnd = source.indexOf(
+      "function registerEditTaskCommand(",
+      listCmdStart,
+    );
+    assert.ok(listCmdEnd > listCmdStart, "registerListTasksCommand end not found");
+    const listCmdBlock = source.slice(listCmdStart, listCmdEnd);
+    assert.ok(
+      listCmdBlock.includes("handleTestPromptAction"),
+      "registerListTasksCommand should pass handleTestPromptAction to SchedulerWebview.show",
+    );
+
+    const editCmdStart = listCmdEnd;
+    const editCmdEnd = source.indexOf(
+      "function registerDeleteTaskCommand()",
+      editCmdStart,
+    );
+    assert.ok(editCmdEnd > editCmdStart, "registerEditTaskCommand end not found");
+    const editCmdBlock = source.slice(editCmdStart, editCmdEnd);
+    assert.ok(
+      editCmdBlock.includes("handleTestPromptAction"),
+      "registerEditTaskCommand should pass handleTestPromptAction to SchedulerWebview.show",
+    );
+  });
+});
+
 suite("Error Message Sanitization Tests", () => {
   test("Sanitizes absolute paths to basenames (Windows and POSIX)", async () => {
     const { __testOnly } = await import("../../extension");

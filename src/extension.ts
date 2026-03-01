@@ -1269,6 +1269,23 @@ function registerCreateTaskCommand(): vscode.Disposable {
   );
 }
 
+async function handleTestPromptAction(
+  prompt: string,
+  agent?: string,
+  model?: string,
+): Promise<void> {
+  // Test prompt execution
+  // executePrompt already shows a user-facing warning with copy-to-clipboard
+  // on failure, so we only log the error here to avoid double notification (U20).
+  try {
+    await copilotExecutor.executePrompt(prompt, { agent, model });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);
+    logError(`[CopilotScheduler] Test prompt failed: ${safeErrorMessage}`);
+  }
+}
+
 function registerCreateTaskGuiCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
@@ -1280,21 +1297,7 @@ function registerCreateTaskGuiCommand(
           context.extensionUri,
           scheduleManager.getAllTasks(),
           handleTaskAction,
-          async (prompt, agent, model) => {
-            // Test prompt execution
-            // executePrompt already shows a user-facing warning with copy-to-clipboard
-            // on failure, so we only log the error here to avoid double notification (U20).
-            try {
-              await copilotExecutor.executePrompt(prompt, { agent, model });
-            } catch (error) {
-              const errorMessage =
-                error instanceof Error ? error.message : String(error);
-              const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);
-              logError(
-                `[CopilotScheduler] Test prompt failed: ${safeErrorMessage}`,
-              );
-            }
-          },
+          handleTestPromptAction,
         );
 
         // Ensure the '+' command always opens the webview in "new task" mode.
@@ -1319,6 +1322,7 @@ function registerListTasksCommand(
           context.extensionUri,
           scheduleManager.getAllTasks(),
           handleTaskAction,
+          handleTestPromptAction,
         );
         SchedulerWebview.switchToList();
       } catch (error) {
@@ -1366,6 +1370,7 @@ function registerEditTaskCommand(
           context.extensionUri,
           scheduleManager.getAllTasks(),
           handleTaskAction,
+          handleTestPromptAction,
         );
         SchedulerWebview.editTask(taskId);
       } catch (error) {

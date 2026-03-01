@@ -178,6 +178,130 @@ suite("SchedulerWebview Message Queue Tests", () => {
   });
 });
 
+suite("SchedulerWebview Test Prompt Routing Tests", () => {
+  test("handleMessage forwards testPrompt to callback", async () => {
+    const wv = SchedulerWebview as unknown as {
+      onTestPromptCallback?: (
+        prompt: string,
+        agent?: string,
+        model?: string,
+      ) => void;
+      handleMessage?: (message: unknown) => Promise<void>;
+    };
+
+    const originalCallback = wv.onTestPromptCallback;
+    let received:
+      | {
+          prompt: string;
+          agent?: string;
+          model?: string;
+        }
+      | undefined;
+
+    try {
+      wv.onTestPromptCallback = (prompt, agent, model) => {
+        received = { prompt, agent, model };
+      };
+
+      assert.ok(typeof wv.handleMessage === "function");
+
+      await wv.handleMessage?.({
+        type: "testPrompt",
+        prompt: "hello",
+        agent: "@workspace",
+        model: "gpt-4o",
+      });
+
+      assert.deepStrictEqual(received, {
+        prompt: "hello",
+        agent: "@workspace",
+        model: "gpt-4o",
+      });
+    } finally {
+      wv.onTestPromptCallback = originalCallback;
+    }
+  });
+
+  test("webview script includes test button -> testPrompt postMessage flow", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const testButtonClickStart = source.indexOf(
+      'testBtn.addEventListener("click"',
+    );
+    assert.ok(
+      testButtonClickStart >= 0,
+      "test button click handler was not found.",
+    );
+
+    const testButtonBlockStart = source.lastIndexOf(
+      "if (testBtn)",
+      testButtonClickStart,
+    );
+    assert.ok(testButtonBlockStart >= 0, "test button guard block was not found.");
+
+    const testButtonBlockEnd = source.indexOf(
+      "// Refresh button with null check",
+      testButtonBlockStart,
+    );
+    assert.ok(
+      testButtonBlockEnd > testButtonBlockStart,
+      "test button block end anchor was not found.",
+    );
+
+    const block = source.slice(testButtonBlockStart, testButtonBlockEnd);
+    assert.ok(
+      block.includes('type: "testPrompt"'),
+      "test button does not post testPrompt message.",
+    );
+    assert.ok(
+      block.includes("showFormError(strings.promptRequired || \"\", 5000)"),
+      "empty prompt should show promptRequired error in test button flow.",
+    );
+  });
+
+  test("template loading helpers also toggle test button disabled state", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const setStart = source.indexOf("function setTemplateLoading(pathValue)");
+    const clearStart = source.indexOf("function clearTemplateLoading(pathValue)");
+    assert.ok(setStart >= 0, "setTemplateLoading was not found.");
+    assert.ok(clearStart > setStart, "clearTemplateLoading was not found.");
+
+    const setBlock = source.slice(setStart, clearStart);
+    assert.ok(
+      setBlock.includes("if (testBtn)"),
+      "setTemplateLoading should handle testBtn disabled state.",
+    );
+    assert.ok(
+      setBlock.includes("testBtn.disabled = !!templateLoadingPath"),
+      "setTemplateLoading should disable testBtn while loading.",
+    );
+
+    const requestStart = source.indexOf(
+      "function requestTemplateLoad(selectedPath, source)",
+      clearStart,
+    );
+    assert.ok(requestStart > clearStart, "requestTemplateLoad anchor was not found.");
+    const clearBlock = source.slice(clearStart, requestStart);
+    assert.ok(
+      clearBlock.includes("if (testBtn)"),
+      "clearTemplateLoading should handle testBtn disabled state.",
+    );
+    assert.ok(
+      clearBlock.includes("testBtn.disabled = false"),
+      "clearTemplateLoading should re-enable testBtn.",
+    );
+  });
+});
+
 suite("SchedulerWebview Script Contract Tests", () => {
   test("Message handler catch keeps create-tab recovery flow", () => {
     const scriptPath = path.resolve(

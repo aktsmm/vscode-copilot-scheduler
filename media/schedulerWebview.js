@@ -186,12 +186,16 @@
   function clearPendingSubmitState() {
     pendingSubmit = false;
     if (submitBtn) submitBtn.disabled = !!templateLoadingPath;
+    if (testBtn) testBtn.disabled = !!templateLoadingPath;
   }
 
   function setTemplateLoading(pathValue) {
     templateLoadingPath = pathValue ? String(pathValue) : "";
     if (submitBtn && !pendingSubmit) {
       submitBtn.disabled = !!templateLoadingPath;
+    }
+    if (testBtn) {
+      testBtn.disabled = !!templateLoadingPath;
     }
   }
 
@@ -206,6 +210,9 @@
     templateLoadingPath = "";
     if (submitBtn && !pendingSubmit) {
       submitBtn.disabled = false;
+    }
+    if (testBtn) {
+      testBtn.disabled = false;
     }
   }
 
@@ -671,15 +678,19 @@
       var prompt = promptTextEl ? promptTextEl.value : "";
       var agent = agentSelect ? agentSelect.value : "";
       var model = modelSelect ? modelSelect.value : "";
+      var normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
 
-      if (prompt) {
-        vscode.postMessage({
-          type: "testPrompt",
-          prompt: prompt,
-          agent: agent,
-          model: model,
-        });
+      if (!normalizedPrompt) {
+        showFormError(strings.promptRequired || "", 5000);
+        return;
       }
+
+      vscode.postMessage({
+        type: "testPrompt",
+        prompt: prompt,
+        agent: agent,
+        model: model,
+      });
     });
   }
 
