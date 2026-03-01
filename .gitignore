@@ -12,9 +12,7 @@ Thumbs.db
 output_sessions/
 
 # Development files
-.github/*
-!.github/copilot-instructions.md
-!.github/review-learnings.md
+.github/
 .github/temp/
 .github/agents/
 .github/skills/
