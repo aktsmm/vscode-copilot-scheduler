@@ -25,7 +25,7 @@
   "config.logLevel.error": "Errors only",
   "config.logLevel.info": "Info and errors",
   "config.logLevel.debug": "Debug, info and errors",
-  "config.language": "UI language",
+  "config.language": "UI language (applies to extension Webview/Tree UI; settings-description updates may require window reload)",
   "config.language.auto": "Auto-detect from VS Code",
   "config.language.en": "English",
   "config.language.ja": "Japanese",

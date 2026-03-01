@@ -25,7 +25,7 @@
   "config.logLevel.error": "エラーのみ",
   "config.logLevel.info": "情報とエラー",
   "config.logLevel.debug": "デバッグ、情報、エラー",
-  "config.language": "UI言語",
+  "config.language": "UI言語（拡張機能のWebview/Tree表示に適用。設定説明文の反映にはウィンドウ再読み込みが必要な場合があります）",
   "config.language.auto": "VS Codeから自動検出",
   "config.language.en": "英語",
   "config.language.ja": "日本語",
