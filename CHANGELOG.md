@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.23] - 2026-03-01
+
+### Added
+
+- **Execution History Viewer**: New command `Copilot Scheduler: Show Execution History` displays recent task executions (name, trigger, status, timestamp) in a Quick Pick list. History limit is configurable via `copilotScheduler.executionHistoryLimit`.
+- **Per-task execution limits**: New per-task fields `maxExecutionsPerDay` and `allowedTimeStart` / `allowedTimeEnd` (HH:mm) control automatic execution frequency and time window. Scheduler silently skips tasks outside their allowed window or over their daily limit.
+- **Webview: time window validation**: Time-window inputs now validate hour (0–23) and minute (0–59) ranges client-side before submission, giving immediate feedback without round-trip errors.
+
+### Improved
+
+- **Run notification**: Success/failure notifications now include task name, result status, and confirmed next-run time (resolved from persisted state after execution rather than a pre-run estimate).
+- **History persistence safety**: Execution history writes are serialized through a queue; individual save failures are logged and do not block subsequent saves or affect manual-run success/failure reporting.
+
 ## [1.0.22] - 2026-03-01
 
 ### Improved
