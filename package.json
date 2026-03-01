@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -202,7 +202,7 @@
         },
         "copilotScheduler.commandDelayFactor": {
           "type": "number",
-          "default": 1,
+          "default": 0.8,
           "minimum": 0.1,
           "maximum": 2,
           "description": "%config.commandDelayFactor%"

@@ -121,6 +121,11 @@ export const messages = {
       "Prompt template is required",
       "プロンプトテンプレートを選択してください",
     ),
+  templateLoadingInProgress: () =>
+    t(
+      "Template is still loading. Please wait a moment and try again.",
+      "テンプレートを読み込み中です。少し待ってから再度お試しください。",
+    ),
   cronExpressionRequired: () =>
     t("Cron expression is required", "cron式を入力してください"),
   invalidTimeWindowFormat: () =>
@@ -469,6 +474,11 @@ export const messages = {
     ),
   disclaimerAccept: () => t("I understand the risks", "リスクを理解しました"),
   disclaimerDecline: () => t("Cancel", "キャンセル"),
+  disclaimerDeclinedTaskDisabled: (name: string) =>
+    t(
+      `Risk notice was canceled. "${name}" remains disabled.`,
+      `リスク通知がキャンセルされたため「${name}」は無効のままです。`,
+    ),
   unlimitedDailyWarning: () =>
     t(
       "⚠️ Daily execution limit is set to unlimited (0). Excessive automated usage may result in API rate-limiting or account restrictions by the provider. Use at your own risk.",

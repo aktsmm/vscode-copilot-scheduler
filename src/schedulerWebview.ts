@@ -111,7 +111,7 @@ export class SchedulerWebview {
       this.cachedModels = CopilotExecutor.getFallbackModels();
     }
 
-    const refreshInBackground = (): void => {
+    const refreshInBackground = (forcePromptRefresh: boolean): void => {
       void this.refreshAgentsAndModels(true)
         .then(() => {
           this.postMessage({
@@ -132,7 +132,7 @@ export class SchedulerWebview {
           );
         });
 
-      void this.refreshPromptTemplates(true)
+      void this.refreshPromptTemplates(forcePromptRefresh)
         .then(() => {
           this.postMessage({
             type: "updatePromptTemplates",
@@ -166,7 +166,8 @@ export class SchedulerWebview {
         type: "updatePromptTemplates",
         templates: this.cachedPromptTemplates,
       });
-      refreshInBackground();
+      // Keep reveal responsive while still syncing template file changes.
+      refreshInBackground(true);
     } else {
       // Create new panel
       this.panel = vscode.window.createWebviewPanel(
@@ -231,7 +232,8 @@ export class SchedulerWebview {
         this.resetWebviewReadyState();
       });
 
-      refreshInBackground();
+      // First open: populate caches from source files.
+      refreshInBackground(true);
     }
   }
 
@@ -552,6 +554,54 @@ export class SchedulerWebview {
     this.cachedPromptTemplates = await this.getPromptTemplates();
   }
 
+  private static async collectMarkdownTemplatePaths(
+    rootDir: string,
+  ): Promise<string[]> {
+    const files: string[] = [];
+    const dirsToScan: string[] = [rootDir];
+
+    while (dirsToScan.length > 0) {
+      const currentDir = dirsToScan.pop();
+      if (!currentDir) {
+        continue;
+      }
+
+      let entries: [string, vscode.FileType][];
+      try {
+        entries = await vscode.workspace.fs.readDirectory(
+          vscode.Uri.file(currentDir),
+        );
+      } catch {
+        continue;
+      }
+
+      for (const [name, fileType] of entries) {
+        const entryPath = path.join(currentDir, name);
+
+        if (fileType === vscode.FileType.Directory) {
+          dirsToScan.push(entryPath);
+          continue;
+        }
+
+        if (fileType !== vscode.FileType.File) {
+          continue;
+        }
+
+        const lower = name.toLowerCase();
+        if (!lower.endsWith(".md")) {
+          continue;
+        }
+        if (lower.endsWith(".agent.md")) {
+          continue;
+        }
+
+        files.push(entryPath);
+      }
+    }
+
+    return files;
+  }
+
   /**
    * Get prompt templates from local and global locations
    */
@@ -562,48 +612,31 @@ export class SchedulerWebview {
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     for (const folder of workspaceFolders) {
       const localPromptDir = path.join(folder.uri.fsPath, ".github", "prompts");
-      try {
-        const entries = await vscode.workspace.fs.readDirectory(
-          vscode.Uri.file(localPromptDir),
-        );
-        for (const [file, fileType] of entries) {
-          if (fileType !== vscode.FileType.File) continue;
-          const lower = file.toLowerCase();
-          if (!lower.endsWith(".md")) continue;
-          if (lower.endsWith(".agent.md")) continue;
-          const displayName = path.basename(file, path.extname(file));
-          templates.push({
-            path: path.join(localPromptDir, file),
-            name: displayName,
-            source: "local",
-          });
-        }
-      } catch {
-        // Ignore errors
+      const templatePaths =
+        await this.collectMarkdownTemplatePaths(localPromptDir);
+      for (const templatePath of templatePaths) {
+        const fileName = path.basename(templatePath);
+        const displayName = path.basename(fileName, path.extname(fileName));
+        templates.push({
+          path: templatePath,
+          name: displayName,
+          source: "local",
+        });
       }
     }
 
     // Get global templates
     const globalPath = this.getGlobalPromptsPath();
     if (globalPath) {
-      try {
-        const entries = await vscode.workspace.fs.readDirectory(
-          vscode.Uri.file(globalPath),
-        );
-        for (const [file, fileType] of entries) {
-          if (fileType !== vscode.FileType.File) continue;
-          const lower = file.toLowerCase();
-          if (!lower.endsWith(".md")) continue;
-          if (lower.endsWith(".agent.md")) continue;
-          const displayName = path.basename(file, path.extname(file));
-          templates.push({
-            path: path.join(globalPath, file),
-            name: displayName,
-            source: "global",
-          });
-        }
-      } catch {
-        // Ignore errors
+      const templatePaths = await this.collectMarkdownTemplatePaths(globalPath);
+      for (const templatePath of templatePaths) {
+        const fileName = path.basename(templatePath);
+        const displayName = path.basename(fileName, path.extname(fileName));
+        templates.push({
+          path: templatePath,
+          name: displayName,
+          source: "global",
+        });
       }
     }
 
@@ -782,6 +815,7 @@ export class SchedulerWebview {
       taskNameRequired: messages.taskNameRequired(),
       promptRequired: messages.promptRequired(),
       templateRequired: messages.templateRequired(),
+      templateLoadingInProgress: messages.templateLoadingInProgress(),
       cronExpressionRequired: messages.cronExpressionRequired(),
       actionCreate: messages.actionCreate(),
       actionSave: messages.actionSave(),

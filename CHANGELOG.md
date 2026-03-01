@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.24] - 2026-03-01
+
+### Fixed
+
+- **Disclaimer rollback safety**: Declining the risk disclaimer now immediately disables the task across all enable/create/edit paths (Webview toggle, Webview create/edit, CLI create, tree-view enable). Previously, declining left the task enabled, effectively bypassing the safety mechanism.
+
+### Improved
+
+- **Agent prefix normalization**: `CopilotExecutor` now auto-prefixes agents with `@` or `/` based on a known slash-command list, avoiding silent failures when the prefix is omitted.
+- **Multi-root workspace awareness**: `CopilotExecutor` and `ScheduleManager` now prefer the workspace folder of the active editor when resolving workspace root, improving reliability in multi-root setups.
+- **Template loading guard**: Webview submit button is disabled while a template is loading, preventing submission of stale or incomplete prompt text. Consecutive template switches resolve to the last selection only.
+- **Recursive template discovery**: Prompt template picker now scans subdirectories under `.github/prompts/` and the global prompts folder, surfacing templates in nested folders.
+- **Duplicate task preserves workspacePath**: `duplicateTask` now copies `workspacePath` for workspace-scoped tasks, preventing the duplicate from binding to a different workspace.
+
+### Added
+
+- Agent prefix normalization unit tests (`CopilotExecutor Agent Prefix Tests`).
+- Template loading guard and error feedback unit tests (`SchedulerWebview`).
+- RunNow detailed result / rollback / history tests (`ScheduleManager RunNow Tests`).
+
 ## [1.0.23] - 2026-03-01
 
 ### Added

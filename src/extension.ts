@@ -90,18 +90,38 @@ async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
   }
 }
 
-async function maybeShowDisclaimerOnce(task: ScheduledTask): Promise<void> {
-  if (!task.enabled) return;
-  if (scheduleManager.isDisclaimerAccepted()) return;
+async function maybeShowDisclaimerOnce(task: ScheduledTask): Promise<boolean> {
+  if (!task.enabled) return true;
+  if (scheduleManager.isDisclaimerAccepted()) return true;
   const choice = await vscode.window.showInformationMessage(
     messages.disclaimerMessage(),
     messages.disclaimerAccept(),
     messages.disclaimerDecline(),
   );
   if (choice !== messages.disclaimerAccept()) {
-    return;
+    return false;
   }
   await scheduleManager.setDisclaimerAccepted(true);
+  return true;
+}
+
+async function ensureTaskEnabledAfterDisclaimer(
+  task: ScheduledTask,
+): Promise<boolean> {
+  if (!task.enabled) return true;
+  const accepted = await maybeShowDisclaimerOnce(task);
+  if (accepted) {
+    return true;
+  }
+
+  const disabled = await scheduleManager.setTaskEnabled(task.id, false);
+  if (disabled) {
+    SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+    notifyInfo(messages.disclaimerDeclinedTaskDisabled(task.name));
+    return false;
+  }
+  notifyError(messages.taskNotFound());
+  return false;
 }
 
 async function syncPromptTemplatesIfNeeded(
@@ -1042,14 +1062,17 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           break;
         }
 
+        if (task.enabled) {
+          const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+          if (!accepted) {
+            break;
+          }
+        }
         notifyInfo(
           task.enabled
             ? messages.taskEnabled(task.name)
             : messages.taskDisabled(task.name),
         );
-        if (task.enabled) {
-          await maybeShowDisclaimerOnce(task);
-        }
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         break;
       }
@@ -1100,7 +1123,11 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           const task = await scheduleManager.createTask(
             action.data as CreateTaskInput,
           );
-          await maybeShowDisclaimerOnce(task);
+          const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+          if (!accepted) {
+            SchedulerWebview.switchToList();
+            break;
+          }
           const createdMsg = messages.taskCreated(task.name);
           notifyInfo(createdMsg);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
@@ -1118,7 +1145,11 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             break;
           }
           if (task.enabled) {
-            await maybeShowDisclaimerOnce(task);
+            const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+            if (!accepted) {
+              SchedulerWebview.switchToList();
+              break;
+            }
           }
           const updatedMsg = messages.taskUpdated(task.name);
           notifyInfo(updatedMsg);
@@ -1223,7 +1254,10 @@ function registerCreateTaskCommand(): vscode.Disposable {
           prompt,
           cronExpression,
         });
-        await maybeShowDisclaimerOnce(task);
+        const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+        if (!accepted) {
+          return;
+        }
         notifyInfo(messages.taskCreated(task.name));
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       } catch (error) {
@@ -1444,14 +1478,17 @@ function registerToggleTaskCommand(): vscode.Disposable {
 
         const task = await scheduleManager.toggleTask(taskId);
         if (task) {
+          if (task.enabled) {
+            const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+            if (!accepted) {
+              return;
+            }
+          }
           notifyInfo(
             task.enabled
               ? messages.taskEnabled(task.name)
               : messages.taskDisabled(task.name),
           );
-          if (task.enabled) {
-            await maybeShowDisclaimerOnce(task);
-          }
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         } else {
           notifyError(messages.taskNotFound());
@@ -1497,8 +1534,11 @@ function registerEnableTaskCommand(): vscode.Disposable {
 
         const task = await scheduleManager.setTaskEnabled(taskId, true);
         if (task) {
+          const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+          if (!accepted) {
+            return;
+          }
           notifyInfo(messages.taskEnabled(task.name));
-          await maybeShowDisclaimerOnce(task);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
         } else {
           notifyError(messages.taskNotFound());

@@ -574,4 +574,43 @@ suite("SchedulerWebview Template Load Error Feedback Tests", () => {
       wv.cachedPromptTemplates = originalTemplates;
     }
   });
+
+  test("showError handler clears template-loading submit guard", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const showErrorCaseStart = source.indexOf('case "showError":');
+    assert.ok(showErrorCaseStart >= 0, "showError case was not found.");
+
+    const showErrorCaseEnd = source.indexOf(
+      "} catch (e) {",
+      showErrorCaseStart,
+    );
+    assert.ok(
+      showErrorCaseEnd > showErrorCaseStart,
+      "showError case end was not found.",
+    );
+
+    const showErrorCaseSource = source.slice(
+      showErrorCaseStart,
+      showErrorCaseEnd,
+    );
+
+    const expectedTokensInOrder = [
+      "showFormError(displayText, 8000)",
+      "clearTemplateLoading()",
+      "clearPendingSubmitState()",
+      'switchTab("create")',
+    ];
+
+    let cursor = 0;
+    for (const token of expectedTokensInOrder) {
+      const index = showErrorCaseSource.indexOf(token, cursor);
+      assert.ok(index >= 0, `Expected token not found: ${token}`);
+      cursor = index + token.length;
+    }
+  });
 });

@@ -185,7 +185,41 @@
 
   function clearPendingSubmitState() {
     pendingSubmit = false;
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) submitBtn.disabled = !!templateLoadingPath;
+  }
+
+  function setTemplateLoading(pathValue) {
+    templateLoadingPath = pathValue ? String(pathValue) : "";
+    if (submitBtn && !pendingSubmit) {
+      submitBtn.disabled = !!templateLoadingPath;
+    }
+  }
+
+  function clearTemplateLoading(pathValue) {
+    if (
+      pathValue &&
+      templateLoadingPath &&
+      String(pathValue) !== templateLoadingPath
+    ) {
+      return;
+    }
+    templateLoadingPath = "";
+    if (submitBtn && !pendingSubmit) {
+      submitBtn.disabled = false;
+    }
+  }
+
+  function requestTemplateLoad(selectedPath, source) {
+    if (!selectedPath) {
+      clearTemplateLoading();
+      return;
+    }
+    setTemplateLoading(selectedPath);
+    vscode.postMessage({
+      type: "loadPromptTemplate",
+      path: selectedPath,
+      source: source,
+    });
   }
 
   // Global error handler for debugging (kept minimal to avoid breaking the UI)
@@ -203,6 +237,7 @@
     var lineInfo =
       typeof line === "number" ? linePrefix + String(line) + lineSuffix : "";
     showFormError(prefix + displayMsg + lineInfo);
+    clearTemplateLoading();
     clearPendingSubmitState();
     switchTab("create");
   };
@@ -228,6 +263,7 @@
       ? safeRaw
       : String(strings.webviewUnknown || "");
     showFormError(prefix + displayRaw);
+    clearTemplateLoading();
     clearPendingSubmitState();
     switchTab("create");
   };
@@ -256,6 +292,7 @@
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
   var pendingSubmit = false;
+  var templateLoadingPath = "";
 
   var defaultJitterSeconds = (function () {
     var raw = initialData.defaultJitterSeconds;
@@ -459,11 +496,9 @@
           'input[name="prompt-source"]:checked',
         );
         var source = sourceEl ? sourceEl.value : "inline";
-        vscode.postMessage({
-          type: "loadPromptTemplate",
-          path: selectedPath,
-          source: source,
-        });
+        requestTemplateLoad(selectedPath, source);
+      } else {
+        clearTemplateLoading();
       }
     });
   }
@@ -546,6 +581,19 @@
       if (promptSourceValue !== "inline" && !templateValue) {
         if (formErr) {
           formErr.textContent = strings.templateRequired || "";
+          formErr.style.display = "block";
+        }
+        return;
+      }
+
+      if (
+        promptSourceValue !== "inline" &&
+        templateValue &&
+        templateLoadingPath === templateValue
+      ) {
+        if (formErr) {
+          formErr.textContent =
+            strings.templateLoadingInProgress || strings.templateLoadError || "";
           formErr.style.display = "block";
         }
         return;
@@ -655,11 +703,7 @@
       );
       var source = sourceEl ? sourceEl.value : "inline";
       if (selectedPath && (source === "local" || source === "global")) {
-        vscode.postMessage({
-          type: "loadPromptTemplate",
-          path: selectedPath,
-          source: source,
-        });
+        requestTemplateLoad(selectedPath, source);
       }
     });
   }
@@ -1259,6 +1303,7 @@
   function resetForm() {
     if (taskForm) taskForm.reset();
     setEditingMode(null);
+    clearTemplateLoading();
     pendingAgentValue = "";
     pendingModelValue = "";
     pendingTemplatePath = "";
@@ -1376,6 +1421,7 @@
       keepSelection && templateSelect ? templateSelect.value : "";
 
     if (effectiveSource === "inline") {
+      clearTemplateLoading();
       if (templateSelectGroup) templateSelectGroup.style.display = "none";
       if (promptGroup) promptGroup.style.display = "block";
       if (!keepSelection && templateSelect) {
@@ -1393,6 +1439,9 @@
     }
     if (promptGroup) promptGroup.style.display = "block";
     updateTemplateOptions(effectiveSource, selectedPath);
+    if (!selectedPath) {
+      clearTemplateLoading();
+    }
   }
 
   // Initialize dropdowns with cached data
@@ -1639,8 +1688,33 @@
           }
           break;
         case "promptTemplateLoaded":
-          var promptTextEl = document.getElementById("prompt-text");
-          if (promptTextEl) promptTextEl.value = message.content;
+          {
+            var loadedPath = message.path ? String(message.path) : "";
+            if (loadedPath) {
+              clearTemplateLoading(loadedPath);
+            }
+            var promptSourceEl = document.querySelector(
+              'input[name="prompt-source"]:checked',
+            );
+            var currentPromptSource = promptSourceEl
+              ? promptSourceEl.value
+              : "inline";
+            if (
+              currentPromptSource !== "local" &&
+              currentPromptSource !== "global"
+            ) {
+              break;
+            }
+            if (
+              templateSelect &&
+              message.path &&
+              templateSelect.value !== message.path
+            ) {
+              break;
+            }
+            var promptTextEl = document.getElementById("prompt-text");
+            if (promptTextEl) promptTextEl.value = message.content;
+          }
           break;
         case "switchToList":
           clearPendingSubmitState();
@@ -1712,6 +1786,7 @@
             ? safeText
             : String(strings.webviewUnknown || "");
           showFormError(displayText, 8000);
+          clearTemplateLoading();
           clearPendingSubmitState();
           switchTab("create");
           break;
@@ -1725,6 +1800,7 @@
         ? safeError
         : String(strings.webviewUnknown || "");
       showFormError(prefix + displayError);
+      clearTemplateLoading();
       clearPendingSubmitState();
       switchTab("create");
     }

@@ -5,6 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
+import { normalizeForCompare } from "../../promptResolver";
 
 class MockMemento implements vscode.Memento {
   private readonly store = new Map<string, unknown>();
@@ -673,6 +674,84 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
       }
     }
   });
+
+  test("duplicateTask preserves workspacePath for workspace-scoped tasks", async () => {
+    const workspaceA = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-a-"));
+    const workspaceB = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-b-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+
+    const restoreInitialWs = overrideWorkspaceFoldersForTest([
+      { uri: vscode.Uri.file(workspaceA) },
+      { uri: vscode.Uri.file(workspaceB) },
+    ]);
+
+    let restoreChangedWs: (() => void) | undefined;
+
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const original = await manager.createTask({
+        name: "workspace-duplicate-original",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "workspace",
+        promptSource: "inline",
+        enabled: false,
+      });
+
+      assert.strictEqual(
+        normalizeForCompare(original.workspacePath || ""),
+        normalizeForCompare(workspaceA),
+      );
+
+      restoreChangedWs = overrideWorkspaceFoldersForTest([
+        { uri: vscode.Uri.file(workspaceB) },
+        { uri: vscode.Uri.file(workspaceA) },
+      ]);
+
+      const duplicated = await manager.duplicateTask(original.id);
+      assert.ok(duplicated);
+      assert.strictEqual(duplicated?.scope, "workspace");
+      assert.strictEqual(
+        normalizeForCompare(duplicated?.workspacePath || ""),
+        normalizeForCompare(original.workspacePath || ""),
+      );
+    } finally {
+      if (restoreChangedWs) {
+        restoreChangedWs();
+      }
+      restoreInitialWs();
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        fs.rmSync(workspaceA, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        fs.rmSync(workspaceB, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
 });
 
 suite("ScheduleManager Auto Mode Tests", () => {
@@ -833,6 +912,73 @@ suite("ScheduleManager Task-Level Control Tests", () => {
         manager as unknown as {
           onExecuteCallback?: (task: unknown) => Promise<void>;
           checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executed++;
+      };
+
+      await (
+        manager as unknown as {
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).checkAndExecuteTasks?.();
+
+      assert.strictEqual(executed, 0);
+      assert.strictEqual(task.lastRun, undefined);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks re-checks allowed window after jitter", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const now = new Date();
+      const initialStart = toHHmm(new Date(now.getTime() - 10 * 60 * 1000));
+      const initialEnd = toHHmm(new Date(now.getTime() + 10 * 60 * 1000));
+      const outsideStart = toHHmm(new Date(now.getTime() + 10 * 60 * 1000));
+      const outsideEnd = toHHmm(new Date(now.getTime() + 15 * 60 * 1000));
+
+      const task = await manager.createTask({
+        name: "task-window-post-jitter-skip",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 1,
+        allowedTimeStart: initialStart,
+        allowedTimeEnd: initialEnd,
+      });
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+
+      let executed = 0;
+      (
+        manager as unknown as {
+          applyJitter?: (maxJitterSeconds: number) => Promise<void>;
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).applyJitter = async () => {
+        task.allowedTimeStart = outsideStart;
+        task.allowedTimeEnd = outsideEnd;
+      };
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
         }
       ).onExecuteCallback = async () => {
         executed++;

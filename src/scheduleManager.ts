@@ -1007,6 +1007,18 @@ export class ScheduleManager {
     return `task_${timestamp}_${random}`;
   }
 
+  private getPreferredWorkspaceRootPath(): string | undefined {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+      const folder = vscode.workspace.getWorkspaceFolder(activeUri);
+      if (folder?.uri.fsPath) {
+        return folder.uri.fsPath;
+      }
+    }
+
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
   /**
    * Get timezone from configuration
    */
@@ -1157,7 +1169,7 @@ export class ScheduleManager {
 
     const enabled = input.enabled !== false;
     const effectiveScope = input.scope || defaultScope;
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getPreferredWorkspaceRootPath();
     if (effectiveScope === "workspace" && !workspaceRoot) {
       throw new Error(messages.noWorkspaceOpen());
     }
@@ -1317,7 +1329,7 @@ export class ScheduleManager {
     }
     if (updates.scope !== undefined) {
       const nextScope = updates.scope;
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workspaceRoot = this.getPreferredWorkspaceRootPath();
 
       if (nextScope === "workspace" && !workspaceRoot) {
         throw new Error(messages.noWorkspaceOpen());
@@ -1489,7 +1501,27 @@ export class ScheduleManager {
       allowedTimeEnd: original.allowedTimeEnd,
     };
 
-    return this.createTask(input);
+    const duplicated = await this.createTask(input);
+
+    if (
+      original.scope === "workspace" &&
+      duplicated.scope === "workspace" &&
+      original.workspacePath
+    ) {
+      const originalWorkspacePath = original.workspacePath;
+      const sameWorkspacePath =
+        duplicated.workspacePath !== undefined &&
+        normalizeForCompare(duplicated.workspacePath) ===
+          normalizeForCompare(originalWorkspacePath);
+
+      if (!sameWorkspacePath) {
+        duplicated.workspacePath = originalWorkspacePath;
+        duplicated.updatedAt = new Date();
+        await this.saveTasks();
+      }
+    }
+
+    return duplicated;
   }
 
   /**
@@ -1507,7 +1539,7 @@ export class ScheduleManager {
       throw new Error(messages.moveOnlyWorkspaceTasks());
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getPreferredWorkspaceRootPath();
     if (!workspaceRoot) {
       throw new Error(messages.noWorkspaceOpen());
     }
@@ -1708,6 +1740,25 @@ export class ScheduleManager {
         // Safety: Apply jitter (random delay)
         const maxJitterSeconds = task.jitterSeconds ?? defaultJitterSeconds;
         await this.applyJitter(maxJitterSeconds);
+
+        const postJitterNow = new Date();
+        if (
+          !isNowWithinAllowedTimeWindow(
+            postJitterNow,
+            task.allowedTimeStart,
+            task.allowedTimeEnd,
+          )
+        ) {
+          logDebug(
+            `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
+          );
+          task.nextRun = this.getNextRunForTask(
+            task.cronExpression,
+            postJitterNow,
+          );
+          needsSave = true;
+          continue;
+        }
 
         // Execute
         if (this.onExecuteCallback) {

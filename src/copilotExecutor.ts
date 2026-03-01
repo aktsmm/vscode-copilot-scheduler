@@ -27,7 +27,7 @@ const DELAY_AFTER_MODEL_SELECT_MS = 100;
 const DELAY_AFTER_TYPE_NEW_SESSION_MS = 50;
 const DELAY_AFTER_TYPE_CONTINUE_SESSION_MS = 10;
 const DELAY_NEW_SESSION_MS = 200;
-const COMMAND_DELAY_FACTOR_DEFAULT = 1;
+const COMMAND_DELAY_FACTOR_DEFAULT = 0.8;
 const COMMAND_DELAY_FACTOR_MIN = 0.1;
 const COMMAND_DELAY_FACTOR_MAX = 2;
 
@@ -37,6 +37,24 @@ const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
   "ask",
   "edit",
 ]);
+
+function normalizeAgentPrefix(agent: string): string {
+  const normalized = agent.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  // Keep explicitly-prefixed values as-is (e.g. @workspace, /ask).
+  if (normalized.startsWith("@") || normalized.startsWith("/")) {
+    return normalized;
+  }
+
+  if (SLASH_COMMAND_AGENTS.has(normalized)) {
+    return `/${normalized}`;
+  }
+
+  return `@${normalized}`;
+}
 
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
@@ -49,12 +67,25 @@ function toSafeErrorDetails(error: unknown): string {
 
 export const __testOnly = {
   toSafeErrorDetails,
+  normalizeAgentPrefix,
 };
 
 /**
  * Executes prompts through GitHub Copilot Chat
  */
 export class CopilotExecutor {
+  private getPreferredWorkspaceName(): string {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+      const folder = vscode.workspace.getWorkspaceFolder(activeUri);
+      if (folder?.name) {
+        return folder.name;
+      }
+    }
+
+    return vscode.workspace.workspaceFolders?.[0]?.name || "";
+  }
+
   /**
    * Execute a prompt in Copilot Chat
    */
@@ -64,22 +95,21 @@ export class CopilotExecutor {
 
     // Build full prompt with agent prefix
     let fullPrompt = processedPrompt;
-    if (options?.agent && options.agent !== "") {
+    const normalizedAgent =
+      typeof options?.agent === "string"
+        ? normalizeAgentPrefix(options.agent)
+        : "";
+
+    if (normalizedAgent) {
       // Add agent prefix if not already present
       if (
         !processedPrompt.startsWith("@") &&
         !processedPrompt.startsWith("/")
       ) {
-        if (options.agent.startsWith("@")) {
-          fullPrompt = `${options.agent} ${processedPrompt}`;
-        } else if (SLASH_COMMAND_AGENTS.has(options.agent)) {
-          fullPrompt = `/${options.agent} ${processedPrompt}`;
-        } else {
-          fullPrompt = `@${options.agent} ${processedPrompt}`;
-        }
+        fullPrompt = `${normalizedAgent} ${processedPrompt}`;
       }
       logDebug(
-        `[CopilotScheduler] Agent set: ${options.agent}, prompt length: ${fullPrompt.length}`,
+        `[CopilotScheduler] Agent set: ${normalizedAgent}, prompt length: ${fullPrompt.length}`,
       );
     } else {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
@@ -89,6 +119,7 @@ export class CopilotExecutor {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
     const delayFactor = this.getCommandDelayFactor(config);
+    const model = options?.model && options.model !== "" ? options.model : "";
 
     try {
       // Try to create new session if configured
@@ -96,51 +127,21 @@ export class CopilotExecutor {
         await this.tryCreateNewChatSession(delayFactor);
       }
 
-      // Focus on Copilot Chat panel
-      await vscode.commands.executeCommand(
-        "workbench.panel.chat.view.copilot.focus",
+      const openedWithChatOpen = await this.tryOpenChatWithPrompt(
+        fullPrompt,
+        model,
       );
-      const focusDelayMs =
-        chatSession === "new"
-          ? DELAY_AFTER_FOCUS_NEW_SESSION_MS
-          : DELAY_AFTER_FOCUS_CONTINUE_SESSION_MS;
-      await this.delay(this.getAdjustedDelayMs(focusDelayMs, delayFactor));
-
-      // Try to set model if specified
-      if (options?.model && options.model !== "") {
-        try {
-          logDebug(
-            `[CopilotScheduler] Attempting to select model: ${options.model}`,
-          );
-          const result = await vscode.commands.executeCommand(
-            "workbench.action.chat.selectModel",
-            options.model,
-          );
-          logDebug(`[CopilotScheduler] Model selection result:`, result);
-          await this.delay(
-            this.getAdjustedDelayMs(DELAY_AFTER_MODEL_SELECT_MS, delayFactor),
-          );
-        } catch (error) {
-          logError(
-            `[CopilotScheduler] Model selection failed:`,
-            toSafeErrorDetails(error),
-          );
-          // Model selection may not be available, continue without it
-        }
-      } else {
-        logDebug(`[CopilotScheduler] No model specified or model is empty`);
+      if (!openedWithChatOpen) {
+        logDebug(
+          `[CopilotScheduler] Falling back to legacy chat commands after chat.open failure`,
+        );
+        await this.executePromptLegacy(
+          fullPrompt,
+          model,
+          chatSession,
+          delayFactor,
+        );
       }
-
-      // Type the prompt using the type command
-      await vscode.commands.executeCommand("type", { text: fullPrompt });
-      const submitDelayMs =
-        chatSession === "new"
-          ? DELAY_AFTER_TYPE_NEW_SESSION_MS
-          : DELAY_AFTER_TYPE_CONTINUE_SESSION_MS;
-      await this.delay(this.getAdjustedDelayMs(submitDelayMs, delayFactor));
-
-      // Submit the prompt
-      await vscode.commands.executeCommand("workbench.action.chat.submit");
     } catch (error) {
       // Show error and offer to copy to clipboard (this is the primary
       // user-facing notification for execution failures — callers should
@@ -158,6 +159,96 @@ export class CopilotExecutor {
 
       throw error;
     }
+  }
+
+  private async tryOpenChatWithPrompt(
+    fullPrompt: string,
+    model: string,
+  ): Promise<boolean> {
+    if (model) {
+      try {
+        logDebug(
+          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${model}`,
+        );
+        await vscode.commands.executeCommand("workbench.action.chat.open", {
+          query: fullPrompt,
+          isPartialQuery: false,
+          modelSelector: { id: model },
+        });
+        return true;
+      } catch (error) {
+        logDebug(
+          `[CopilotScheduler] chat.open with model selector failed: ${toSafeErrorDetails(error)}`,
+        );
+      }
+    }
+
+    try {
+      logDebug(
+        `[CopilotScheduler] Trying workbench.action.chat.open without model selector`,
+      );
+      await vscode.commands.executeCommand("workbench.action.chat.open", {
+        query: fullPrompt,
+        isPartialQuery: false,
+      });
+      return true;
+    } catch (error) {
+      logDebug(
+        `[CopilotScheduler] chat.open without model selector failed: ${toSafeErrorDetails(error)}`,
+      );
+      return false;
+    }
+  }
+
+  private async executePromptLegacy(
+    fullPrompt: string,
+    model: string,
+    chatSession: ChatSessionBehavior,
+    delayFactor: number,
+  ): Promise<void> {
+    // Focus on Copilot Chat panel
+    await vscode.commands.executeCommand(
+      "workbench.panel.chat.view.copilot.focus",
+    );
+    const focusDelayMs =
+      chatSession === "new"
+        ? DELAY_AFTER_FOCUS_NEW_SESSION_MS
+        : DELAY_AFTER_FOCUS_CONTINUE_SESSION_MS;
+    await this.delay(this.getAdjustedDelayMs(focusDelayMs, delayFactor));
+
+    // Try to set model if specified
+    if (model) {
+      try {
+        logDebug(`[CopilotScheduler] Attempting to select model: ${model}`);
+        const result = await vscode.commands.executeCommand(
+          "workbench.action.chat.selectModel",
+          model,
+        );
+        logDebug(`[CopilotScheduler] Model selection result:`, result);
+        await this.delay(
+          this.getAdjustedDelayMs(DELAY_AFTER_MODEL_SELECT_MS, delayFactor),
+        );
+      } catch (error) {
+        logError(
+          `[CopilotScheduler] Model selection failed:`,
+          toSafeErrorDetails(error),
+        );
+        // Model selection may not be available, continue without it
+      }
+    } else {
+      logDebug(`[CopilotScheduler] No model specified or model is empty`);
+    }
+
+    // Type the prompt using the type command
+    await vscode.commands.executeCommand("type", { text: fullPrompt });
+    const submitDelayMs =
+      chatSession === "new"
+        ? DELAY_AFTER_TYPE_NEW_SESSION_MS
+        : DELAY_AFTER_TYPE_CONTINUE_SESSION_MS;
+    await this.delay(this.getAdjustedDelayMs(submitDelayMs, delayFactor));
+
+    // Submit the prompt
+    await vscode.commands.executeCommand("workbench.action.chat.submit");
   }
 
   /**
@@ -222,7 +313,7 @@ export class CopilotExecutor {
 
     // Replace {{workspace}} with workspace name
     // Use function replacers to prevent $& / $' / $` interpretation in values
-    const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name || "";
+    const workspaceName = this.getPreferredWorkspaceName();
     result = result.replace(/\{\{workspace\}\}/gi, () => workspaceName);
 
     // Replace {{file}} with current file name
