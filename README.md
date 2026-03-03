@@ -116,6 +116,7 @@ Store prompt templates for reuse:
 
 - **Local**: `.github/prompts/*.md` in your workspace
 - **Global**: VS Code user prompts folder (or the folder set in `copilotScheduler.globalPromptsPath`)
+- If you edit prompt text while `Local/Global` template source is selected (after template load completes), the task is automatically saved as **Inline** to keep execution consistent with the edited content.
 
 ## 📋 Requirements
 

@@ -39,6 +39,138 @@ function assertTokensInOrder(
   }
 }
 
+function findMatchingBraceEnd(source: string, braceStart: number): number {
+  let depth = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inTemplate = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inTemplate) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "`") {
+        inTemplate = false;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (ch === "`") {
+      inTemplate = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      depth++;
+      continue;
+    }
+
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function extractBlockFromStartToken(
+  source: string,
+  startToken: string,
+): string {
+  const start = source.indexOf(startToken);
+  assert.ok(start >= 0, `Start token not found: ${startToken}`);
+
+  const braceStart = source.indexOf("{", start);
+  assert.ok(braceStart >= 0, `Opening brace not found for: ${startToken}`);
+
+  const end = findMatchingBraceEnd(source, braceStart);
+
+  assert.ok(end > braceStart, `Closing brace not found for: ${startToken}`);
+  return source.slice(start, end);
+}
+
 function extractFunctionSource(source: string, functionName: string): string {
   const signatures = [
     `function ${functionName}(`,
@@ -449,6 +581,61 @@ suite("SchedulerWebview Script Contract Tests", () => {
         `Expected token not found in updateTasks flow: ${token}`,
       );
     }
+  });
+
+  test("submit converts edited template prompt to inline source", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const submitSource = extractBlockFromStartToken(
+      source,
+      'taskForm.addEventListener("submit", function (e) {',
+    );
+
+    const expectedTokens = [
+      "templatePromptBaseline === null",
+      "templatePromptBaseline !== null",
+      "taskData.prompt !== templatePromptBaseline",
+      'taskData.promptSource = "inline"',
+      'taskData.promptPath = ""',
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(submitSource, token),
+        `Expected token not found in submit inline-convert flow: ${token}`,
+      );
+    }
+  });
+
+  test("editTask re-establishes template baseline after prompt source apply", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const editSource = extractBlockFromStartToken(
+      source,
+      "window.editTask = function (id) {",
+    );
+
+    const orderedTokens = [
+      "applyPromptSource(sourceValue, true);",
+      'pendingTemplatePath = task.promptPath || "";',
+      'if (sourceValue === "inline")',
+      "setTemplatePromptBaseline(null);",
+      'setTemplatePromptBaseline(String(promptTextEl.value || ""));',
+    ];
+
+    assertTokensInOrder(
+      editSource,
+      orderedTokens,
+      "Expected token not found in editTask baseline flow",
+    );
   });
 
   test("deleteTask posts to extension without local task lookup", () => {

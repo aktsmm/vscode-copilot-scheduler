@@ -189,6 +189,10 @@
     if (testBtn) testBtn.disabled = !!templateLoadingPath;
   }
 
+  function setTemplatePromptBaseline(value) {
+    templatePromptBaseline = typeof value === "string" ? value : null;
+  }
+
   function setTemplateLoading(pathValue) {
     templateLoadingPath = pathValue ? String(pathValue) : "";
     if (submitBtn && !pendingSubmit) {
@@ -301,6 +305,7 @@
   var editingTaskCanDelete = false;
   var pendingSubmit = false;
   var templateLoadingPath = "";
+  var templatePromptBaseline = null;
 
   var defaultJitterSeconds = (function () {
     var raw = initialData.defaultJitterSeconds;
@@ -438,6 +443,7 @@
   if (templateSelect) {
     templateSelect.addEventListener("change", function () {
       pendingTemplatePath = templateSelect ? templateSelect.value : "";
+      setTemplatePromptBaseline(null);
     });
   }
 
@@ -529,6 +535,7 @@
   if (templateSelect) {
     templateSelect.addEventListener("change", function () {
       var selectedPath = templateSelect.value;
+      setTemplatePromptBaseline(null);
       if (selectedPath) {
         var sourceEl = document.querySelector(
           'input[name="prompt-source"]:checked',
@@ -536,6 +543,7 @@
         var source = sourceEl ? sourceEl.value : "inline";
         requestTemplateLoad(selectedPath, source);
       } else {
+        setTemplatePromptBaseline(null);
         clearTemplateLoading();
       }
     });
@@ -639,6 +647,20 @@
         return;
       }
 
+      if (promptSourceValue !== "inline" && templatePromptBaseline === null) {
+        if (formErr) {
+          formErr.textContent = templateLoadingPath
+            ? strings.templateLoadingInProgress ||
+              strings.templateLoadError ||
+              ""
+            : strings.templateLoadError ||
+              strings.templateLoadingInProgress ||
+              "";
+          formErr.style.display = "block";
+        }
+        return;
+      }
+
       var promptValue = (taskData.prompt || "").trim();
       if (!promptValue) {
         if (formErr) {
@@ -646,6 +668,15 @@
           formErr.style.display = "block";
         }
         return;
+      }
+
+      if (
+        promptSourceValue !== "inline" &&
+        templatePromptBaseline !== null &&
+        taskData.prompt !== templatePromptBaseline
+      ) {
+        taskData.promptSource = "inline";
+        taskData.promptPath = "";
       }
 
       var cronValue = (taskData.cronExpression || "").trim();
@@ -1421,6 +1452,7 @@
   function resetForm() {
     if (taskForm) taskForm.reset();
     setEditingMode(null);
+    setTemplatePromptBaseline(null);
     clearTemplateLoading();
     pendingAgentValue = "";
     pendingModelValue = "";
@@ -1539,6 +1571,7 @@
       keepSelection && templateSelect ? templateSelect.value : "";
 
     if (effectiveSource === "inline") {
+      setTemplatePromptBaseline(null);
       clearTemplateLoading();
       if (templateSelectGroup) templateSelectGroup.style.display = "none";
       if (promptGroup) promptGroup.style.display = "block";
@@ -1558,6 +1591,7 @@
     if (promptGroup) promptGroup.style.display = "block";
     updateTemplateOptions(effectiveSource, selectedPath);
     if (!selectedPath) {
+      setTemplatePromptBaseline(null);
       clearTemplateLoading();
     }
   }
@@ -1663,6 +1697,14 @@
       } else if (pendingTemplatePath) {
         templateSelect.value = "";
       }
+    }
+
+    if (sourceValue === "inline") {
+      setTemplatePromptBaseline(null);
+    } else if (promptTextEl) {
+      // Re-establish baseline after applyPromptSource(), which may clear it
+      // when template options are being refreshed.
+      setTemplatePromptBaseline(String(promptTextEl.value || ""));
     }
 
     if (jitterSecondsInput) {
@@ -1856,7 +1898,10 @@
               break;
             }
             var promptTextEl = document.getElementById("prompt-text");
-            if (promptTextEl) promptTextEl.value = message.content;
+            if (promptTextEl) {
+              promptTextEl.value = message.content;
+              setTemplatePromptBaseline(String(message.content || ""));
+            }
           }
           break;
         case "switchToList":
@@ -1929,6 +1974,7 @@
             ? safeText
             : String(strings.webviewUnknown || "");
           showFormError(displayText, 8000);
+          setTemplatePromptBaseline(null);
           clearTemplateLoading();
           clearPendingSubmitState();
           switchTab("create");
