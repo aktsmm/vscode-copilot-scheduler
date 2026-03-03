@@ -240,11 +240,18 @@ export class SchedulerWebview {
   /**
    * Update tasks in the webview
    */
+  private static getCurrentWorkspacePaths(): string[] {
+    return (vscode.workspace.workspaceFolders ?? [])
+      .map((f) => f.uri.fsPath)
+      .filter(Boolean);
+  }
+
   static updateTasks(tasks: ScheduledTask[]): void {
     this.currentTasks = tasks;
     this.postMessage({
       type: "updateTasks",
       tasks: tasks,
+      workspacePaths: this.getCurrentWorkspacePaths(),
     });
   }
 
@@ -908,9 +915,7 @@ export class SchedulerWebview {
       agents: initialAgents,
       models: initialModels,
       promptTemplates: initialTemplates,
-      workspacePaths: (vscode.workspace.workspaceFolders || [])
-        .map((f) => f.uri.fsPath)
-        .filter(Boolean),
+      workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
       defaultAutoMode,
       defaultJitterSeconds,
@@ -1152,6 +1157,26 @@ export class SchedulerWebview {
     .task-actions {
       display: flex;
       gap: 8px;
+    }
+
+    .task-group-collapsible {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 6px;
+      background-color: var(--vscode-editor-background);
+      padding: 0 12px 12px;
+    }
+
+    .task-group-collapsible summary {
+      cursor: pointer;
+      padding: 12px 0;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+    }
+
+    .task-group-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
     
     .empty-state {
@@ -1447,6 +1472,7 @@ export class SchedulerWebview {
       <div class="button-group">
         <button type="submit" class="btn-primary" id="submit-btn">${escapeHtml(strings.actionCreate)}</button>
         <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${escapeHtml(strings.actionNewTask)}</button>
+        <button type="button" class="btn-danger" id="edit-delete-btn" style="display:none;">${escapeHtml(strings.actionDelete)}</button>
         <button type="button" class="btn-secondary" id="test-btn">${escapeHtml(strings.actionTestRun)}</button>
       </div>
     </form>

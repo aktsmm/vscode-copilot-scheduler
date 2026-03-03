@@ -16,6 +16,29 @@ type WebviewPanelLike = {
   webview: WebviewLike;
 };
 
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function sourceContainsToken(source: string, token: string): boolean {
+  return normalizeWhitespace(source).includes(normalizeWhitespace(token));
+}
+
+function assertTokensInOrder(
+  source: string,
+  tokens: string[],
+  messagePrefix: string,
+): void {
+  const normalizedSource = normalizeWhitespace(source);
+  let cursor = 0;
+  for (const token of tokens) {
+    const normalizedToken = normalizeWhitespace(token);
+    const index = normalizedSource.indexOf(normalizedToken, cursor);
+    assert.ok(index >= 0, `${messagePrefix}: ${token}`);
+    cursor = index + normalizedToken.length;
+  }
+}
+
 function extractFunctionSource(source: string, functionName: string): string {
   const signatures = [
     `function ${functionName}(`,
@@ -39,6 +62,9 @@ function extractFunctionSource(source: string, functionName: string): string {
     `Function opening brace not found for: ${functionName}`,
   );
 
+  // Note: simple brace counting that does not skip string literals or block
+  // comments. This is intentional: the target functions (sanitizers, pure
+  // utilities) do not contain bare `{`/`}` inside strings or comments.
   let depth = 0;
   let end = -1;
   for (let i = braceStart; i < source.length; i++) {
@@ -62,7 +88,9 @@ function extractFunctionSource(source: string, functionName: string): string {
 }
 
 function extractVarAssignment(source: string, varName: string): string {
-  const pattern = new RegExp(`var\\s+${varName}\\s*=\\s*[^;]+;`);
+  // Escape varName so that special regex characters don't cause mismatches.
+  const escapedName = varName.replace(/[.+*?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`var\\s+${escapedName}\\s*=\\s*[^;]+;`);
   const match = source.match(pattern);
   assert.ok(
     match?.[0],
@@ -176,6 +204,52 @@ suite("SchedulerWebview Message Queue Tests", () => {
       wv.pendingMessages = originalPending;
     }
   });
+
+  test("updateTasks message includes workspacePaths", () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      currentTasks?: unknown[];
+      updateTasks?: (tasks: unknown[]) => void;
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalTasks = wv.currentTasks;
+
+    const sent: unknown[] = [];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+
+      assert.ok(typeof SchedulerWebview.updateTasks === "function");
+      SchedulerWebview.updateTasks([]);
+
+      assert.strictEqual(sent.length, 1);
+      const m = sent[0] as { type?: unknown; workspacePaths?: unknown };
+      assert.strictEqual(m.type, "updateTasks");
+      assert.ok(
+        Array.isArray(m.workspacePaths),
+        "updateTasks message must carry workspacePaths array",
+      );
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.currentTasks = originalTasks;
+    }
+  });
 });
 
 suite("SchedulerWebview Test Prompt Routing Tests", () => {
@@ -241,24 +315,30 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
       "if (testBtn)",
       testButtonClickStart,
     );
-    assert.ok(testButtonBlockStart >= 0, "test button guard block was not found.");
+    assert.ok(
+      testButtonBlockStart >= 0,
+      "test button guard block was not found.",
+    );
 
     const testButtonBlockEnd = source.indexOf(
-      "// Refresh button with null check",
+      "if (refreshBtn)",
       testButtonBlockStart,
     );
     assert.ok(
       testButtonBlockEnd > testButtonBlockStart,
-      "test button block end anchor was not found.",
+      "test button block end anchor was not found. Check refresh button guard in media/schedulerWebview.js",
     );
 
     const block = source.slice(testButtonBlockStart, testButtonBlockEnd);
     assert.ok(
-      block.includes('type: "testPrompt"'),
+      sourceContainsToken(block, 'type: "testPrompt"'),
       "test button does not post testPrompt message.",
     );
     assert.ok(
-      block.includes("showFormError(strings.promptRequired || \"\", 5000)"),
+      sourceContainsToken(
+        block,
+        'showFormError(strings.promptRequired || "", 5000)',
+      ),
       "empty prompt should show promptRequired error in test button flow.",
     );
   });
@@ -271,38 +351,134 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
     const source = fs.readFileSync(scriptPath, "utf8");
 
     const setStart = source.indexOf("function setTemplateLoading(pathValue)");
-    const clearStart = source.indexOf("function clearTemplateLoading(pathValue)");
+    const clearStart = source.indexOf(
+      "function clearTemplateLoading(pathValue)",
+    );
     assert.ok(setStart >= 0, "setTemplateLoading was not found.");
     assert.ok(clearStart > setStart, "clearTemplateLoading was not found.");
 
     const setBlock = source.slice(setStart, clearStart);
     assert.ok(
-      setBlock.includes("if (testBtn)"),
+      sourceContainsToken(setBlock, "if (testBtn)"),
       "setTemplateLoading should handle testBtn disabled state.",
     );
     assert.ok(
-      setBlock.includes("testBtn.disabled = !!templateLoadingPath"),
+      sourceContainsToken(setBlock, "testBtn.disabled = !!templateLoadingPath"),
       "setTemplateLoading should disable testBtn while loading.",
     );
 
+    // Note: "source" in the search string below is a parameter name in the
+    // JS function, not the outer `source` variable (file contents).
     const requestStart = source.indexOf(
       "function requestTemplateLoad(selectedPath, source)",
       clearStart,
     );
-    assert.ok(requestStart > clearStart, "requestTemplateLoad anchor was not found.");
+    assert.ok(
+      requestStart > clearStart,
+      "requestTemplateLoad anchor was not found.",
+    );
     const clearBlock = source.slice(clearStart, requestStart);
     assert.ok(
-      clearBlock.includes("if (testBtn)"),
+      sourceContainsToken(clearBlock, "if (testBtn)"),
       "clearTemplateLoading should handle testBtn disabled state.",
     );
     assert.ok(
-      clearBlock.includes("testBtn.disabled = false"),
+      sourceContainsToken(clearBlock, "testBtn.disabled = false"),
       "clearTemplateLoading should re-enable testBtn.",
     );
   });
 });
 
 suite("SchedulerWebview Script Contract Tests", () => {
+  test("Edit form delete button is wired with delete-availability guard", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const expectedTokens = [
+      'var editDeleteBtn = document.getElementById("edit-delete-btn")',
+      "var editingTaskCanDelete = false",
+      "editingTaskCanDelete =",
+      "setEditingMode(id, { canDelete: canDeleteInEdit });",
+      "if (!editingTaskId || !editingTaskCanDelete)",
+      "window.deleteTask(editingTaskId)",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected token not found for edit delete wiring: ${token}`,
+      );
+    }
+  });
+
+  test("updateTasks message refreshes workspacePaths and edit delete state", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const updateTasksStart = source.indexOf('case "updateTasks":');
+    assert.ok(updateTasksStart >= 0, "updateTasks case was not found.");
+
+    const updateAgentsStart = source.indexOf(
+      'case "updateAgents":',
+      updateTasksStart,
+    );
+    assert.ok(
+      updateAgentsStart > updateTasksStart,
+      "updateTasks case end anchor was not found.",
+    );
+
+    const updateTasksSource = source.slice(updateTasksStart, updateAgentsStart);
+
+    const expectedTokens = [
+      "if (Array.isArray(message.workspacePaths))",
+      "workspacePaths = message.workspacePaths.filter(Boolean);",
+      "if (editingTaskId)",
+      "setEditingMode(null);",
+      "setEditingMode(editingTaskId, { canDelete: canDeleteInEdit });",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(updateTasksSource, token),
+        `Expected token not found in updateTasks flow: ${token}`,
+      );
+    }
+  });
+
+  test("deleteTask posts to extension without local task lookup", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const deleteStart = source.indexOf("window.deleteTask = function (id) {");
+    assert.ok(deleteStart >= 0, "window.deleteTask was not found.");
+
+    const handlerEnd = source.indexOf("};", deleteStart);
+    assert.ok(handlerEnd > deleteStart, "window.deleteTask end was not found.");
+
+    const deleteSource = source.slice(deleteStart, handlerEnd + 2);
+
+    assert.ok(
+      sourceContainsToken(
+        deleteSource,
+        'vscode.postMessage({ type: "deleteTask", taskId: id });',
+      ),
+      "window.deleteTask should post deleteTask message.",
+    );
+    assert.ok(
+      !deleteSource.includes("tasks.find("),
+      "window.deleteTask should not rely on local tasks.find lookup.",
+    );
+  });
+
   test("Message handler catch keeps create-tab recovery flow", () => {
     const scriptPath = path.resolve(
       __dirname,
@@ -367,12 +543,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'switchTab("create")',
     ];
 
-    let cursor = 0;
-    for (const token of recoveryTokensInOrder) {
-      const index = catchSource.indexOf(token, cursor);
-      assert.ok(index >= 0, `Expected token not found in catch flow: ${token}`);
-      cursor = index + token.length;
-    }
+    assertTokensInOrder(
+      catchSource,
+      recoveryTokensInOrder,
+      "Expected token not found in catch flow",
+    );
   });
 
   test("Unhandled rejection path falls back to localized unknown text", () => {
@@ -408,15 +583,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "showFormError(prefix + displayRaw);",
     ];
 
-    let cursor = 0;
-    for (const token of expectedTokensInOrder) {
-      const index = unhandledSource.indexOf(token, cursor);
-      assert.ok(
-        index >= 0,
-        `Expected token not found in unhandled rejection flow: ${token}`,
-      );
-      cursor = index + token.length;
-    }
+    assertTokensInOrder(
+      unhandledSource,
+      expectedTokensInOrder,
+      "Expected token not found in unhandled rejection flow",
+    );
   });
 });
 
@@ -730,11 +901,10 @@ suite("SchedulerWebview Template Load Error Feedback Tests", () => {
       'switchTab("create")',
     ];
 
-    let cursor = 0;
-    for (const token of expectedTokensInOrder) {
-      const index = showErrorCaseSource.indexOf(token, cursor);
-      assert.ok(index >= 0, `Expected token not found: ${token}`);
-      cursor = index + token.length;
-    }
+    assertTokensInOrder(
+      showErrorCaseSource,
+      expectedTokensInOrder,
+      "Expected token not found",
+    );
   });
 });

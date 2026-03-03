@@ -298,6 +298,7 @@
   var pendingModelValue = "";
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
+  var editingTaskCanDelete = false;
   var pendingSubmit = false;
   var templateLoadingPath = "";
 
@@ -316,6 +317,10 @@
       ? initialData.locale
       : undefined;
   var lastRenderedTasksHtml = "";
+  var taskGroupOpenState = {
+    global: true,
+    "other-workspaces": false,
+  };
 
   // DOM elements - with null safety
   var taskForm = document.getElementById("task-form");
@@ -349,6 +354,25 @@
   var openGuruBtn = document.getElementById("open-guru-btn");
   var cronPreviewText = document.getElementById("cron-preview-text");
   var newTaskBtn = document.getElementById("new-task-btn");
+  var editDeleteBtn = document.getElementById("edit-delete-btn");
+
+  function normalizeWorkspacePath(p) {
+    if (!p) return "";
+    var s = String(p).replace(/\\/g, "/");
+    if (s === "/") return "/";
+    s = s.replace(/\/+$/, "");
+    if (s === "") return "/";
+    return caseInsensitivePaths ? s.toLowerCase() : s;
+  }
+
+  function isTaskInCurrentWorkspace(task) {
+    if (!task || task.scope !== "workspace") return false;
+    var wsPath = task.workspacePath || "";
+    if (!wsPath) return false;
+    return (workspacePaths || []).some(function (p) {
+      return normalizeWorkspacePath(p) === normalizeWorkspacePath(wsPath);
+    });
+  }
 
   function getCreateTabButton() {
     return document.querySelector('.tab-button[data-tab="create"]');
@@ -363,8 +387,10 @@
     if (label) btn.textContent = label;
   }
 
-  function setEditingMode(taskId) {
+  function setEditingMode(taskId, options) {
     editingTaskId = taskId || null;
+    editingTaskCanDelete =
+      !!editingTaskId && (!options || options.canDelete !== false);
     if (editTaskIdInput) editTaskIdInput.value = editingTaskId || "";
     setCreateTabLabel(!!editingTaskId);
 
@@ -374,6 +400,11 @@
     }
     if (newTaskBtn) {
       newTaskBtn.style.display = editingTaskId ? "inline-flex" : "none";
+    }
+    if (editDeleteBtn) {
+      editDeleteBtn.style.display = editingTaskCanDelete
+        ? "inline-flex"
+        : "none";
     }
   }
 
@@ -600,7 +631,9 @@
       ) {
         if (formErr) {
           formErr.textContent =
-            strings.templateLoadingInProgress || strings.templateLoadError || "";
+            strings.templateLoadingInProgress ||
+            strings.templateLoadError ||
+            "";
           formErr.style.display = "block";
         }
         return;
@@ -785,15 +818,30 @@
     var taskItems = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
     var renderedTasks = "";
 
-    function normalizePath(p) {
-      if (!p) return "";
-      var s = String(p).replace(/\\/g, "/");
-      // Preserve POSIX root path ("/") and avoid collapsing it to empty.
-      if (s === "/") return "/";
-      s = s.replace(/\/+$/, "");
-      if (s === "") return "/";
-      return caseInsensitivePaths ? s.toLowerCase() : s;
+    function captureTaskGroupOpenState() {
+      if (!taskList || typeof taskList.querySelectorAll !== "function") {
+        return;
+      }
+      var groups = taskList.querySelectorAll(
+        "details.task-group-collapsible[data-group]",
+      );
+      if (!groups || typeof groups.length !== "number") {
+        return;
+      }
+      for (var i = 0; i < groups.length; i++) {
+        var group = groups[i];
+        if (!group || !group.getAttribute) {
+          continue;
+        }
+        var key = group.getAttribute("data-group");
+        if (!key) {
+          continue;
+        }
+        taskGroupOpenState[key] = !!group.open;
+      }
     }
+
+    captureTaskGroupOpenState();
 
     function basename(p) {
       if (!p) return "";
@@ -802,188 +850,247 @@
       return parts.length ? parts[parts.length - 1] || "" : s;
     }
 
+    function buildTaskCard(task) {
+      if (!task || !task.id) {
+        return null;
+      }
+
+      var enabled = task.enabled || false;
+      var statusClass = enabled ? "enabled" : "disabled";
+      var statusText = enabled ? strings.labelEnabled : strings.labelDisabled;
+      var toggleIcon = enabled ? "⏸️" : "▶️";
+      var toggleTitle = enabled ? strings.actionDisable : strings.actionEnable;
+      var nextRunDate = task.nextRun ? new Date(task.nextRun) : null;
+      var nextRun =
+        nextRunDate && !isNaN(nextRunDate.getTime())
+          ? nextRunDate.toLocaleString(locale)
+          : strings.labelNever;
+      var promptText = typeof task.prompt === "string" ? task.prompt : "";
+      var promptPreview =
+        promptText.length > 100
+          ? promptText.substring(0, 100) + "..."
+          : promptText;
+      var cronText = escapeHtml(task.cronExpression || "");
+      var taskName = escapeHtml(task.name || "");
+
+      var scopeValue = task.scope || "workspace";
+      var scopeLabel =
+        scopeValue === "global"
+          ? strings.labelScopeGlobal || ""
+          : strings.labelScopeWorkspace || "";
+      var wsPath = scopeValue === "workspace" ? task.workspacePath || "" : "";
+      var wsName = wsPath ? basename(wsPath) : "";
+      var inThisWorkspace =
+        scopeValue === "global" ? true : isTaskInCurrentWorkspace(task);
+      var section = "global";
+      if (scopeValue === "workspace") {
+        section = inThisWorkspace ? "this-workspace" : "other-workspace";
+      }
+
+      var otherWsLabel = strings.labelOtherWorkspaceShort || "";
+      var thisWsLabel = strings.labelThisWorkspaceShort || "";
+      var scopeInfo =
+        scopeValue === "global"
+          ? "🌐 " + escapeHtml(scopeLabel)
+          : "📁 " +
+            escapeHtml(scopeLabel) +
+            (wsName ? " • " + escapeHtml(wsName) : "");
+      if (scopeValue === "workspace") {
+        scopeInfo +=
+          " • " + escapeHtml(inThisWorkspace ? thisWsLabel : otherWsLabel);
+      }
+
+      var taskDailyLimit = Number(task.maxExecutionsPerDay || 0);
+      var hasTaskDailyLimit = isFinite(taskDailyLimit) && taskDailyLimit > 0;
+      var timeStart = task.allowedTimeStart || "";
+      var timeEnd = task.allowedTimeEnd || "";
+      var timeWindowInfo =
+        timeStart || timeEnd
+          ? "🕒 " +
+            escapeHtml(strings.labelAllowedTimeWindow || "") +
+            ": " +
+            escapeHtml((timeStart || "--:--") + " - " + (timeEnd || "--:--"))
+          : "";
+
+      // Escape for HTML attributes to avoid broken inline handlers
+      var taskIdEscaped = escapeAttr(task.id || "");
+
+      var actionsHtml =
+        '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(toggleTitle) +
+        '">' +
+        toggleIcon +
+        "</button>" +
+        '<button class="btn-secondary btn-icon" data-action="run" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionRun) +
+        '">🚀</button>' +
+        '<button class="btn-secondary btn-icon" data-action="edit" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionEdit) +
+        '">✏️</button>' +
+        '<button class="btn-secondary btn-icon" data-action="copy" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionCopyPrompt) +
+        '">📋</button>' +
+        '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionDuplicate) +
+        '">📄</button>';
+
+      if (scopeValue === "workspace" && !inThisWorkspace) {
+        actionsHtml +=
+          '<button class="btn-secondary btn-icon" data-action="move" data-id="' +
+          taskIdEscaped +
+          '" title="' +
+          escapeAttr(strings.actionMoveToCurrentWorkspace || "") +
+          '">📌</button>';
+      }
+
+      if (scopeValue === "global" || inThisWorkspace) {
+        actionsHtml +=
+          '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
+          taskIdEscaped +
+          '" title="' +
+          escapeAttr(strings.actionDelete) +
+          '">🗑️</button>';
+      }
+
+      var html =
+        '<div class="task-card ' +
+        (enabled ? "" : "disabled") +
+        (scopeValue === "workspace" && !inThisWorkspace
+          ? " other-workspace"
+          : "") +
+        '" data-id="' +
+        taskIdEscaped +
+        '">' +
+        '<div class="task-header">' +
+        '<span class="task-name clickable" data-action="toggle" data-id="' +
+        taskIdEscaped +
+        '">' +
+        taskName +
+        "</span>" +
+        '<span class="task-status ' +
+        statusClass +
+        '" data-action="toggle" data-id="' +
+        taskIdEscaped +
+        '">' +
+        escapeHtml(statusText) +
+        "</span>" +
+        "</div>" +
+        '<div class="task-info">' +
+        "<span>⏰ " +
+        cronText +
+        "</span>" +
+        "<span>" +
+        escapeHtml(strings.labelNextRun) +
+        ": " +
+        escapeHtml(nextRun) +
+        "</span>" +
+        (hasTaskDailyLimit
+          ? "<span>🔢 " +
+            escapeHtml(strings.labelMaxExecutionsPerDay || "") +
+            ": " +
+            escapeHtml(String(taskDailyLimit)) +
+            "</span>"
+          : "") +
+        (timeWindowInfo ? "<span>" + timeWindowInfo + "</span>" : "") +
+        "<span>" +
+        scopeInfo +
+        "</span>" +
+        "</div>" +
+        '<div class="task-prompt">' +
+        escapeHtml(promptPreview) +
+        "</div>" +
+        '<div class="task-actions">' +
+        actionsHtml +
+        "</div>" +
+        "</div>";
+
+      return {
+        html: html,
+        section: section,
+      };
+    }
+
     if (taskItems.length === 0) {
       renderedTasks =
         '<div class="empty-state">' +
         escapeHtml(strings.noTasksFound) +
         "</div>";
     } else {
-      renderedTasks = taskItems
-        .map(function (task) {
-          if (!task || !task.id) {
-            return "";
-          }
+      var thisWorkspaceCards = [];
+      var globalCards = [];
+      var otherWorkspaceCards = [];
 
-          var enabled = task.enabled || false;
-          var statusClass = enabled ? "enabled" : "disabled";
-          var statusText = enabled
-            ? strings.labelEnabled
-            : strings.labelDisabled;
-          var toggleIcon = enabled ? "⏸️" : "▶️";
-          var toggleTitle = enabled
-            ? strings.actionDisable
-            : strings.actionEnable;
-          var nextRunDate = task.nextRun ? new Date(task.nextRun) : null;
-          var nextRun =
-            nextRunDate && !isNaN(nextRunDate.getTime())
-              ? nextRunDate.toLocaleString(locale)
-              : strings.labelNever;
-          var promptText = typeof task.prompt === "string" ? task.prompt : "";
-          var promptPreview =
-            promptText.length > 100
-              ? promptText.substring(0, 100) + "..."
-              : promptText;
-          var cronText = escapeHtml(task.cronExpression || "");
-          var taskName = escapeHtml(task.name || "");
+      taskItems.forEach(function (task) {
+        var card = buildTaskCard(task);
+        if (!card || !card.html) {
+          return;
+        }
+        if (card.section === "this-workspace") {
+          thisWorkspaceCards.push(card.html);
+          return;
+        }
+        if (card.section === "other-workspace") {
+          otherWorkspaceCards.push(card.html);
+          return;
+        }
+        globalCards.push(card.html);
+      });
 
-          var scopeValue = task.scope || "workspace";
-          var scopeLabel =
-            scopeValue === "global"
-              ? strings.labelScopeGlobal || ""
-              : strings.labelScopeWorkspace || "";
-          var wsPath =
-            scopeValue === "workspace" ? task.workspacePath || "" : "";
-          var wsName = wsPath ? basename(wsPath) : "";
-          var inThisWorkspace =
-            scopeValue === "global"
-              ? true
-              : !!wsPath &&
-                (workspacePaths || []).some(function (p) {
-                  return normalizePath(p) === normalizePath(wsPath);
-                });
-          var otherWsLabel = strings.labelOtherWorkspaceShort || "";
-          var thisWsLabel = strings.labelThisWorkspaceShort || "";
-          var scopeInfo =
-            scopeValue === "global"
-              ? "🌐 " + escapeHtml(scopeLabel)
-              : "📁 " +
-                escapeHtml(scopeLabel) +
-                (wsName ? " • " + escapeHtml(wsName) : "");
-          if (scopeValue === "workspace") {
-            scopeInfo +=
-              " • " + escapeHtml(inThisWorkspace ? thisWsLabel : otherWsLabel);
-          }
+      renderedTasks = thisWorkspaceCards.join("");
 
-          var taskDailyLimit = Number(task.maxExecutionsPerDay || 0);
-          var hasTaskDailyLimit =
-            isFinite(taskDailyLimit) && taskDailyLimit > 0;
-          var timeStart = task.allowedTimeStart || "";
-          var timeEnd = task.allowedTimeEnd || "";
-          var timeWindowInfo =
-            timeStart || timeEnd
-              ? "🕒 " +
-                escapeHtml(strings.labelAllowedTimeWindow || "") +
-                ": " +
-                escapeHtml(
-                  (timeStart || "--:--") + " - " + (timeEnd || "--:--"),
-                )
-              : "";
+      if (globalCards.length > 0) {
+        var globalSectionLabel = strings.labelScopeGlobal || "";
+        var globalSummaryText = globalSectionLabel
+          ? globalSectionLabel + " (" + String(globalCards.length) + ")"
+          : String(globalCards.length);
+        var isGlobalGroupOpen = taskGroupOpenState.global !== false;
 
-          // Escape for HTML attributes to avoid broken inline handlers
-          var taskIdEscaped = escapeAttr(task.id || "");
+        renderedTasks +=
+          '<details class="task-group-collapsible" data-group="global"' +
+          (isGlobalGroupOpen ? " open" : "") +
+          ">" +
+          "<summary>" +
+          escapeHtml(globalSummaryText) +
+          "</summary>" +
+          '<div class="task-group-inner">' +
+          globalCards.join("") +
+          "</div>" +
+          "</details>";
+      }
 
-          var actionsHtml =
-            '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            escapeAttr(toggleTitle) +
-            '">' +
-            toggleIcon +
-            "</button>" +
-            '<button class="btn-secondary btn-icon" data-action="run" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            escapeAttr(strings.actionRun) +
-            '">🚀</button>' +
-            '<button class="btn-secondary btn-icon" data-action="edit" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            escapeAttr(strings.actionEdit) +
-            '">✏️</button>' +
-            '<button class="btn-secondary btn-icon" data-action="copy" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            escapeAttr(strings.actionCopyPrompt) +
-            '">📋</button>' +
-            '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' +
-            taskIdEscaped +
-            '" title="' +
-            escapeAttr(strings.actionDuplicate) +
-            '">📄</button>';
+      if (otherWorkspaceCards.length > 0) {
+        var otherWorkspaceSectionLabel = strings.labelOtherWorkspaceShort || "";
+        var summaryText = otherWorkspaceSectionLabel
+          ? otherWorkspaceSectionLabel +
+            " (" +
+            String(otherWorkspaceCards.length) +
+            ")"
+          : String(otherWorkspaceCards.length);
+        var isOtherWorkspaceGroupOpen =
+          !!taskGroupOpenState["other-workspaces"];
 
-          if (scopeValue === "workspace" && !inThisWorkspace) {
-            actionsHtml +=
-              '<button class="btn-secondary btn-icon" data-action="move" data-id="' +
-              taskIdEscaped +
-              '" title="' +
-              escapeAttr(strings.actionMoveToCurrentWorkspace || "") +
-              '">📌</button>';
-          }
-
-          if (scopeValue === "global" || inThisWorkspace) {
-            actionsHtml +=
-              '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
-              taskIdEscaped +
-              '" title="' +
-              escapeAttr(strings.actionDelete) +
-              '">🗑️</button>';
-          }
-
-          return (
-            '<div class="task-card ' +
-            (enabled ? "" : "disabled") +
-            (scopeValue === "workspace" && !inThisWorkspace
-              ? " other-workspace"
-              : "") +
-            '" data-id="' +
-            taskIdEscaped +
-            '">' +
-            '<div class="task-header">' +
-            '<span class="task-name clickable" data-action="toggle" data-id="' +
-            taskIdEscaped +
-            '">' +
-            taskName +
-            "</span>" +
-            '<span class="task-status ' +
-            statusClass +
-            '" data-action="toggle" data-id="' +
-            taskIdEscaped +
-            '">' +
-            escapeHtml(statusText) +
-            "</span>" +
-            "</div>" +
-            '<div class="task-info">' +
-            "<span>⏰ " +
-            cronText +
-            "</span>" +
-            "<span>" +
-            escapeHtml(strings.labelNextRun) +
-            ": " +
-            escapeHtml(nextRun) +
-            "</span>" +
-            (hasTaskDailyLimit
-              ? "<span>🔢 " +
-                escapeHtml(strings.labelMaxExecutionsPerDay || "") +
-                ": " +
-                escapeHtml(String(taskDailyLimit)) +
-                "</span>"
-              : "") +
-            (timeWindowInfo ? "<span>" + timeWindowInfo + "</span>" : "") +
-            "<span>" +
-            scopeInfo +
-            "</span>" +
-            "</div>" +
-            '<div class="task-prompt">' +
-            escapeHtml(promptPreview) +
-            "</div>" +
-            '<div class="task-actions">' +
-            actionsHtml +
-            "</div>" +
-            "</div>"
-          );
-        })
-        .filter(Boolean)
-        .join("");
+        renderedTasks +=
+          '<details class="task-group-collapsible" data-group="other-workspaces"' +
+          (isOtherWorkspaceGroupOpen ? " open" : "") +
+          ">" +
+          "<summary>" +
+          escapeHtml(summaryText) +
+          "</summary>" +
+          '<div class="task-group-inner">' +
+          otherWorkspaceCards.join("") +
+          "</div>" +
+          "</details>";
+      }
 
       if (!renderedTasks) {
         renderedTasks =
@@ -1490,7 +1597,9 @@
     });
     if (!task) return;
 
-    setEditingMode(id);
+    var canDeleteInEdit =
+      task.scope === "global" || isTaskInCurrentWorkspace(task);
+    setEditingMode(id, { canDelete: canDeleteInEdit });
     var taskNameEl = document.getElementById("task-name");
     var promptTextEl = document.getElementById("prompt-text");
     if (taskNameEl) taskNameEl.value = task.name || "";
@@ -1598,6 +1707,15 @@
     });
   }
 
+  if (editDeleteBtn) {
+    editDeleteBtn.addEventListener("click", function () {
+      if (!editingTaskId || !editingTaskCanDelete) {
+        return;
+      }
+      window.deleteTask(editingTaskId);
+    });
+  }
+
   window.copyPrompt = function (id) {
     // Route through the action callback so that template-based prompts
     // are resolved from the file (consistent with tree view copy).
@@ -1617,14 +1735,11 @@
   };
 
   window.deleteTask = function (id) {
-    var task = tasks.find(function (t) {
-      return t && t.id === id;
-    });
-    if (!task) {
+    if (!id) {
       return;
     }
 
-    // Send delete request to extension (confirmation will be handled there)
+    // Send delete request to extension (confirmation/not-found handling lives there)
     vscode.postMessage({ type: "deleteTask", taskId: id });
   };
 
@@ -1635,7 +1750,24 @@
     try {
       switch (message.type) {
         case "updateTasks":
+          if (Array.isArray(message.workspacePaths)) {
+            workspacePaths = message.workspacePaths.filter(Boolean);
+          }
           renderTaskList(message.tasks);
+          if (editingTaskId) {
+            var editingTaskList = Array.isArray(tasks) ? tasks : [];
+            var editingTask = editingTaskList.find(function (t) {
+              return t && t.id === editingTaskId;
+            });
+            if (!editingTask) {
+              setEditingMode(null);
+            } else {
+              var canDeleteInEdit =
+                editingTask.scope === "global" ||
+                isTaskInCurrentWorkspace(editingTask);
+              setEditingMode(editingTaskId, { canDelete: canDeleteInEdit });
+            }
+          }
           break;
         case "updateAgents":
           {

@@ -5,7 +5,14 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
-import { normalizeForCompare } from "../../promptResolver";
+
+function normalizePathForAssertion(p: string): string {
+  const resolved = path.normalize(path.resolve(p));
+  const root = path.parse(resolved).root;
+  const trimmed =
+    resolved === root ? resolved : resolved.replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
+}
 
 class MockMemento implements vscode.Memento {
   private readonly store = new Map<string, unknown>();
@@ -164,6 +171,36 @@ suite("ScheduleManager Minimum Interval Tests", () => {
       const manager = createManagerWithInvalidTimezone(tmp);
       const warning = manager.checkMinimumInterval("0 * * * *");
       assert.strictEqual(warning, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("createTask sets valid nextRun even when timezone is invalid (U9 fallback)", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = createManagerWithInvalidTimezone(tmp);
+      const task = await manager.createTask({
+        name: "tz-fallback-test",
+        prompt: "test",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+      assert.ok(
+        task.nextRun instanceof Date && !isNaN(task.nextRun.getTime()),
+        "nextRun must be a valid Date even when timezone is invalid",
+      );
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -699,8 +736,8 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
       });
 
       assert.strictEqual(
-        normalizeForCompare(original.workspacePath || ""),
-        normalizeForCompare(workspaceA),
+        normalizePathForAssertion(original.workspacePath || ""),
+        normalizePathForAssertion(workspaceA),
       );
 
       restoreChangedWs = overrideWorkspaceFoldersForTest([
@@ -712,8 +749,8 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
       assert.ok(duplicated);
       assert.strictEqual(duplicated?.scope, "workspace");
       assert.strictEqual(
-        normalizeForCompare(duplicated?.workspacePath || ""),
-        normalizeForCompare(original.workspacePath || ""),
+        normalizePathForAssertion(duplicated?.workspacePath || ""),
+        normalizePathForAssertion(original.workspacePath || ""),
       );
     } finally {
       if (restoreChangedWs) {

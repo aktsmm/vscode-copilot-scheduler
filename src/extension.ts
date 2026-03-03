@@ -687,8 +687,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  const workspaceFoldersWatcher = vscode.workspace.onDidChangeWorkspaceFolders(
+    () => {
+      SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+      treeProvider.refresh();
+    },
+  );
+
   // Register subscriptions
-  context.subscriptions.push(treeView, configWatcher, ...commands);
+  context.subscriptions.push(
+    treeView,
+    configWatcher,
+    workspaceFoldersWatcher,
+    ...commands,
+  );
 }
 
 /**
@@ -1111,8 +1123,10 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             SchedulerWebview.showError(msg);
             break;
           }
-          notifyInfo(messages.taskDeleted(deleteTask.name));
+          const deletedMsg = messages.taskDeleted(deleteTask.name);
+          notifyInfo(deletedMsg);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+          SchedulerWebview.switchToList(deletedMsg);
         }
         break;
       }
@@ -1681,14 +1695,26 @@ function registerCopyPromptCommand(): vscode.Disposable {
           }
 
           const selected = await vscode.window.showQuickPick(
-            tasks.map((t) => ({
-              label: t.name,
-              description:
-                t.prompt.length > 50
-                  ? t.prompt.substring(0, 50) + "..."
-                  : t.prompt,
-              task: t,
-            })),
+            tasks.map((t) => {
+              const templateSourceLabel =
+                t.promptSource === "local"
+                  ? messages.labelPromptLocal()
+                  : t.promptSource === "global"
+                    ? messages.labelPromptGlobal()
+                    : messages.webviewUnknown();
+              const description =
+                t.promptSource !== "inline"
+                  ? path.basename(t.promptPath ?? "") ||
+                    `(${templateSourceLabel})`
+                  : t.prompt.length > 50
+                    ? t.prompt.substring(0, 50) + "..."
+                    : t.prompt;
+              return {
+                label: t.name,
+                description,
+                task: t,
+              };
+            }),
             { placeHolder: messages.selectTask() },
           );
 

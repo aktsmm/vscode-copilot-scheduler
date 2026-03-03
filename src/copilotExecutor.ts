@@ -420,6 +420,9 @@ export class CopilotExecutor {
       try {
         const bytes = await vscode.workspace.fs.readFile(file);
         const content = Buffer.from(bytes).toString("utf8");
+        // Best-effort regex parse of <agent><name>...</name> blocks.
+        // Intentionally skips malformed or nested tags rather than throwing;
+        // missing agents are a recoverable degradation (fallback: no suggestions).
         const agentMatches = content.matchAll(
           /<agent>\s*<name>([^<]+)<\/name>/g,
         );
