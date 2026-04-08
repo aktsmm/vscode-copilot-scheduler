@@ -387,11 +387,14 @@ suite("SchedulerWebview Message Queue Tests", () => {
 suite("SchedulerWebview Test Prompt Routing Tests", () => {
   test("handleMessage forwards testPrompt to callback", async () => {
     const wv = SchedulerWebview as unknown as {
-      onTestPromptCallback?: (
-        prompt: string,
-        agent?: string,
-        model?: string,
-      ) => void;
+      onTestPromptCallback?: (request: {
+        prompt: string;
+        agent?: string;
+        model?: string;
+        modelVendor?: string;
+        modelFamily?: string;
+        modelVersion?: string;
+      }) => void;
       handleMessage?: (message: unknown) => Promise<void>;
     };
 
@@ -405,8 +408,12 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
       | undefined;
 
     try {
-      wv.onTestPromptCallback = (prompt, agent, model) => {
-        received = { prompt, agent, model };
+      wv.onTestPromptCallback = (request) => {
+        received = {
+          prompt: request.prompt,
+          agent: request.agent,
+          model: request.model,
+        };
       };
 
       assert.ok(typeof wv.handleMessage === "function");
@@ -416,6 +423,9 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         prompt: "hello",
         agent: "@workspace",
         model: "gpt-4o",
+        modelVendor: "copilot",
+        modelFamily: "gpt-4o",
+        modelVersion: "2026-01-01",
       });
 
       assert.deepStrictEqual(received, {
@@ -774,6 +784,87 @@ suite("SchedulerWebview Script Contract Tests", () => {
       unhandledSource,
       expectedTokensInOrder,
       "Expected token not found in unhandled rejection flow",
+    );
+  });
+
+  test("list tab HTML exposes summary cards and create shortcut", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      'id="open-create-btn"',
+      'id="summary-total"',
+      'id="summary-enabled"',
+      'id="summary-paused"',
+      'data-open-create="true"',
+      "strings.emptyStateDescription",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected list-tab summary token not found: ${token}`,
+      );
+    }
+  });
+
+  test("renderTaskList updates summary counters and empty-state create CTA", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const renderSource = extractBlockFromStartToken(
+      source,
+      "function renderTaskList(nextTasks) {",
+    );
+
+    const expectedTokens = [
+      "summaryTotal.textContent = String(taskItems.length);",
+      "summaryEnabled.textContent = String(enabledCount);",
+      "summaryPaused.textContent = String(taskItems.length - enabledCount);",
+      'data-open-create="true"',
+      'escapeHtml(strings.emptyStateDescription || "")',
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(renderSource, token),
+        `Expected task list summary token not found: ${token}`,
+      );
+    }
+  });
+
+  test("task cards use edit-title interaction and labeled action chips", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const renderSource = extractBlockFromStartToken(
+      source,
+      "function renderTaskList(nextTasks) {",
+    );
+
+    const expectedTokens = [
+      'class="task-title-button task-name" data-action="edit"',
+      'class="btn-primary action-chip" data-action="run"',
+      'class="btn-secondary action-chip" data-action="toggle"',
+      "escapeHtml(strings.actionDelete)",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(renderSource, token),
+        `Expected labeled action token not found: ${token}`,
+      );
+    }
+
+    assert.ok(
+      !renderSource.includes('task-name clickable" data-action="toggle"'),
+      "Task title should no longer toggle enabled state directly.",
     );
   });
 });

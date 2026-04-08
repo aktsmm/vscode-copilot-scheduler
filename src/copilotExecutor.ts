@@ -15,7 +15,15 @@ import type {
 import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
-import { resolveGlobalPromptsRoot } from "./promptResolver";
+import { resolveGlobalAgentRoots } from "./promptResolver";
+import {
+  areModelSelectionsEqual,
+  findBestMatchingModel,
+  hasModelSelection,
+  modelInfoToSelection,
+  normalizeModelSelection,
+  type NormalizedModelSelection,
+} from "./modelSelection";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -38,6 +46,20 @@ const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
   "edit",
 ]);
 
+type BuiltInChatMode = "agent" | "ask" | "edit";
+
+type AvailableModelsResult = {
+  models: ModelInfo[];
+  source: "api" | "fallback";
+};
+
+type PromptRouting = {
+  normalizedAgent: string;
+  mode?: BuiltInChatMode;
+  chatOpenPrompt: string;
+  legacyPrompt: string;
+};
+
 function normalizeAgentPrefix(agent: string): string {
   const normalized = agent.trim();
   if (!normalized) {
@@ -56,6 +78,133 @@ function normalizeAgentPrefix(agent: string): string {
   return `@${normalized}`;
 }
 
+function resolveBuiltInChatMode(
+  agent: string | undefined,
+): BuiltInChatMode | undefined {
+  const normalized =
+    typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
+  if (normalized === "/agent") {
+    return "agent";
+  }
+  if (normalized === "/ask") {
+    return "ask";
+  }
+  if (normalized === "/edit") {
+    return "edit";
+  }
+  return undefined;
+}
+
+function stripLeadingBuiltInModePrefix(
+  prompt: string,
+  mode: BuiltInChatMode,
+): string {
+  const pattern = new RegExp(`^\\s*/${mode}(?=\\s|$)\\s*`, "i");
+  const stripped = prompt.replace(pattern, "").trim();
+  return stripped || prompt;
+}
+
+function buildPromptRouting(
+  processedPrompt: string,
+  agent: string | undefined,
+): PromptRouting {
+  const normalizedAgent =
+    typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
+  const mode = resolveBuiltInChatMode(agent);
+  let legacyPrompt = processedPrompt;
+
+  if (normalizedAgent) {
+    if (!processedPrompt.startsWith("@") && !processedPrompt.startsWith("/")) {
+      legacyPrompt = `${normalizedAgent} ${processedPrompt}`;
+    }
+  }
+
+  return {
+    normalizedAgent,
+    mode,
+    legacyPrompt,
+    chatOpenPrompt: mode
+      ? stripLeadingBuiltInModePrefix(legacyPrompt, mode)
+      : legacyPrompt,
+  };
+}
+
+function formatModelSelectionForLog(
+  selection: NormalizedModelSelection,
+): string {
+  const parts = [
+    selection.model ? `id=${selection.model}` : "",
+    selection.modelVendor ? `vendor=${selection.modelVendor}` : "",
+    selection.modelFamily ? `family=${selection.modelFamily}` : "",
+    selection.modelVersion ? `version=${selection.modelVersion}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : "default";
+}
+
+function buildModelSelectorCandidates(
+  selection: NormalizedModelSelection,
+): Array<Record<string, string>> {
+  const selectors: Array<Record<string, string>> = [];
+  const seen = new Set<string>();
+
+  const pushSelector = (candidate: {
+    id?: string;
+    vendor?: string;
+    family?: string;
+    version?: string;
+  }) => {
+    const compact = Object.fromEntries(
+      Object.entries(candidate).filter(
+        ([, value]) => typeof value === "string" && value.trim().length > 0,
+      ),
+    ) as Record<string, string>;
+    if (Object.keys(compact).length === 0) {
+      return;
+    }
+    const key = JSON.stringify(compact);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    selectors.push(compact);
+  };
+
+  if (selection.model) {
+    pushSelector({
+      id: selection.model,
+      vendor: selection.modelVendor,
+      family: selection.modelFamily,
+      version: selection.modelVersion,
+    });
+    pushSelector({
+      id: selection.model,
+      vendor: selection.modelVendor,
+    });
+    pushSelector({
+      id: selection.model,
+    });
+  }
+
+  pushSelector({
+    vendor: selection.modelVendor,
+    family: selection.modelFamily,
+    version: selection.modelVersion,
+  });
+  pushSelector({
+    vendor: selection.modelVendor,
+    family: selection.modelFamily,
+  });
+  pushSelector({
+    family: selection.modelFamily,
+    version: selection.modelVersion,
+  });
+  pushSelector({
+    family: selection.modelFamily,
+  });
+
+  return selectors;
+}
+
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   const sanitized = sanitizeAbsolutePathDetails(
@@ -68,6 +217,10 @@ function toSafeErrorDetails(error: unknown): string {
 export const __testOnly = {
   toSafeErrorDetails,
   normalizeAgentPrefix,
+  resolveBuiltInChatMode,
+  stripLeadingBuiltInModePrefix,
+  buildPromptRouting,
+  buildModelSelectorCandidates,
 };
 
 /**
@@ -93,23 +246,11 @@ export class CopilotExecutor {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
 
-    // Build full prompt with agent prefix
-    let fullPrompt = processedPrompt;
-    const normalizedAgent =
-      typeof options?.agent === "string"
-        ? normalizeAgentPrefix(options.agent)
-        : "";
+    const routing = buildPromptRouting(processedPrompt, options?.agent);
 
-    if (normalizedAgent) {
-      // Add agent prefix if not already present
-      if (
-        !processedPrompt.startsWith("@") &&
-        !processedPrompt.startsWith("/")
-      ) {
-        fullPrompt = `${normalizedAgent} ${processedPrompt}`;
-      }
+    if (routing.normalizedAgent) {
       logDebug(
-        `[CopilotScheduler] Agent set: ${normalizedAgent}, prompt length: ${fullPrompt.length}`,
+        `[CopilotScheduler] Agent set: ${routing.normalizedAgent}, mode: ${routing.mode || "none"}, prompt length: ${routing.legacyPrompt.length}`,
       );
     } else {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
@@ -119,7 +260,7 @@ export class CopilotExecutor {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
     const delayFactor = this.getCommandDelayFactor(config);
-    const model = options?.model && options.model !== "" ? options.model : "";
+    const requestedModel = normalizeModelSelection(options);
 
     try {
       // Try to create new session if configured
@@ -127,17 +268,18 @@ export class CopilotExecutor {
         await this.tryCreateNewChatSession(delayFactor);
       }
 
-      const openedWithChatOpen = await this.tryOpenChatWithPrompt(
-        fullPrompt,
-        model,
+      const chatOpenResult = await this.tryOpenChatWithPrompt(
+        routing.chatOpenPrompt,
+        routing.mode,
+        requestedModel,
       );
-      if (!openedWithChatOpen) {
+      if (!chatOpenResult.opened) {
         logDebug(
           `[CopilotScheduler] Falling back to legacy chat commands after chat.open failure`,
         );
         await this.executePromptLegacy(
-          fullPrompt,
-          model,
+          routing.legacyPrompt,
+          chatOpenResult.resolvedSelection.model || requestedModel.model || "",
           chatSession,
           delayFactor,
         );
@@ -153,7 +295,7 @@ export class CopilotExecutor {
       );
 
       if (action === messages.actionCopyPrompt()) {
-        await vscode.env.clipboard.writeText(fullPrompt);
+        await vscode.env.clipboard.writeText(routing.legacyPrompt);
         notifyInfo(messages.promptCopied());
       }
 
@@ -162,20 +304,31 @@ export class CopilotExecutor {
   }
 
   private async tryOpenChatWithPrompt(
-    fullPrompt: string,
-    model: string,
-  ): Promise<boolean> {
-    if (model) {
+    chatOpenPrompt: string,
+    mode: BuiltInChatMode | undefined,
+    requestedSelection: NormalizedModelSelection,
+  ): Promise<{ opened: boolean; resolvedSelection: NormalizedModelSelection }> {
+    const resolvedSelection =
+      await CopilotExecutor.resolveRequestedModelSelection(requestedSelection);
+
+    if (!areModelSelectionsEqual(requestedSelection, resolvedSelection)) {
+      logDebug(
+        `[CopilotScheduler] Resolved model selection to current environment: ${formatModelSelectionForLog(resolvedSelection)}`,
+      );
+    }
+
+    for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
-          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${model}`,
+          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${JSON.stringify(selector)}`,
         );
         await vscode.commands.executeCommand("workbench.action.chat.open", {
-          query: fullPrompt,
+          query: chatOpenPrompt,
           isPartialQuery: false,
-          modelSelector: { id: model },
+          mode,
+          modelSelector: selector,
         });
-        return true;
+        return { opened: true, resolvedSelection };
       } catch (error) {
         logDebug(
           `[CopilotScheduler] chat.open with model selector failed: ${toSafeErrorDetails(error)}`,
@@ -188,16 +341,33 @@ export class CopilotExecutor {
         `[CopilotScheduler] Trying workbench.action.chat.open without model selector`,
       );
       await vscode.commands.executeCommand("workbench.action.chat.open", {
-        query: fullPrompt,
+        query: chatOpenPrompt,
         isPartialQuery: false,
+        mode,
       });
-      return true;
+      return { opened: true, resolvedSelection };
     } catch (error) {
       logDebug(
         `[CopilotScheduler] chat.open without model selector failed: ${toSafeErrorDetails(error)}`,
       );
-      return false;
+      return { opened: false, resolvedSelection };
     }
+  }
+
+  private static async resolveRequestedModelSelection(
+    selection: NormalizedModelSelection,
+  ): Promise<NormalizedModelSelection> {
+    if (!hasModelSelection(selection)) {
+      return selection;
+    }
+
+    const { models } = await CopilotExecutor.getAvailableModelsWithSource();
+    const matched = findBestMatchingModel(selection, models);
+    if (!matched) {
+      return selection;
+    }
+
+    return modelInfoToSelection(matched);
   }
 
   private async executePromptLegacy(
@@ -456,42 +626,49 @@ export class CopilotExecutor {
   }
 
   /**
-   * Get global agents from VS Code User prompts folder
+   * Get global agents from supported user-level custom agent locations.
    */
   static async getGlobalAgents(): Promise<AgentInfo[]> {
     const agents: AgentInfo[] = [];
+    const seenAgentIds = new Set<string>();
 
-    // Reuse resolveGlobalPromptsRoot with the agents-specific setting
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const globalPath = resolveGlobalPromptsRoot(
+    const globalPaths = resolveGlobalAgentRoots(
       config.get<string>("globalAgentsPath", ""),
     );
-    try {
-      if (!globalPath) {
-        return agents;
-      }
+    if (globalPaths.length === 0) {
+      return agents;
+    }
 
-      const entries = await vscode.workspace.fs.readDirectory(
-        vscode.Uri.file(globalPath),
-      );
-      for (const [fileName, fileType] of entries) {
-        if (fileType !== vscode.FileType.File) continue;
-        if (fileName.toLowerCase().endsWith(".agent.md")) {
-          const agentName = fileName.replace(/\.agent\.md$/i, "");
-          agents.push({
-            id: `@${agentName}`,
-            name: `@${agentName}`,
-            description: messages.agentGlobalDesc(),
-            isCustom: true,
-            filePath: path.join(globalPath, fileName),
-          });
+    for (const globalPath of globalPaths) {
+      try {
+        const entries = await vscode.workspace.fs.readDirectory(
+          vscode.Uri.file(globalPath),
+        );
+        for (const [fileName, fileType] of entries) {
+          if (fileType !== vscode.FileType.File) continue;
+          if (fileName.toLowerCase().endsWith(".agent.md")) {
+            const agentName = fileName.replace(/\.agent\.md$/i, "");
+            const agentId = `@${agentName}`;
+            if (seenAgentIds.has(agentId)) {
+              continue;
+            }
+            seenAgentIds.add(agentId);
+            agents.push({
+              id: agentId,
+              name: agentId,
+              description: messages.agentGlobalDesc(),
+              isCustom: true,
+              filePath: path.join(globalPath, fileName),
+            });
+          }
         }
+      } catch (error) {
+        logDebug(
+          `[CopilotScheduler] Failed to read global agents from ${globalPath}:`,
+          toSafeErrorDetails(error),
+        );
       }
-    } catch (error) {
-      logDebug(
-        "[CopilotScheduler] Failed to read global agents:",
-        toSafeErrorDetails(error),
-      );
     }
 
     return agents;
@@ -520,6 +697,11 @@ export class CopilotExecutor {
    * Get available models using VS Code API
    */
   static async getAvailableModels(): Promise<ModelInfo[]> {
+    const { models } = await CopilotExecutor.getAvailableModelsWithSource();
+    return models;
+  }
+
+  static async getAvailableModelsWithSource(): Promise<AvailableModelsResult> {
     try {
       // Try to get models from VS Code Language Model API
       const models = await vscode.lm.selectChatModels({});
@@ -540,10 +722,12 @@ export class CopilotExecutor {
             name: model.name || model.id,
             description: model.family || "",
             vendor: model.vendor || "",
+            family: model.family || undefined,
+            version: model.version || undefined,
           });
         }
 
-        return modelInfos;
+        return { models: modelInfos, source: "api" };
       }
     } catch (error) {
       // Language Model API may not be available
@@ -554,7 +738,10 @@ export class CopilotExecutor {
     }
 
     // Fallback to static list
-    return CopilotExecutor.getFallbackModels();
+    return {
+      models: CopilotExecutor.getFallbackModels(),
+      source: "fallback",
+    };
   }
 
   /**
@@ -572,37 +759,43 @@ export class CopilotExecutor {
         id: "gpt-4o",
         name: "GPT-4o",
         description: "OpenAI GPT-4o",
-        vendor: "OpenAI",
+        vendor: "",
+        family: "gpt-4o",
       },
       {
         id: "gpt-4o-mini",
         name: "GPT-4o Mini",
         description: "OpenAI GPT-4o Mini",
-        vendor: "OpenAI",
+        vendor: "",
+        family: "gpt-4o-mini",
       },
       {
         id: "o3-mini",
         name: "o3-mini",
         description: "OpenAI o3-mini",
-        vendor: "OpenAI",
+        vendor: "",
+        family: "o3-mini",
       },
       {
         id: "claude-sonnet-4",
         name: "Claude Sonnet 4",
         description: "Anthropic Claude Sonnet 4",
-        vendor: "Anthropic",
+        vendor: "",
+        family: "claude-sonnet-4",
       },
       {
         id: "claude-3.5-sonnet",
         name: "Claude 3.5 Sonnet",
         description: "Anthropic Claude 3.5 Sonnet",
-        vendor: "Anthropic",
+        vendor: "",
+        family: "claude-3.5-sonnet",
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
         description: "Google Gemini 2.0 Flash",
-        vendor: "Google",
+        vendor: "",
+        family: "gemini-2.0-flash",
       },
     ];
   }

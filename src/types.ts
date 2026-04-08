@@ -28,6 +28,27 @@ export type LogLevel = "none" | "error" | "info" | "debug";
 export type ChatSessionBehavior = "new" | "continue";
 
 /**
+ * Structured model selection fields.
+ * `model` remains the primary persisted identifier for backward compatibility.
+ */
+export interface ModelSelectionFields {
+  /** Preferred model identifier */
+  model?: string;
+
+  /** Preferred display name captured at save time */
+  modelName?: string;
+
+  /** Preferred vendor captured at save time */
+  modelVendor?: string;
+
+  /** Preferred family captured at save time */
+  modelFamily?: string;
+
+  /** Preferred version captured at save time */
+  modelVersion?: string;
+}
+
+/**
  * Scheduled task definition
  */
 export interface ScheduledTask {
@@ -51,6 +72,18 @@ export interface ScheduledTask {
 
   /** AI model to use (gpt-4o, claude-sonnet-4, etc.) */
   model?: string;
+
+  /** Saved model display name for migration/healing */
+  modelName?: string;
+
+  /** Saved model vendor for migration/healing */
+  modelVendor?: string;
+
+  /** Saved model family for migration/healing */
+  modelFamily?: string;
+
+  /** Saved model version for migration/healing */
+  modelVersion?: string;
 
   /** Task scope */
   scope: TaskScope;
@@ -113,6 +146,18 @@ export interface CreateTaskInput {
 
   /** AI model to use */
   model?: string;
+
+  /** Saved model display name for migration/healing */
+  modelName?: string;
+
+  /** Saved model vendor for migration/healing */
+  modelVendor?: string;
+
+  /** Saved model family for migration/healing */
+  modelFamily?: string;
+
+  /** Saved model version for migration/healing */
+  modelVersion?: string;
 
   /** Task scope (default: "workspace") */
   scope?: TaskScope;
@@ -181,6 +226,23 @@ export interface ModelInfo {
 
   /** Vendor name */
   vendor: string;
+
+  /** Model family identifier when available */
+  family?: string;
+
+  /** Model version when available */
+  version?: string;
+}
+
+/**
+ * Payload for prompt execution and test runs.
+ */
+export interface PromptExecutionRequest extends ModelSelectionFields {
+  /** Prompt text */
+  prompt: string;
+
+  /** Agent to use */
+  agent?: string;
 }
 
 /**
@@ -241,12 +303,9 @@ export interface TaskAction {
 /**
  * Execute options for CopilotExecutor
  */
-export interface ExecuteOptions {
+export interface ExecuteOptions extends ModelSelectionFields {
   /** Agent to use */
   agent?: string;
-
-  /** Model to use */
-  model?: string;
 }
 
 /**
@@ -255,7 +314,7 @@ export interface ExecuteOptions {
 export type WebviewToExtensionMessage =
   | { type: "createTask"; data: CreateTaskInput }
   | { type: "updateTask"; taskId: string; data: Partial<CreateTaskInput> }
-  | { type: "testPrompt"; prompt: string; agent?: string; model?: string }
+  | ({ type: "testPrompt" } & PromptExecutionRequest)
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
   | { type: "refreshPrompts" }

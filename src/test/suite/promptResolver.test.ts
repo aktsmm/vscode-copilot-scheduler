@@ -6,12 +6,42 @@ import {
   resolveAllowedPathInBaseDir,
   resolveLocalPromptPath,
   resolveGlobalPromptPath,
+  resolveGlobalPromptsRoot,
+  resolveGlobalAgentRoots,
 } from "../../promptResolver";
 
 function norm(p: string | undefined): string {
   if (!p) return "";
   const n = path.normalize(path.resolve(p)).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? n.toLowerCase() : n;
+}
+
+function withEnv(
+  overrides: Partial<NodeJS.ProcessEnv>,
+  callback: () => void,
+): void {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(overrides)) {
+    previous.set(key, process.env[key]);
+    const nextValue = overrides[key];
+    if (nextValue === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = nextValue;
+    }
+  }
+
+  try {
+    callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 suite("Prompt Resolver Tests", () => {
@@ -43,6 +73,115 @@ suite("Prompt Resolver Tests", () => {
     const globalRoot = path.join("/tmp", "prompts");
     const p = resolveGlobalPromptPath(globalRoot, "x.agent.md");
     assert.strictEqual(p, undefined);
+  });
+
+  test("resolveGlobalPromptsRoot keeps VS Code user prompts default", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-global-prompts-"),
+    );
+
+    try {
+      const appData = path.join(tempRoot, "appdata");
+      const homeDir = path.join(tempRoot, "home");
+      const promptsRoot = path.join(appData, "Code", "User", "prompts");
+      fs.mkdirSync(promptsRoot, { recursive: true });
+      fs.mkdirSync(homeDir, { recursive: true });
+
+      withEnv(
+        {
+          APPDATA: appData,
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          XDG_CONFIG_HOME: undefined,
+        },
+        () => {
+          const resolved = resolveGlobalPromptsRoot();
+          assert.strictEqual(norm(resolved), norm(promptsRoot));
+        },
+      );
+    } finally {
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
+    }
+  });
+
+  test("resolveGlobalAgentRoots includes VS Code user prompts and copilot agents", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-global-agents-"),
+    );
+
+    try {
+      const appData = path.join(tempRoot, "appdata");
+      const homeDir = path.join(tempRoot, "home");
+      const promptsRoot = path.join(appData, "Code", "User", "prompts");
+      const copilotAgentsRoot = path.join(homeDir, ".copilot", "agents");
+      fs.mkdirSync(promptsRoot, { recursive: true });
+      fs.mkdirSync(copilotAgentsRoot, { recursive: true });
+
+      withEnv(
+        {
+          APPDATA: appData,
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          XDG_CONFIG_HOME: undefined,
+        },
+        () => {
+          const resolved = resolveGlobalAgentRoots();
+          assert.deepStrictEqual(resolved.map(norm), [
+            norm(promptsRoot),
+            norm(copilotAgentsRoot),
+          ]);
+        },
+      );
+    } finally {
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
+    }
+  });
+
+  test("resolveGlobalAgentRoots custom path overrides defaults", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-global-agents-custom-"),
+    );
+
+    try {
+      const appData = path.join(tempRoot, "appdata");
+      const homeDir = path.join(tempRoot, "home");
+      const promptsRoot = path.join(appData, "Code", "User", "prompts");
+      const copilotAgentsRoot = path.join(homeDir, ".copilot", "agents");
+      const customRoot = path.join(tempRoot, "custom-agents");
+      fs.mkdirSync(promptsRoot, { recursive: true });
+      fs.mkdirSync(copilotAgentsRoot, { recursive: true });
+      fs.mkdirSync(customRoot, { recursive: true });
+
+      withEnv(
+        {
+          APPDATA: appData,
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          XDG_CONFIG_HOME: undefined,
+        },
+        () => {
+          const resolved = resolveGlobalAgentRoots(customRoot);
+          assert.deepStrictEqual(resolved.map(norm), [norm(customRoot)]);
+        },
+      );
+    } finally {
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
+    }
   });
 
   test("resolveLocalPromptPath supports multi-root absolute paths", () => {

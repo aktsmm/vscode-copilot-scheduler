@@ -1,6 +1,75 @@
 import * as path from "path";
 import * as fs from "fs";
 
+function getDefaultVsCodeUserPromptsRoot(): string {
+  if (process.env.APPDATA) {
+    // Windows
+    return path.join(process.env.APPDATA, "Code", "User", "prompts");
+  }
+
+  if (process.platform === "darwin" && process.env.HOME) {
+    // macOS
+    return path.join(
+      process.env.HOME,
+      "Library",
+      "Application Support",
+      "Code",
+      "User",
+      "prompts",
+    );
+  }
+
+  if (process.env.HOME) {
+    // Linux (XDG_CONFIG_HOME or ~/.config)
+    const configBase =
+      process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, ".config");
+    return path.join(configBase, "Code", "User", "prompts");
+  }
+
+  return "";
+}
+
+function getDefaultCopilotAgentsRoot(): string {
+  const homeDir =
+    process.platform === "win32"
+      ? process.env.USERPROFILE || process.env.HOME || ""
+      : process.env.HOME || process.env.USERPROFILE || "";
+  return homeDir ? path.join(homeDir, ".copilot", "agents") : "";
+}
+
+function isExistingDirectory(dirPath: string): boolean {
+  if (!dirPath) {
+    return false;
+  }
+
+  try {
+    return fs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function resolveExistingDirectories(candidates: string[]): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!isExistingDirectory(candidate)) {
+      continue;
+    }
+
+    const normalized = normalizeForCompare(candidate);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    roots.push(candidate);
+  }
+
+  return roots;
+}
+
 export function normalizeForCompare(p: string): string {
   if (!p) return "";
   const resolved = path.normalize(path.resolve(p));
@@ -133,27 +202,24 @@ export function resolveLocalPromptPath(
 export function resolveGlobalPromptsRoot(
   customPath?: string,
 ): string | undefined {
-  let defaultRoot = "";
-  if (process.env.APPDATA) {
-    // Windows
-    defaultRoot = path.join(process.env.APPDATA, "Code", "User", "prompts");
-  } else if (process.platform === "darwin" && process.env.HOME) {
-    // macOS
-    defaultRoot = path.join(
-      process.env.HOME,
-      "Library",
-      "Application Support",
-      "Code",
-      "User",
-      "prompts",
-    );
-  } else if (process.env.HOME) {
-    // Linux (XDG_CONFIG_HOME or ~/.config)
-    const configBase =
-      process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, ".config");
-    defaultRoot = path.join(configBase, "Code", "User", "prompts");
-  }
+  const defaultRoot = getDefaultVsCodeUserPromptsRoot();
   const globalRoot = customPath || defaultRoot;
   if (!globalRoot) return undefined;
-  return fs.existsSync(globalRoot) ? globalRoot : undefined;
+  return isExistingDirectory(globalRoot) ? globalRoot : undefined;
+}
+
+/**
+ * Resolve global custom agent roots.
+ * When no custom path is configured, prefer the VS Code user prompts folder and
+ * then ~/.copilot/agents for compatibility with newer Copilot/CLI layouts.
+ */
+export function resolveGlobalAgentRoots(customPath?: string): string[] {
+  if (customPath) {
+    return resolveExistingDirectories([customPath]);
+  }
+
+  return resolveExistingDirectories([
+    getDefaultVsCodeUserPromptsRoot(),
+    getDefaultCopilotAgentsRoot(),
+  ]);
 }

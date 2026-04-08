@@ -110,6 +110,11 @@ export const messages = {
   taskNotFound: () => t("Task not found", "タスクが見つかりません"),
   noTasksFound: () =>
     t("No scheduled tasks found", "スケジュールされたタスクがありません"),
+  emptyStateDescription: () =>
+    t(
+      "Create your first task to start scheduling Copilot work.",
+      "最初のタスクを作成して、Copilot の定期実行を始めてください。",
+    ),
 
   // ==================== Validation ====================
   invalidCronExpression: () => t("Invalid cron expression", "無効なcron式です"),
@@ -268,6 +273,22 @@ export const messages = {
   tabCreate: () => t("Create Task", "タスク作成"),
   tabEdit: () => t("Edit Task", "タスク編集"),
   tabList: () => t("Task List", "タスク一覧"),
+  pageSubtitle: () =>
+    t(
+      "Create and manage scheduled Copilot tasks with clear execution guardrails.",
+      "実行条件と安全設定を確認しながら、Copilot の定期タスクを管理します。",
+    ),
+  listSubtitle: () =>
+    t(
+      "Review task status, scope, and next runs at a glance.",
+      "状態、スコープ、次回実行を一覧で確認できます。",
+    ),
+  sectionBasics: () => t("Basics", "基本情報"),
+  sectionTarget: () => t("Target", "実行対象"),
+  sectionGuardrails: () => t("Guardrails", "安全設定"),
+  summaryTotalTasks: () => t("Total tasks", "総タスク数"),
+  summaryEnabledTasks: () => t("Enabled", "有効"),
+  summaryPausedTasks: () => t("Paused", "停止中"),
 
   webviewMessageHandlingFailed: (error: string) =>
     t(

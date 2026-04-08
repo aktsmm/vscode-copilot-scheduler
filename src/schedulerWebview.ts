@@ -14,6 +14,7 @@ import type {
   PromptTemplate,
   TaskScope,
   WebviewToExtensionMessage,
+  PromptExecutionRequest,
 } from "./types";
 import { CopilotExecutor } from "./copilotExecutor";
 import { messages, isJapanese, getCronPresets } from "./i18n";
@@ -36,7 +37,7 @@ export class SchedulerWebview {
     | ((action: TaskAction) => void)
     | undefined;
   private static onTestPromptCallback:
-    | ((prompt: string, agent?: string, model?: string) => void)
+    | ((request: PromptExecutionRequest) => void)
     | undefined;
   private static extensionUri: vscode.Uri;
   private static currentTasks: ScheduledTask[] = [];
@@ -96,7 +97,7 @@ export class SchedulerWebview {
     extensionUri: vscode.Uri,
     tasks: ScheduledTask[],
     onTaskAction: (action: TaskAction) => void,
-    onTestPrompt?: (prompt: string, agent?: string, model?: string) => void,
+    onTestPrompt?: (request: PromptExecutionRequest) => void,
   ): Promise<void> {
     this.extensionUri = extensionUri;
     this.currentTasks = tasks;
@@ -421,11 +422,15 @@ export class SchedulerWebview {
 
       case "testPrompt":
         if (this.onTestPromptCallback) {
-          this.onTestPromptCallback(
-            message.prompt,
-            message.agent,
-            message.model,
-          );
+          this.onTestPromptCallback({
+            prompt: message.prompt,
+            agent: message.agent,
+            model: message.model,
+            modelName: message.modelName,
+            modelVendor: message.modelVendor,
+            modelFamily: message.modelFamily,
+            modelVersion: message.modelVersion,
+          });
         }
         break;
 
@@ -838,6 +843,7 @@ export class SchedulerWebview {
       actionEnable: messages.actionEnable(),
       actionDisable: messages.actionDisable(),
       noTasksFound: messages.noTasksFound(),
+      emptyStateDescription: messages.emptyStateDescription(),
       labelAdvanced: messages.labelAdvanced(),
       labelFrequency: messages.labelFrequency(),
       labelFrequencyMinute: messages.labelFrequencyMinute(),
@@ -900,6 +906,15 @@ export class SchedulerWebview {
       webviewMaxExecutionsPerDayNote: messages.webviewMaxExecutionsPerDayNote(),
       webviewAllowedTimeWindowNote: messages.webviewAllowedTimeWindowNote(),
 
+      pageSubtitle: messages.pageSubtitle(),
+      listSubtitle: messages.listSubtitle(),
+      sectionBasics: messages.sectionBasics(),
+      sectionTarget: messages.sectionTarget(),
+      sectionGuardrails: messages.sectionGuardrails(),
+      summaryTotalTasks: messages.summaryTotalTasks(),
+      summaryEnabledTasks: messages.summaryEnabledTasks(),
+      summaryPausedTasks: messages.summaryPausedTasks(),
+
       labelThisWorkspaceShort: messages.labelThisWorkspaceShort(),
       labelOtherWorkspaceShort: messages.labelOtherWorkspaceShort(),
     };
@@ -941,26 +956,63 @@ export class SchedulerWebview {
     
     body {
       font-family: var(--vscode-font-family);
-      padding: 20px;
+      margin: 0;
+      padding: 24px;
       color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
+      background:
+        radial-gradient(circle at top right, color-mix(in srgb, var(--vscode-textLink-foreground) 12%, transparent) 0%, transparent 32%),
+        linear-gradient(180deg, color-mix(in srgb, var(--vscode-editorWidget-background) 72%, transparent), transparent 180px),
+        var(--vscode-editor-background);
+      line-height: 1.5;
+    }
+
+    .page-shell {
+      max-width: 1160px;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .page-title-block h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .page-title-block p {
+      margin: 6px 0 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 13px;
+      max-width: 72ch;
     }
     
     .tabs {
-      display: flex;
-      gap: 0;
-      margin-bottom: 20px;
-      border-bottom: 1px solid var(--vscode-panel-border);
+      display: inline-flex;
+      gap: 4px;
+      margin-bottom: 18px;
+      padding: 4px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--vscode-editorWidget-background) 82%, transparent);
     }
     
     .tab-button {
-      padding: 10px 20px;
+      padding: 10px 18px;
       border: none;
       background: transparent;
       color: var(--vscode-foreground);
       cursor: pointer;
       border-bottom: 2px solid transparent;
       font-size: 14px;
+      border-radius: 999px;
+      transition: background-color 0.15s ease, color 0.15s ease;
     }
     
     .tab-button:hover {
@@ -968,8 +1020,9 @@ export class SchedulerWebview {
     }
     
     .tab-button.active {
-      border-bottom-color: var(--vscode-focusBorder);
-      color: var(--vscode-textLink-foreground);
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-bottom-color: transparent;
     }
     
     .tab-content {
@@ -979,9 +1032,83 @@ export class SchedulerWebview {
     .tab-content.active {
       display: block;
     }
+
+    .surface {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--vscode-editorWidget-background) 90%, transparent);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    .feedback-banner {
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      margin-bottom: 14px;
+      border: 1px solid transparent;
+    }
+
+    .feedback-banner-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground);
+      border-color: var(--vscode-inputValidation-errorBorder);
+    }
+
+    .feedback-banner-success {
+      background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent);
+      color: var(--vscode-foreground);
+      border-color: color-mix(in srgb, var(--vscode-testing-iconPassed) 45%, transparent);
+      opacity: 1;
+      transition: opacity 0.5s ease-out;
+    }
+
+    .form-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .form-section {
+      padding: 18px;
+    }
+
+    .form-section-header {
+      margin-bottom: 14px;
+    }
+
+    .form-section-header h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--vscode-foreground);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .col-12 {
+      grid-column: span 12;
+    }
+
+    .col-8 {
+      grid-column: span 8;
+    }
+
+    .col-6 {
+      grid-column: span 6;
+    }
+
+    .col-4 {
+      grid-column: span 4;
+    }
     
     .form-group {
-      margin-bottom: 16px;
+      margin-bottom: 0;
     }
     
     .form-group label {
@@ -1002,6 +1129,7 @@ export class SchedulerWebview {
       border-radius: 4px;
       font-family: inherit;
       font-size: 13px;
+      min-height: 36px;
     }
     
     textarea {
@@ -1020,6 +1148,7 @@ export class SchedulerWebview {
       display: flex;
       align-items: center;
       gap: 8px;
+      min-height: 36px;
     }
     
     .checkbox-group input[type="checkbox"] {
@@ -1029,16 +1158,29 @@ export class SchedulerWebview {
     .button-group {
       display: flex;
       gap: 10px;
-      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    .form-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 18px;
+    }
+
+    .form-actions .button-group {
+      margin-top: 0;
     }
     
     button {
       padding: 8px 16px;
       border: none;
-      border-radius: 4px;
+      border-radius: 8px;
       cursor: pointer;
       font-size: 13px;
       font-family: inherit;
+      min-height: 36px;
     }
     
     .btn-primary {
@@ -1063,64 +1205,143 @@ export class SchedulerWebview {
       background-color: var(--vscode-inputValidation-errorBackground);
       color: var(--vscode-inputValidation-errorForeground);
     }
-    
-    .btn-icon {
-      padding: 6px 8px;
-      background: transparent;
-      color: var(--vscode-foreground);
+
+    .btn-danger:hover {
+      background-color: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 82%, black);
     }
     
-    .btn-icon:hover {
-      background-color: var(--vscode-list-hoverBackground);
+    .btn-icon {
+      padding: 0 12px;
     }
     
     .task-list {
       display: flex;
       flex-direction: column;
+      gap: 16px;
+    }
+
+    .list-toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .summary-card {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .summary-label {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .summary-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--vscode-foreground);
     }
     
     .task-card {
-      padding: 16px;
+      padding: 18px;
       border: 1px solid var(--vscode-panel-border);
-      border-radius: 6px;
+      border-radius: 12px;
       background-color: var(--vscode-editor-background);
     }
 
     .task-card.other-workspace {
-      border-left-width: 4px;
+      border-left-width: 5px;
       border-left-color: var(--vscode-inputValidation-warningBorder);
     }
     
     .task-card.disabled {
-      opacity: 0.6;
+      background-color: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, transparent);
+    }
+
+    .task-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .task-section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 2px;
+    }
+
+    .task-section-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .task-section-count {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
     }
     
     .task-header {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .task-header-main {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
     }
     
     .task-name {
-      font-weight: 600;
-      font-size: 15px;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .task-title-button {
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      text-align: left;
+      min-height: auto;
+    }
+
+    .task-title-button:hover {
+      color: var(--vscode-textLink-foreground);
     }
     
-    .task-name.clickable, .task-status {
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-    
-    .task-name.clickable:hover, .task-status:hover {
-      opacity: 0.7;
+    .task-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     
     .task-status {
-      padding: 2px 8px;
-      border-radius: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
       font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
     
     .task-status.enabled {
@@ -1132,44 +1353,88 @@ export class SchedulerWebview {
       background-color: var(--vscode-disabledForeground);
       color: var(--vscode-button-foreground);
     }
+
+    .scope-badge {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: color-mix(in srgb, var(--vscode-textLink-foreground) 16%, transparent);
+      color: var(--vscode-foreground);
+      border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground) 36%, transparent);
+    }
+
+    .task-next-run {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      min-width: 180px;
+      text-align: right;
+    }
+
+    .task-next-run-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .task-next-run strong {
+      font-size: 13px;
+      color: var(--vscode-foreground);
+    }
     
     .task-info {
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 8px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
     }
     
     .task-info span {
-      margin-right: 16px;
+      margin-right: 0;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--vscode-editorWidget-background) 82%, transparent);
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
     }
     
     .task-prompt {
-      padding: 8px;
+      padding: 12px;
       background-color: var(--vscode-textBlockQuote-background);
-      border-radius: 4px;
+      border-radius: 10px;
       font-size: 12px;
       white-space: pre-wrap;
-      max-height: 60px;
+      max-height: 84px;
       overflow: hidden;
-      margin-bottom: 8px;
+      margin-bottom: 14px;
+      border-left: 3px solid color-mix(in srgb, var(--vscode-textLink-foreground) 55%, transparent);
     }
     
     .task-actions {
       display: flex;
       gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .action-chip {
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 600;
     }
 
     .task-group-collapsible {
       border: 1px solid var(--vscode-panel-border);
-      border-radius: 6px;
-      background-color: var(--vscode-editor-background);
-      padding: 0 12px 12px;
+      border-radius: 12px;
+      background-color: color-mix(in srgb, var(--vscode-editorWidget-background) 90%, transparent);
+      padding: 0 14px 14px;
     }
 
     .task-group-collapsible summary {
       cursor: pointer;
-      padding: 12px 0;
-      font-weight: 600;
+      padding: 14px 0;
+      font-weight: 700;
       color: var(--vscode-foreground);
     }
 
@@ -1181,13 +1446,25 @@ export class SchedulerWebview {
     
     .empty-state {
       text-align: center;
-      padding: 40px;
+      padding: 28px;
       color: var(--vscode-descriptionForeground);
+    }
+
+    .empty-state-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--vscode-foreground);
+      margin-bottom: 8px;
+    }
+
+    .empty-state-description {
+      margin: 0 0 16px;
     }
     
     .radio-group {
       display: flex;
       gap: 16px;
+      flex-wrap: wrap;
     }
     
     .radio-group label {
@@ -1211,6 +1488,7 @@ export class SchedulerWebview {
     .inline-group {
       display: flex;
       gap: 16px;
+      flex-wrap: wrap;
     }
     
     .inline-group .form-group {
@@ -1230,9 +1508,9 @@ export class SchedulerWebview {
 
     .friendly-cron {
       margin-top: 10px;
-      padding: 12px;
+      padding: 14px;
       border: 1px dashed var(--vscode-panel-border);
-      border-radius: 6px;
+      border-radius: 10px;
       background-color: var(--vscode-editorWidget-background);
     }
 
@@ -1282,209 +1560,310 @@ export class SchedulerWebview {
       margin-top: 4px;
       margin-bottom: 0;
     }
+
+    .time-window-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    @media (max-width: 860px) {
+      body {
+        padding: 16px;
+      }
+
+      .page-header,
+      .form-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .summary-grid,
+      .time-window-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .col-8,
+      .col-6,
+      .col-4 {
+        grid-column: span 12;
+      }
+
+      .task-header {
+        flex-direction: column;
+      }
+
+      .task-next-run {
+        min-width: 0;
+        align-items: flex-start;
+        text-align: left;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="tabs">
-    <button type="button" class="tab-button active" data-tab="create">${escapeHtml(strings.tabCreate)}</button>
-    <button type="button" class="tab-button" data-tab="list">${escapeHtml(strings.tabList)}</button>
-  </div>
-  
-  <div id="create-tab" class="tab-content active">
-    <form id="task-form">
-      <div id="form-error" style="display:none; background:var(--vscode-inputValidation-errorBackground); color:var(--vscode-inputValidation-errorForeground); padding:8px 12px; border-radius:4px; margin-bottom:12px; font-size:13px;"></div>
-      <input type="hidden" id="edit-task-id" value="">
-      
-      <div class="form-group">
-        <label for="task-name">${escapeHtml(strings.labelTaskName)}</label>
-        <input type="text" id="task-name" placeholder="${escapeHtmlAttr(strings.placeholderTaskName)}" required>
-      </div>
-      
-      <div class="form-group">
-        <label>${escapeHtml(strings.labelPromptType)}</label>
-        <div class="radio-group">
-          <label>
-            <input type="radio" name="prompt-source" value="inline" checked>
-            ${escapeHtml(strings.labelPromptInline)}
-          </label>
-          <label>
-            <input type="radio" name="prompt-source" value="local">
-            ${escapeHtml(strings.labelPromptLocal)}
-          </label>
-          <label>
-            <input type="radio" name="prompt-source" value="global">
-            ${escapeHtml(strings.labelPromptGlobal)}
-          </label>
-        </div>
-      </div>
-      
-      <div class="form-group" id="template-select-group" style="display: none;">
-        <label for="template-select">${escapeHtml(strings.labelPrompt)}</label>
-        <div class="template-row">
-          <select id="template-select">
-            <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
-          </select>
-          <button type="button" class="btn-secondary" id="template-refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
-        </div>
-      </div>
-      
-      <div class="form-group" id="prompt-group">
-        <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
-        <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
-      </div>
-      
-      <div class="form-group">
-        <label>${escapeHtml(strings.labelSchedule)}</label>
-        <div class="preset-select">
-          <select id="cron-preset">
-            <option value="">${escapeHtml(strings.labelCustom)}</option>
-            ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtml(p.name)}</option>`).join("")}
-          </select>
-        </div>
-        <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required>
-        <div class="cron-preview">
-          <strong>${escapeHtml(strings.labelFriendlyPreview)}:</strong>
-          <span id="cron-preview-text">${escapeHtml(strings.labelFriendlyFallback)}</span>
-          <button type="button" class="btn-secondary btn-icon" id="open-guru-btn">${escapeHtml(strings.labelOpenInGuru)}</button>
-        </div>
-        <div class="friendly-cron">
-          <div class="section-title">${escapeHtml(strings.labelFriendlyBuilder)}</div>
-          <div class="friendly-grid">
-            <div class="form-group">
-              <label for="friendly-frequency">${escapeHtml(strings.labelFrequency)}</label>
-              <select id="friendly-frequency">
-                <option value="">${escapeHtml(strings.labelFriendlySelect)}</option>
-                <option value="every-n">${escapeHtml(strings.labelEveryNMinutes)}</option>
-                <option value="hourly">${escapeHtml(strings.labelHourlyAtMinute)}</option>
-                <option value="daily">${escapeHtml(strings.labelDailyAtTime)}</option>
-                <option value="weekly">${escapeHtml(strings.labelWeeklyAtTime)}</option>
-                <option value="monthly">${escapeHtml(strings.labelMonthlyAtTime)}</option>
-              </select>
-            </div>
-            <div class="form-group friendly-field" data-field="interval">
-              <label for="friendly-interval">${escapeHtml(strings.labelInterval)}</label>
-              <input type="number" id="friendly-interval" min="1" max="59" value="5">
-            </div>
-            <div class="form-group friendly-field" data-field="minute">
-              <label for="friendly-minute">${escapeHtml(strings.labelMinute)}</label>
-              <input type="number" id="friendly-minute" min="0" max="59" value="0">
-            </div>
-            <div class="form-group friendly-field" data-field="hour">
-              <label for="friendly-hour">${escapeHtml(strings.labelHour)}</label>
-              <input type="number" id="friendly-hour" min="0" max="23" value="9">
-            </div>
-            <div class="form-group friendly-field" data-field="dow">
-              <label for="friendly-dow">${escapeHtml(strings.labelDayOfWeek)}</label>
-              <select id="friendly-dow">
-                <option value="0">${escapeHtml(strings.daySun)}</option>
-                <option value="1">${escapeHtml(strings.dayMon)}</option>
-                <option value="2">${escapeHtml(strings.dayTue)}</option>
-                <option value="3">${escapeHtml(strings.dayWed)}</option>
-                <option value="4">${escapeHtml(strings.dayThu)}</option>
-                <option value="5">${escapeHtml(strings.dayFri)}</option>
-                <option value="6">${escapeHtml(strings.daySat)}</option>
-              </select>
-            </div>
-            <div class="form-group friendly-field" data-field="dom">
-              <label for="friendly-dom">${escapeHtml(strings.labelDayOfMonth)}</label>
-              <input type="number" id="friendly-dom" min="1" max="31" value="1">
-            </div>
-          </div>
-          <div class="friendly-actions">
-            <button type="button" class="btn-secondary" id="friendly-generate">${escapeHtml(strings.labelFriendlyGenerate)}</button>
-          </div>
-        </div>
-      </div>
-      
-      <div class="inline-group">
-        <div class="form-group">
-          <label for="agent-select">${escapeHtml(strings.labelAgent)}</label>
-          <select id="agent-select">
-            ${initialAgents.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtml(a.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoAgents)}</option>`}
-          </select>
-        </div>
-        
-        <div class="form-group">
-          <label for="model-select">${escapeHtml(strings.labelModel)}</label>
-          <select id="model-select">
-            ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtml(m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
-          </select>
-          <p class="note">${escapeHtml(strings.labelModelNote)}</p>
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <label>${escapeHtml(strings.labelScope)}</label>
-        <div class="radio-group">
-          <label>
-            <input type="radio" name="scope" value="workspace" ${defaultScope === "workspace" ? "checked" : ""}>
-            ${escapeHtml(strings.labelScopeWorkspace)}
-          </label>
-          <label>
-            <input type="radio" name="scope" value="global" ${defaultScope === "global" ? "checked" : ""}>
-            ${escapeHtml(strings.labelScopeGlobal)}
-          </label>
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="run-first">
-          <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="auto-mode" ${defaultAutoMode ? "checked" : ""}>
-          <label for="auto-mode">${escapeHtml(strings.labelAutoMode)}</label>
-        </div>
-        <p class="note">${escapeHtml(strings.webviewAutoModeNote)}</p>
-      </div>
-
-      <div class="form-group">
-        <label for="jitter-seconds">${escapeHtml(strings.labelJitterSeconds)}</label>
-        <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
-        <p class="note">${escapeHtml(strings.webviewJitterNote)}</p>
-      </div>
-
-      <div class="form-group">
-        <label for="max-executions-per-day">${escapeHtml(strings.labelMaxExecutionsPerDay)}</label>
-        <input type="number" id="max-executions-per-day" min="0" max="100" value="0">
-        <p class="note">${escapeHtml(strings.webviewMaxExecutionsPerDayNote)}</p>
-      </div>
-
-      <div class="form-group">
-        <label>${escapeHtml(strings.labelAllowedTimeWindow)}</label>
-        <div class="inline-group">
-          <div class="form-group">
-            <label for="allowed-time-start">${escapeHtml(strings.labelAllowedTimeStart)}</label>
-            <input type="time" id="allowed-time-start" step="60">
-          </div>
-          <div class="form-group">
-            <label for="allowed-time-end">${escapeHtml(strings.labelAllowedTimeEnd)}</label>
-            <input type="time" id="allowed-time-end" step="60">
-          </div>
-        </div>
-        <p class="note">${escapeHtml(strings.webviewAllowedTimeWindowNote)}</p>
-      </div>
-      
-      <div class="button-group">
-        <button type="submit" class="btn-primary" id="submit-btn">${escapeHtml(strings.actionCreate)}</button>
-        <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${escapeHtml(strings.actionNewTask)}</button>
-        <button type="button" class="btn-danger" id="edit-delete-btn" style="display:none;">${escapeHtml(strings.actionDelete)}</button>
-        <button type="button" class="btn-secondary" id="test-btn">${escapeHtml(strings.actionTestRun)}</button>
-      </div>
-    </form>
-  </div>
-  
-  <div id="list-tab" class="tab-content">
-    <div id="success-toast" style="display:none; background:var(--vscode-notificationsInfoIcon-foreground); color:var(--vscode-button-foreground); padding:8px 14px; border-radius:4px; margin-bottom:12px; font-size:13px; opacity:1; transition:opacity 0.5s ease-out;"></div>
-    <div class="button-group" style="margin-bottom: 16px;">
-      <button class="btn-secondary" id="refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
+  <div class="page-shell">
+    <div class="tabs">
+      <button type="button" class="tab-button active" data-tab="create">${escapeHtml(strings.tabCreate)}</button>
+      <button type="button" class="tab-button" data-tab="list">${escapeHtml(strings.tabList)}</button>
     </div>
-    <div id="task-list" class="task-list">
-      <div class="empty-state">${escapeHtml(strings.noTasksFound)}</div>
+    
+    <div id="create-tab" class="tab-content active">
+      <div class="page-header">
+        <div class="page-title-block">
+          <h1>${escapeHtml(strings.tabCreate)}</h1>
+          <p>${escapeHtml(strings.pageSubtitle)}</p>
+        </div>
+      </div>
+      <form id="task-form" class="form-layout">
+        <div id="form-error" class="feedback-banner feedback-banner-error" style="display:none;"></div>
+        <input type="hidden" id="edit-task-id" value="">
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.sectionBasics)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-6">
+              <label for="task-name">${escapeHtml(strings.labelTaskName)}</label>
+              <input type="text" id="task-name" placeholder="${escapeHtmlAttr(strings.placeholderTaskName)}" required>
+            </div>
+
+            <div class="form-group col-6">
+              <label>${escapeHtml(strings.labelPromptType)}</label>
+              <div class="radio-group">
+                <label>
+                  <input type="radio" name="prompt-source" value="inline" checked>
+                  ${escapeHtml(strings.labelPromptInline)}
+                </label>
+                <label>
+                  <input type="radio" name="prompt-source" value="local">
+                  ${escapeHtml(strings.labelPromptLocal)}
+                </label>
+                <label>
+                  <input type="radio" name="prompt-source" value="global">
+                  ${escapeHtml(strings.labelPromptGlobal)}
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group col-12" id="template-select-group" style="display: none;">
+              <label for="template-select">${escapeHtml(strings.labelPrompt)}</label>
+              <div class="template-row">
+                <select id="template-select">
+                  <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
+                </select>
+                <button type="button" class="btn-secondary" id="template-refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+            </div>
+
+            <div class="form-group col-12" id="prompt-group">
+              <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
+              <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.labelSchedule)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-12">
+              <label>${escapeHtml(strings.labelSchedule)}</label>
+              <div class="preset-select">
+                <select id="cron-preset">
+                  <option value="">${escapeHtml(strings.labelCustom)}</option>
+                  ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtml(p.name)}</option>`).join("")}
+                </select>
+              </div>
+              <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required>
+              <div class="cron-preview">
+                <strong>${escapeHtml(strings.labelFriendlyPreview)}:</strong>
+                <span id="cron-preview-text">${escapeHtml(strings.labelFriendlyFallback)}</span>
+                <button type="button" class="btn-secondary btn-icon" id="open-guru-btn">${escapeHtml(strings.labelOpenInGuru)}</button>
+              </div>
+              <div class="friendly-cron">
+                <div class="section-title">${escapeHtml(strings.labelFriendlyBuilder)}</div>
+                <div class="friendly-grid">
+                  <div class="form-group">
+                    <label for="friendly-frequency">${escapeHtml(strings.labelFrequency)}</label>
+                    <select id="friendly-frequency">
+                      <option value="">${escapeHtml(strings.labelFriendlySelect)}</option>
+                      <option value="every-n">${escapeHtml(strings.labelEveryNMinutes)}</option>
+                      <option value="hourly">${escapeHtml(strings.labelHourlyAtMinute)}</option>
+                      <option value="daily">${escapeHtml(strings.labelDailyAtTime)}</option>
+                      <option value="weekly">${escapeHtml(strings.labelWeeklyAtTime)}</option>
+                      <option value="monthly">${escapeHtml(strings.labelMonthlyAtTime)}</option>
+                    </select>
+                  </div>
+                  <div class="form-group friendly-field" data-field="interval">
+                    <label for="friendly-interval">${escapeHtml(strings.labelInterval)}</label>
+                    <input type="number" id="friendly-interval" min="1" max="59" value="5">
+                  </div>
+                  <div class="form-group friendly-field" data-field="minute">
+                    <label for="friendly-minute">${escapeHtml(strings.labelMinute)}</label>
+                    <input type="number" id="friendly-minute" min="0" max="59" value="0">
+                  </div>
+                  <div class="form-group friendly-field" data-field="hour">
+                    <label for="friendly-hour">${escapeHtml(strings.labelHour)}</label>
+                    <input type="number" id="friendly-hour" min="0" max="23" value="9">
+                  </div>
+                  <div class="form-group friendly-field" data-field="dow">
+                    <label for="friendly-dow">${escapeHtml(strings.labelDayOfWeek)}</label>
+                    <select id="friendly-dow">
+                      <option value="0">${escapeHtml(strings.daySun)}</option>
+                      <option value="1">${escapeHtml(strings.dayMon)}</option>
+                      <option value="2">${escapeHtml(strings.dayTue)}</option>
+                      <option value="3">${escapeHtml(strings.dayWed)}</option>
+                      <option value="4">${escapeHtml(strings.dayThu)}</option>
+                      <option value="5">${escapeHtml(strings.dayFri)}</option>
+                      <option value="6">${escapeHtml(strings.daySat)}</option>
+                    </select>
+                  </div>
+                  <div class="form-group friendly-field" data-field="dom">
+                    <label for="friendly-dom">${escapeHtml(strings.labelDayOfMonth)}</label>
+                    <input type="number" id="friendly-dom" min="1" max="31" value="1">
+                  </div>
+                </div>
+                <div class="friendly-actions">
+                  <button type="button" class="btn-secondary" id="friendly-generate">${escapeHtml(strings.labelFriendlyGenerate)}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.sectionTarget)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-6">
+              <label for="agent-select">${escapeHtml(strings.labelAgent)}</label>
+              <select id="agent-select">
+                ${initialAgents.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtml(a.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoAgents)}</option>`}
+              </select>
+            </div>
+
+            <div class="form-group col-6">
+              <label for="model-select">${escapeHtml(strings.labelModel)}</label>
+              <select id="model-select">
+                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtml(m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
+              </select>
+              <p class="note">${escapeHtml(strings.labelModelNote)}</p>
+            </div>
+
+            <div class="form-group col-6">
+              <label>${escapeHtml(strings.labelScope)}</label>
+              <div class="radio-group">
+                <label>
+                  <input type="radio" name="scope" value="workspace" ${defaultScope === "workspace" ? "checked" : ""}>
+                  ${escapeHtml(strings.labelScopeWorkspace)}
+                </label>
+                <label>
+                  <input type="radio" name="scope" value="global" ${defaultScope === "global" ? "checked" : ""}>
+                  ${escapeHtml(strings.labelScopeGlobal)}
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group col-6">
+              <label>${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
+              <div class="checkbox-group">
+                <input type="checkbox" id="run-first">
+                <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.sectionGuardrails)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="auto-mode" ${defaultAutoMode ? "checked" : ""}>
+                <label for="auto-mode">${escapeHtml(strings.labelAutoMode)}</label>
+              </div>
+              <p class="note">${escapeHtml(strings.webviewAutoModeNote)}</p>
+            </div>
+
+            <div class="form-group col-4">
+              <label for="jitter-seconds">${escapeHtml(strings.labelJitterSeconds)}</label>
+              <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
+              <p class="note">${escapeHtml(strings.webviewJitterNote)}</p>
+            </div>
+
+            <div class="form-group col-4">
+              <label for="max-executions-per-day">${escapeHtml(strings.labelMaxExecutionsPerDay)}</label>
+              <input type="number" id="max-executions-per-day" min="0" max="100" value="0">
+              <p class="note">${escapeHtml(strings.webviewMaxExecutionsPerDayNote)}</p>
+            </div>
+
+            <div class="form-group col-4">
+              <label>${escapeHtml(strings.labelAllowedTimeWindow)}</label>
+              <div class="time-window-grid">
+                <div class="form-group">
+                  <label for="allowed-time-start">${escapeHtml(strings.labelAllowedTimeStart)}</label>
+                  <input type="time" id="allowed-time-start" step="60">
+                </div>
+                <div class="form-group">
+                  <label for="allowed-time-end">${escapeHtml(strings.labelAllowedTimeEnd)}</label>
+                  <input type="time" id="allowed-time-end" step="60">
+                </div>
+              </div>
+              <p class="note">${escapeHtml(strings.webviewAllowedTimeWindowNote)}</p>
+            </div>
+          </div>
+        </section>
+
+        <div class="surface form-actions">
+          <div class="button-group">
+            <button type="submit" class="btn-primary" id="submit-btn">${escapeHtml(strings.actionCreate)}</button>
+            <button type="button" class="btn-secondary" id="new-task-btn" style="display:none;">${escapeHtml(strings.actionNewTask)}</button>
+            <button type="button" class="btn-danger" id="edit-delete-btn" style="display:none;">${escapeHtml(strings.actionDelete)}</button>
+            <button type="button" class="btn-secondary" id="test-btn">${escapeHtml(strings.actionTestRun)}</button>
+          </div>
+        </div>
+      </form>
+    </div>
+    
+    <div id="list-tab" class="tab-content">
+      <div id="success-toast" class="feedback-banner feedback-banner-success" style="display:none;"></div>
+      <div class="page-header">
+        <div class="page-title-block">
+          <h1>${escapeHtml(strings.tabList)}</h1>
+          <p>${escapeHtml(strings.listSubtitle)}</p>
+        </div>
+        <div class="list-toolbar">
+          <button type="button" class="btn-primary" id="open-create-btn">${escapeHtml(strings.actionNewTask)}</button>
+          <button type="button" class="btn-secondary" id="refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div class="surface summary-card">
+          <span class="summary-label">${escapeHtml(strings.summaryTotalTasks)}</span>
+          <strong class="summary-value" id="summary-total">0</strong>
+        </div>
+        <div class="surface summary-card">
+          <span class="summary-label">${escapeHtml(strings.summaryEnabledTasks)}</span>
+          <strong class="summary-value" id="summary-enabled">0</strong>
+        </div>
+        <div class="surface summary-card">
+          <span class="summary-label">${escapeHtml(strings.summaryPausedTasks)}</span>
+          <strong class="summary-value" id="summary-paused">0</strong>
+        </div>
+      </div>
+      <div id="task-list" class="task-list">
+        <div class="surface empty-state">
+          <div class="empty-state-title">${escapeHtml(strings.noTasksFound)}</div>
+          <p class="empty-state-description">${escapeHtml(strings.emptyStateDescription)}</p>
+          <button type="button" class="btn-primary" data-open-create="true">${escapeHtml(strings.actionNewTask)}</button>
+        </div>
+      </div>
     </div>
   </div>
   

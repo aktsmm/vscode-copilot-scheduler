@@ -24,6 +24,7 @@ import type {
   CreateTaskInput,
   TaskAction,
   PromptSource,
+  PromptExecutionRequest,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -384,11 +385,7 @@ let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
 let executionHistorySaveQueue: Promise<void> = Promise.resolve();
 
-type PromptExecutionPayload = {
-  prompt: string;
-  agent?: string;
-  model?: string;
-};
+type PromptExecutionPayload = PromptExecutionRequest;
 
 type ManualRunFailureResult = {
   ok: false;
@@ -550,6 +547,22 @@ export function activate(context: vscode.ExtensionContext): void {
   scheduleManager = new ScheduleManager(context);
   copilotExecutor = new CopilotExecutor();
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
+  void CopilotExecutor.getAvailableModelsWithSource()
+    .then(async ({ models, source }) => {
+      const healed = await scheduleManager.healTaskModelSelections(models);
+      if (healed > 0) {
+        logDebug(
+          `[CopilotScheduler] Healed ${healed} task model selection(s) from ${source} model catalog`,
+        );
+      }
+    })
+    .catch((error) => {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+      logDebug(
+        `[CopilotScheduler] Failed to run startup model healing: ${sanitizeErrorDetailsForLog(errorMessage)}`,
+      );
+    });
   scheduleManager.addOnTasksChangedCallback(() => {
     SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
   });
@@ -977,6 +990,10 @@ async function resolvePromptExecution(
     prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
     agent: resolveExecutionOption(task.agent, parsed.agent),
     model: resolveExecutionOption(task.model, parsed.model),
+    modelName: task.modelName,
+    modelVendor: task.modelVendor,
+    modelFamily: task.modelFamily,
+    modelVersion: task.modelVersion,
   };
 }
 
@@ -1284,15 +1301,20 @@ function registerCreateTaskCommand(): vscode.Disposable {
 }
 
 async function handleTestPromptAction(
-  prompt: string,
-  agent?: string,
-  model?: string,
+  request: PromptExecutionRequest,
 ): Promise<void> {
   // Test prompt execution
   // executePrompt already shows a user-facing warning with copy-to-clipboard
   // on failure, so we only log the error here to avoid double notification (U20).
   try {
-    await copilotExecutor.executePrompt(prompt, { agent, model });
+    await copilotExecutor.executePrompt(request.prompt, {
+      agent: request.agent,
+      model: request.model,
+      modelName: request.modelName,
+      modelVendor: request.modelVendor,
+      modelFamily: request.modelFamily,
+      modelVersion: request.modelVersion,
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);

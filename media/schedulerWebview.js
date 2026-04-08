@@ -300,6 +300,10 @@
   var editingTaskId = null;
   var pendingAgentValue = "";
   var pendingModelValue = "";
+  var pendingModelName = "";
+  var pendingModelVendor = "";
+  var pendingModelFamily = "";
+  var pendingModelVersion = "";
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
   var editingTaskCanDelete = false;
@@ -360,6 +364,10 @@
   var cronPreviewText = document.getElementById("cron-preview-text");
   var newTaskBtn = document.getElementById("new-task-btn");
   var editDeleteBtn = document.getElementById("edit-delete-btn");
+  var openCreateBtn = document.getElementById("open-create-btn");
+  var summaryTotal = document.getElementById("summary-total");
+  var summaryEnabled = document.getElementById("summary-enabled");
+  var summaryPaused = document.getElementById("summary-paused");
 
   function normalizeWorkspacePath(p) {
     if (!p) return "";
@@ -429,6 +437,20 @@
     if (targetContent) targetContent.classList.add("active");
   }
 
+  function openCreateTaskForm() {
+    clearPendingSubmitState();
+    resetForm();
+    switchTab("create");
+    try {
+      var taskNameEl = document.getElementById("task-name");
+      if (taskNameEl && typeof taskNameEl.focus === "function") {
+        taskNameEl.focus();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
   // Keep pending values in sync when the user explicitly changes selection
   if (agentSelect) {
     agentSelect.addEventListener("change", function () {
@@ -438,6 +460,10 @@
   if (modelSelect) {
     modelSelect.addEventListener("change", function () {
       pendingModelValue = "";
+      pendingModelName = "";
+      pendingModelVendor = "";
+      pendingModelFamily = "";
+      pendingModelVersion = "";
     });
   }
   if (templateSelect) {
@@ -467,6 +493,19 @@
     var tabName = button.getAttribute("data-tab");
     if (tabName) {
       switchTab(tabName);
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    var el =
+      e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    while (el && el !== document.body) {
+      if (el.getAttribute && el.getAttribute("data-open-create") === "true") {
+        e.preventDefault();
+        openCreateTaskForm();
+        return;
+      }
+      el = el.parentElement;
     }
   });
 
@@ -578,6 +617,41 @@
       if (editingTaskId && !modelValue && pendingModelValue) {
         modelValue = pendingModelValue;
       }
+      var selectedModelOption = null;
+      if (modelSelect && modelSelect.selectedIndex >= 0) {
+        selectedModelOption =
+          modelSelect.options[modelSelect.selectedIndex] || null;
+      }
+      var modelNameValue =
+        selectedModelOption && selectedModelOption.dataset
+          ? selectedModelOption.dataset.modelName || ""
+          : "";
+      var modelVendorValue =
+        selectedModelOption && selectedModelOption.dataset
+          ? selectedModelOption.dataset.modelVendor || ""
+          : "";
+      var modelFamilyValue =
+        selectedModelOption && selectedModelOption.dataset
+          ? selectedModelOption.dataset.modelFamily || ""
+          : "";
+      var modelVersionValue =
+        selectedModelOption && selectedModelOption.dataset
+          ? selectedModelOption.dataset.modelVersion || ""
+          : "";
+      if (editingTaskId) {
+        if (!modelNameValue && pendingModelName) {
+          modelNameValue = pendingModelName;
+        }
+        if (!modelVendorValue && pendingModelVendor) {
+          modelVendorValue = pendingModelVendor;
+        }
+        if (!modelFamilyValue && pendingModelFamily) {
+          modelFamilyValue = pendingModelFamily;
+        }
+        if (!modelVersionValue && pendingModelVersion) {
+          modelVersionValue = pendingModelVersion;
+        }
+      }
       var promptPathValue = templateSelect ? templateSelect.value : "";
       if (
         promptSourceValue !== "inline" &&
@@ -594,6 +668,10 @@
         cronExpression: cronExpression ? cronExpression.value : "",
         agent: agentValue,
         model: modelValue,
+        modelName: modelNameValue,
+        modelVendor: modelVendorValue,
+        modelFamily: modelFamilyValue,
+        modelVersion: modelVersionValue,
         scope: scopeEl ? scopeEl.value : "workspace",
         promptSource: promptSourceValue,
         promptPath: promptPathValue,
@@ -742,6 +820,11 @@
       var prompt = promptTextEl ? promptTextEl.value : "";
       var agent = agentSelect ? agentSelect.value : "";
       var model = modelSelect ? modelSelect.value : "";
+      var selectedModelOption = null;
+      if (modelSelect && modelSelect.selectedIndex >= 0) {
+        selectedModelOption =
+          modelSelect.options[modelSelect.selectedIndex] || null;
+      }
       var normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
 
       if (!normalizedPrompt) {
@@ -754,6 +837,22 @@
         prompt: prompt,
         agent: agent,
         model: model,
+        modelName:
+          selectedModelOption && selectedModelOption.dataset
+            ? selectedModelOption.dataset.modelName || ""
+            : "",
+        modelVendor:
+          selectedModelOption && selectedModelOption.dataset
+            ? selectedModelOption.dataset.modelVendor || ""
+            : "",
+        modelFamily:
+          selectedModelOption && selectedModelOption.dataset
+            ? selectedModelOption.dataset.modelFamily || ""
+            : "",
+        modelVersion:
+          selectedModelOption && selectedModelOption.dataset
+            ? selectedModelOption.dataset.modelVersion || ""
+            : "",
       });
     });
   }
@@ -844,9 +943,22 @@
     if (!taskList || !taskList.isConnected) {
       taskList = document.getElementById("task-list");
     }
-    if (!taskList) return;
 
     var taskItems = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+    var enabledCount = taskItems.filter(function (task) {
+      return task && task.enabled;
+    }).length;
+    if (summaryTotal) {
+      summaryTotal.textContent = String(taskItems.length);
+    }
+    if (summaryEnabled) {
+      summaryEnabled.textContent = String(enabledCount);
+    }
+    if (summaryPaused) {
+      summaryPaused.textContent = String(taskItems.length - enabledCount);
+    }
+    if (!taskList) return;
+
     var renderedTasks = "";
 
     function captureTaskGroupOpenState() {
@@ -881,6 +993,52 @@
       return parts.length ? parts[parts.length - 1] || "" : s;
     }
 
+    function buildEmptyState() {
+      return (
+        '<div class="surface empty-state">' +
+        '<div class="empty-state-title">' +
+        escapeHtml(strings.noTasksFound || "") +
+        "</div>" +
+        '<p class="empty-state-description">' +
+        escapeHtml(strings.emptyStateDescription || "") +
+        "</p>" +
+        '<button type="button" class="btn-primary" data-open-create="true">' +
+        escapeHtml(strings.actionNewTask || "") +
+        "</button>" +
+        "</div>"
+      );
+    }
+
+    function getPromptSourceLabel(task) {
+      var promptSourceValue =
+        task && task.promptSource ? task.promptSource : "inline";
+      if (promptSourceValue === "local") {
+        return strings.labelPromptLocal || "";
+      }
+      if (promptSourceValue === "global") {
+        return strings.labelPromptGlobal || "";
+      }
+      return strings.labelPromptInline || "";
+    }
+
+    function buildSection(title, count, content) {
+      return (
+        '<section class="task-section">' +
+        '<div class="task-section-header">' +
+        '<h2 class="task-section-title">' +
+        escapeHtml(title) +
+        "</h2>" +
+        '<span class="task-section-count">' +
+        escapeHtml(String(count)) +
+        "</span>" +
+        "</div>" +
+        '<div class="task-group-inner">' +
+        content.join("") +
+        "</div>" +
+        "</section>"
+      );
+    }
+
     function buildTaskCard(task) {
       if (!task || !task.id) {
         return null;
@@ -889,20 +1047,25 @@
       var enabled = task.enabled || false;
       var statusClass = enabled ? "enabled" : "disabled";
       var statusText = enabled ? strings.labelEnabled : strings.labelDisabled;
-      var toggleIcon = enabled ? "⏸️" : "▶️";
       var toggleTitle = enabled ? strings.actionDisable : strings.actionEnable;
       var nextRunDate = task.nextRun ? new Date(task.nextRun) : null;
       var nextRun =
         nextRunDate && !isNaN(nextRunDate.getTime())
           ? nextRunDate.toLocaleString(locale)
           : strings.labelNever;
+      var lastRunDate = task.lastRun ? new Date(task.lastRun) : null;
+      var lastRun =
+        lastRunDate && !isNaN(lastRunDate.getTime())
+          ? lastRunDate.toLocaleString(locale)
+          : strings.labelNever;
       var promptText = typeof task.prompt === "string" ? task.prompt : "";
       var promptPreview =
-        promptText.length > 100
-          ? promptText.substring(0, 100) + "..."
+        promptText.length > 180
+          ? promptText.substring(0, 180) + "..."
           : promptText;
       var cronText = escapeHtml(task.cronExpression || "");
       var taskName = escapeHtml(task.name || "");
+      var promptSourceLabel = getPromptSourceLabel(task);
 
       var scopeValue = task.scope || "workspace";
       var scopeLabel =
@@ -922,10 +1085,8 @@
       var thisWsLabel = strings.labelThisWorkspaceShort || "";
       var scopeInfo =
         scopeValue === "global"
-          ? "🌐 " + escapeHtml(scopeLabel)
-          : "📁 " +
-            escapeHtml(scopeLabel) +
-            (wsName ? " • " + escapeHtml(wsName) : "");
+          ? escapeHtml(scopeLabel)
+          : escapeHtml(scopeLabel) + (wsName ? " • " + escapeHtml(wsName) : "");
       if (scopeValue === "workspace") {
         scopeInfo +=
           " • " + escapeHtml(inThisWorkspace ? thisWsLabel : otherWsLabel);
@@ -937,61 +1098,97 @@
       var timeEnd = task.allowedTimeEnd || "";
       var timeWindowInfo =
         timeStart || timeEnd
-          ? "🕒 " +
-            escapeHtml(strings.labelAllowedTimeWindow || "") +
+          ? escapeHtml(strings.labelAllowedTimeWindow || "") +
             ": " +
             escapeHtml((timeStart || "--:--") + " - " + (timeEnd || "--:--"))
           : "";
 
-      // Escape for HTML attributes to avoid broken inline handlers
       var taskIdEscaped = escapeAttr(task.id || "");
 
       var actionsHtml =
-        '<button class="btn-secondary btn-icon" data-action="toggle" data-id="' +
+        '<button type="button" class="btn-primary action-chip" data-action="run" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionRun) +
+        '">' +
+        escapeHtml(strings.actionRun) +
+        "</button>" +
+        '<button type="button" class="btn-secondary action-chip" data-action="edit" data-id="' +
+        taskIdEscaped +
+        '" title="' +
+        escapeAttr(strings.actionEdit) +
+        '">' +
+        escapeHtml(strings.actionEdit) +
+        "</button>" +
+        '<button type="button" class="btn-secondary action-chip" data-action="toggle" data-id="' +
         taskIdEscaped +
         '" title="' +
         escapeAttr(toggleTitle) +
         '">' +
-        toggleIcon +
+        escapeHtml(toggleTitle) +
         "</button>" +
-        '<button class="btn-secondary btn-icon" data-action="run" data-id="' +
-        taskIdEscaped +
-        '" title="' +
-        escapeAttr(strings.actionRun) +
-        '">🚀</button>' +
-        '<button class="btn-secondary btn-icon" data-action="edit" data-id="' +
-        taskIdEscaped +
-        '" title="' +
-        escapeAttr(strings.actionEdit) +
-        '">✏️</button>' +
-        '<button class="btn-secondary btn-icon" data-action="copy" data-id="' +
+        '<button type="button" class="btn-secondary action-chip" data-action="copy" data-id="' +
         taskIdEscaped +
         '" title="' +
         escapeAttr(strings.actionCopyPrompt) +
-        '">📋</button>' +
-        '<button class="btn-secondary btn-icon" data-action="duplicate" data-id="' +
+        '">' +
+        escapeHtml(strings.actionCopyPrompt) +
+        "</button>" +
+        '<button type="button" class="btn-secondary action-chip" data-action="duplicate" data-id="' +
         taskIdEscaped +
         '" title="' +
         escapeAttr(strings.actionDuplicate) +
-        '">📄</button>';
+        '">' +
+        escapeHtml(strings.actionDuplicate) +
+        "</button>";
 
       if (scopeValue === "workspace" && !inThisWorkspace) {
         actionsHtml +=
-          '<button class="btn-secondary btn-icon" data-action="move" data-id="' +
+          '<button type="button" class="btn-secondary action-chip" data-action="move" data-id="' +
           taskIdEscaped +
           '" title="' +
           escapeAttr(strings.actionMoveToCurrentWorkspace || "") +
-          '">📌</button>';
+          '">' +
+          escapeHtml(strings.actionMoveToCurrentWorkspace || "") +
+          "</button>";
       }
 
       if (scopeValue === "global" || inThisWorkspace) {
         actionsHtml +=
-          '<button class="btn-danger btn-icon" data-action="delete" data-id="' +
+          '<button type="button" class="btn-danger action-chip" data-action="delete" data-id="' +
           taskIdEscaped +
           '" title="' +
           escapeAttr(strings.actionDelete) +
-          '">🗑️</button>';
+          '">' +
+          escapeHtml(strings.actionDelete) +
+          "</button>";
       }
+
+      var metaHtml =
+        "<span>⏰ " +
+        cronText +
+        "</span>" +
+        "<span>" +
+        escapeHtml(strings.labelLastRun) +
+        ": " +
+        escapeHtml(lastRun) +
+        "</span>" +
+        "<span>" +
+        escapeHtml(strings.labelPromptType) +
+        ": " +
+        escapeHtml(promptSourceLabel) +
+        "</span>" +
+        (hasTaskDailyLimit
+          ? "<span>" +
+            escapeHtml(strings.labelMaxExecutionsPerDay || "") +
+            ": " +
+            escapeHtml(String(taskDailyLimit)) +
+            "</span>"
+          : "") +
+        (timeWindowInfo ? "<span>" + timeWindowInfo + "</span>" : "") +
+        "<span>" +
+        scopeInfo +
+        "</span>";
 
       var html =
         '<div class="task-card ' +
@@ -1003,39 +1200,34 @@
         taskIdEscaped +
         '">' +
         '<div class="task-header">' +
-        '<span class="task-name clickable" data-action="toggle" data-id="' +
+        '<div class="task-header-main">' +
+        '<button type="button" class="task-title-button task-name" data-action="edit" data-id="' +
         taskIdEscaped +
         '">' +
         taskName +
-        "</span>" +
+        "</button>" +
+        '<div class="task-status-row">' +
         '<span class="task-status ' +
         statusClass +
-        '" data-action="toggle" data-id="' +
-        taskIdEscaped +
         '">' +
         escapeHtml(statusText) +
         "</span>" +
+        '<span class="scope-badge">' +
+        escapeHtml(scopeLabel) +
+        "</span>" +
+        "</div>" +
+        "</div>" +
+        '<div class="task-next-run">' +
+        '<span class="task-next-run-label">' +
+        escapeHtml(strings.labelNextRun) +
+        "</span>" +
+        "<strong>" +
+        escapeHtml(nextRun) +
+        "</strong>" +
+        "</div>" +
         "</div>" +
         '<div class="task-info">' +
-        "<span>⏰ " +
-        cronText +
-        "</span>" +
-        "<span>" +
-        escapeHtml(strings.labelNextRun) +
-        ": " +
-        escapeHtml(nextRun) +
-        "</span>" +
-        (hasTaskDailyLimit
-          ? "<span>🔢 " +
-            escapeHtml(strings.labelMaxExecutionsPerDay || "") +
-            ": " +
-            escapeHtml(String(taskDailyLimit)) +
-            "</span>"
-          : "") +
-        (timeWindowInfo ? "<span>" + timeWindowInfo + "</span>" : "") +
-        "<span>" +
-        scopeInfo +
-        "</span>" +
+        metaHtml +
         "</div>" +
         '<div class="task-prompt">' +
         escapeHtml(promptPreview) +
@@ -1052,10 +1244,7 @@
     }
 
     if (taskItems.length === 0) {
-      renderedTasks =
-        '<div class="empty-state">' +
-        escapeHtml(strings.noTasksFound) +
-        "</div>";
+      renderedTasks = buildEmptyState();
     } else {
       var thisWorkspaceCards = [];
       var globalCards = [];
@@ -1077,7 +1266,13 @@
         globalCards.push(card.html);
       });
 
-      renderedTasks = thisWorkspaceCards.join("");
+      if (thisWorkspaceCards.length > 0) {
+        renderedTasks += buildSection(
+          strings.labelThisWorkspaceShort || strings.labelScopeWorkspace || "",
+          thisWorkspaceCards.length,
+          thisWorkspaceCards,
+        );
+      }
 
       if (globalCards.length > 0) {
         var globalSectionLabel = strings.labelScopeGlobal || "";
@@ -1124,10 +1319,7 @@
       }
 
       if (!renderedTasks) {
-        renderedTasks =
-          '<div class="empty-state">' +
-          escapeHtml(strings.noTasksFound) +
-          "</div>";
+        renderedTasks = buildEmptyState();
       }
     }
 
@@ -1456,6 +1648,10 @@
     clearTemplateLoading();
     pendingAgentValue = "";
     pendingModelValue = "";
+    pendingModelName = "";
+    pendingModelVendor = "";
+    pendingModelFamily = "";
+    pendingModelVersion = "";
     pendingTemplatePath = "";
     editingTaskEnabled = true;
     applyPromptSource("inline");
@@ -1521,6 +1717,14 @@
             return (
               '<option value="' +
               escapeAttr(m.id) +
+              '" data-model-name="' +
+              escapeAttr(m.name || "") +
+              '" data-model-vendor="' +
+              escapeAttr(m.vendor || "") +
+              '" data-model-family="' +
+              escapeAttr(m.family || "") +
+              '" data-model-version="' +
+              escapeAttr(m.version || "") +
               '">' +
               escapeHtml(m.name) +
               "</option>"
@@ -1624,6 +1828,43 @@
     return false;
   }
 
+  function trySelectModelOptionBySelection(selectEl, selection) {
+    if (!selectEl || !selection) return false;
+    var targetId = String(selection.model || "");
+    var targetVendor = String(selection.modelVendor || "");
+    var targetFamily = String(selection.modelFamily || "");
+    var targetVersion = String(selection.modelVersion || "");
+
+    var options = selectEl.options;
+    if (!options || typeof options.length !== "number") return false;
+
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i];
+      if (!option) continue;
+      if (String(option.value || "") !== targetId) continue;
+
+      var optionVendor = option.dataset ? option.dataset.modelVendor || "" : "";
+      var optionFamily = option.dataset ? option.dataset.modelFamily || "" : "";
+      var optionVersion = option.dataset
+        ? option.dataset.modelVersion || ""
+        : "";
+
+      if (targetVendor && optionVendor !== targetVendor) continue;
+      if (targetFamily && optionFamily !== targetFamily) continue;
+      if (targetVersion && optionVersion !== targetVersion) continue;
+
+      selectEl.selectedIndex = i;
+      return true;
+    }
+
+    if (!targetId) {
+      return false;
+    }
+
+    selectEl.value = targetId;
+    return selectEl.value === targetId;
+  }
+
   window.editTask = function (id) {
     var taskListArray = Array.isArray(tasks) ? tasks : [];
     var task = taskListArray.find(function (t) {
@@ -1646,6 +1887,10 @@
     // Restore agent/model — if options not loaded yet, store as pending
     pendingAgentValue = task.agent || "";
     pendingModelValue = task.model || "";
+    pendingModelName = task.modelName || "";
+    pendingModelVendor = task.modelVendor || "";
+    pendingModelFamily = task.modelFamily || "";
+    pendingModelVersion = task.modelVersion || "";
     if (agentSelect) {
       if (
         pendingAgentValue &&
@@ -1659,14 +1904,25 @@
       }
     }
     if (modelSelect) {
-      if (
-        pendingModelValue &&
-        selectHasOptionValue(modelSelect, pendingModelValue)
-      ) {
-        modelSelect.value = pendingModelValue;
+      if (pendingModelValue) {
+        var restoredModelOption = trySelectModelOptionBySelection(modelSelect, {
+          model: pendingModelValue,
+          modelVendor: pendingModelVendor,
+          modelFamily: pendingModelFamily,
+          modelVersion: pendingModelVersion,
+        });
+        if (restoredModelOption) {
+          pendingModelValue = "";
+          pendingModelName = "";
+          pendingModelVendor = "";
+          pendingModelFamily = "";
+          pendingModelVersion = "";
+        } else {
+          modelSelect.value = "";
+        }
+      }
+      if (!pendingModelValue) {
         pendingModelValue = "";
-      } else if (pendingModelValue) {
-        modelSelect.value = "";
       }
     }
     editingTaskEnabled = task.enabled !== false;
@@ -1736,16 +1992,13 @@
 
   if (newTaskBtn) {
     newTaskBtn.addEventListener("click", function () {
-      resetForm();
-      switchTab("create");
-      try {
-        var taskNameEl = document.getElementById("task-name");
-        if (taskNameEl && typeof taskNameEl.focus === "function") {
-          taskNameEl.focus();
-        }
-      } catch (e) {
-        // ignore
-      }
+      openCreateTaskForm();
+    });
+  }
+
+  if (openCreateBtn) {
+    openCreateBtn.addEventListener("click", function () {
+      openCreateTaskForm();
     });
   }
 
@@ -1831,14 +2084,46 @@
           {
             var currentModelValue =
               pendingModelValue || (modelSelect ? modelSelect.value : "");
+            var currentModelVendor = pendingModelVendor;
+            var currentModelFamily = pendingModelFamily;
+            var currentModelVersion = pendingModelVersion;
+            if (modelSelect && modelSelect.selectedIndex >= 0) {
+              var selectedModelOption =
+                modelSelect.options[modelSelect.selectedIndex];
+              if (selectedModelOption && selectedModelOption.dataset) {
+                currentModelVendor =
+                  currentModelVendor ||
+                  selectedModelOption.dataset.modelVendor ||
+                  "";
+                currentModelFamily =
+                  currentModelFamily ||
+                  selectedModelOption.dataset.modelFamily ||
+                  "";
+                currentModelVersion =
+                  currentModelVersion ||
+                  selectedModelOption.dataset.modelVersion ||
+                  "";
+              }
+            }
             models = Array.isArray(message.models) ? message.models : [];
             updateModelOptions();
             if (modelSelect && currentModelValue) {
-              modelSelect.value = currentModelValue;
-              if (modelSelect.value === currentModelValue) {
+              var restored = trySelectModelOptionBySelection(modelSelect, {
+                model: currentModelValue,
+                modelVendor: currentModelVendor,
+                modelFamily: currentModelFamily,
+                modelVersion: currentModelVersion,
+              });
+              if (restored) {
                 pendingModelValue = "";
+                pendingModelVendor = "";
+                pendingModelFamily = "";
+                pendingModelVersion = "";
               } else {
                 pendingModelValue = currentModelValue;
+                pendingModelVendor = currentModelVendor;
+                pendingModelFamily = currentModelFamily;
+                pendingModelVersion = currentModelVersion;
               }
             }
           }
@@ -1950,19 +2235,7 @@
           }
           break;
         case "startCreateTask":
-          clearPendingSubmitState();
-          resetForm();
-          switchTab("create");
-          setTimeout(function () {
-            try {
-              var taskNameEl = document.getElementById("task-name");
-              if (taskNameEl && typeof taskNameEl.focus === "function") {
-                taskNameEl.focus();
-              }
-            } catch (e) {
-              // ignore
-            }
-          }, 0);
+          openCreateTaskForm();
           break;
         case "showError":
           var rawText =

@@ -7,11 +7,25 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { parseExpression } from "cron-parser";
-import type { ScheduledTask, CreateTaskInput, TaskScope } from "./types";
+import type {
+  ScheduledTask,
+  CreateTaskInput,
+  TaskScope,
+  ModelInfo,
+  ModelSelectionFields,
+} from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { selectTaskStore } from "./taskStoreSelection";
+import {
+  areModelSelectionsEqual,
+  findBestMatchingModel,
+  hasModelSelection,
+  modelInfoToSelection,
+  normalizeModelSelection,
+  type NormalizedModelSelection,
+} from "./modelSelection";
 import {
   normalizeForCompare,
   resolveGlobalPromptPath,
@@ -154,6 +168,23 @@ export const __testOnly = {
   normalizeTimeWindowHHMM,
   isNowWithinAllowedTimeWindow,
 };
+
+function applyModelSelectionToTask(
+  target: ModelSelectionFields,
+  selection: NormalizedModelSelection,
+): boolean {
+  const normalizedSelection = normalizeModelSelection(selection);
+  if (areModelSelectionsEqual(target, normalizedSelection)) {
+    return false;
+  }
+
+  target.model = normalizedSelection.model;
+  target.modelName = normalizedSelection.modelName;
+  target.modelVendor = normalizedSelection.modelVendor;
+  target.modelFamily = normalizedSelection.modelFamily;
+  target.modelVersion = normalizedSelection.modelVersion;
+  return true;
+}
 
 /**
  * Manages scheduled tasks including CRUD operations, cron parsing, and persistence
@@ -812,6 +843,14 @@ export class ScheduleManager {
         }
       }
 
+      {
+        const normalizedModelSelection = normalizeModelSelection(task);
+        if (!areModelSelectionsEqual(task, normalizedModelSelection)) {
+          applyModelSelectionToTask(task, normalizedModelSelection);
+          needsSave = true;
+        }
+      }
+
       // Migration: preserve undefined jitterSeconds so configured defaults
       // continue to apply for legacy tasks.
       if (task.jitterSeconds !== undefined) {
@@ -1195,7 +1234,7 @@ export class ScheduleManager {
       prompt: input.prompt,
       enabled,
       agent: input.agent,
-      model: input.model,
+      ...normalizeModelSelection(input),
       scope: effectiveScope,
       workspacePath: effectiveScope === "workspace" ? workspaceRoot : undefined,
       promptSource: input.promptSource || "inline",
@@ -1234,6 +1273,39 @@ export class ScheduleManager {
    */
   getAllTasks(): ScheduledTask[] {
     return Array.from(this.tasks.values());
+  }
+
+  async healTaskModelSelections(
+    availableModels: readonly ModelInfo[],
+  ): Promise<number> {
+    const selectableModels = availableModels.filter(
+      (model) =>
+        !!model && typeof model.id === "string" && model.id.trim().length > 0,
+    );
+    if (selectableModels.length === 0) {
+      return 0;
+    }
+
+    let changed = 0;
+    for (const task of this.tasks.values()) {
+      const currentSelection = normalizeModelSelection(task);
+      if (!hasModelSelection(currentSelection)) {
+        continue;
+      }
+
+      const matched = findBestMatchingModel(currentSelection, selectableModels);
+      const nextSelection = matched ? modelInfoToSelection(matched) : {};
+      if (applyModelSelectionToTask(task, nextSelection)) {
+        task.updatedAt = new Date();
+        changed += 1;
+      }
+    }
+
+    if (changed > 0) {
+      await this.saveTasks();
+    }
+
+    return changed;
   }
 
   /**
@@ -1324,8 +1396,30 @@ export class ScheduleManager {
     if (updates.agent !== undefined) {
       task.agent = updates.agent;
     }
-    if (updates.model !== undefined) {
-      task.model = updates.model;
+    if (
+      updates.model !== undefined ||
+      updates.modelName !== undefined ||
+      updates.modelVendor !== undefined ||
+      updates.modelFamily !== undefined ||
+      updates.modelVersion !== undefined
+    ) {
+      applyModelSelectionToTask(task, {
+        model: updates.model !== undefined ? updates.model : task.model,
+        modelName:
+          updates.modelName !== undefined ? updates.modelName : task.modelName,
+        modelVendor:
+          updates.modelVendor !== undefined
+            ? updates.modelVendor
+            : task.modelVendor,
+        modelFamily:
+          updates.modelFamily !== undefined
+            ? updates.modelFamily
+            : task.modelFamily,
+        modelVersion:
+          updates.modelVersion !== undefined
+            ? updates.modelVersion
+            : task.modelVersion,
+      });
     }
     if (updates.scope !== undefined) {
       const nextScope = updates.scope;
@@ -1491,6 +1585,10 @@ export class ScheduleManager {
       enabled: false, // Start disabled
       agent: original.agent,
       model: original.model,
+      modelName: original.modelName,
+      modelVendor: original.modelVendor,
+      modelFamily: original.modelFamily,
+      modelVersion: original.modelVersion,
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,
