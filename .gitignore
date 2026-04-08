@@ -12,7 +12,9 @@ Thumbs.db
 output_sessions/
 
 # Development files
-.github/
+.github/*
+!.github/workflows/
+!.github/workflows/**
 .github/temp/
 .github/agents/
 .github/skills/

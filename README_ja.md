@@ -136,6 +136,15 @@ AI が適用した編集を遅延後に自動で保持するには、VS Code 設
 - VS Code 1.80.0 以上
 - GitHub Copilot 拡張機能
 
+## 🛠️ リリース自動化
+
+メンテナーはローカルで `vsce publish` を実行しなくても、GitHub Actions から公開できます。
+
+- `package.json` の version を更新した後、同じ番号の `vX.Y.Z` タグを push します。
+- GitHub Actions が `npm ci`、`npm run compile`、`npm test`、`.vsix` 作成、VS Code Marketplace 公開、GitHub Release への `.vsix` 添付まで実行します。
+- タグを切らずに公開したい場合は、Actions タブの `Publish Extension` workflow から現在の `package.json` version を手動公開できます。
+- 利用前に repository secret `VSCE_PAT` を設定してください。
+
 ## ⚠️ 既知の問題
 
 - Copilot Chat API は開発中のため、API の安定化に伴い更新が必要になる場合があります

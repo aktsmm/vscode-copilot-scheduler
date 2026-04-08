@@ -1,0 +1,104 @@
+name: Publish Extension
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the current package.json version to VS Code Marketplace
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-extension-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Read package version
+        id: meta
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Failed to read package.json version."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          "artifact=copilot-scheduler-$version.vsix" >> $env:GITHUB_OUTPUT
+
+      - name: Validate tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $expectedRef = "refs/tags/${{ steps.meta.outputs.tag }}"
+          if ("${{ github.ref }}" -ne $expectedRef) {
+            throw "Tag '${{ github.ref }}' does not match package.json version '${{ steps.meta.outputs.version }}'. Expected '$expectedRef'."
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Package VSIX
+        shell: pwsh
+        run: |
+          npx @vscode/vsce package --out "${{ steps.meta.outputs.artifact }}"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ steps.meta.outputs.version }}
+          path: ${{ steps.meta.outputs.artifact }}
+          if-no-files-found: error
+
+      - name: Ensure marketplace secret is configured
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        shell: pwsh
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:VSCE_PAT)) {
+            throw "Repository secret VSCE_PAT is required to publish to VS Code Marketplace."
+          }
+
+      - name: Publish to VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        shell: pwsh
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          npx @vscode/vsce publish -p "$env:VSCE_PAT"
+
+      - name: Create GitHub release with VSIX
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.meta.outputs.artifact }}
+          generate_release_notes: true

@@ -127,6 +127,15 @@ This follows current Copilot custom agent and Copilot CLI file locations, but th
 - VS Code 1.80.0 or higher
 - GitHub Copilot extension
 
+## 🛠️ Release Automation
+
+Maintainers can publish from GitHub Actions instead of running `vsce publish` locally.
+
+- Push a tag in the form `vX.Y.Z` after updating `package.json` to the same version.
+- GitHub Actions runs `npm ci`, `npm run compile`, `npm test`, packages a `.vsix`, publishes to VS Code Marketplace, and attaches the `.vsix` to the GitHub release.
+- For ad-hoc publishing, use the `Publish Extension` workflow from the Actions tab to publish the current `package.json` version manually.
+- Add the repository secret `VSCE_PAT` before using the workflow.
+
 ## ⚠️ Known Issues
 
 - Copilot Chat API is still evolving; some features may require updates as the API stabilizes
