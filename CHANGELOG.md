@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.27] - 2026-04-08
+
+### Added
+
+- **Marketplace release automation**: Added a GitHub Actions workflow that builds, tests, packages, and publishes the extension on `vX.Y.Z` tags or manual workflow dispatch.
+- **Model selection metadata**: Task execution requests and persisted scheduled tasks now retain model name, vendor, family, and version fields to improve matching across environments.
+
+### Improved
+
+- **Global custom agent discovery**: Global custom agents can now be discovered from both the VS Code user prompts folder and `~/.copilot/agents`.
+- **Webview task management UI**: The scheduler Webview now uses sectioned create/edit forms, task list summaries, clearer task cards, and more explicit action labels.
+- **Model healing on startup**: Saved model selections are normalized and healed against the currently available model catalog to reduce stale model references.
+
 ## [1.0.24] - 2026-03-01
 
 ### Fixed
