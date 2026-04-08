@@ -20,7 +20,9 @@ import {
   areModelSelectionsEqual,
   findBestMatchingModel,
   hasModelSelection,
+  hasStrictModelVariantSelection,
   modelInfoToSelection,
+  normalizeModelCatalog,
   normalizeModelSelection,
   type NormalizedModelSelection,
 } from "./modelSelection";
@@ -146,6 +148,7 @@ function buildModelSelectorCandidates(
 ): Array<Record<string, string>> {
   const selectors: Array<Record<string, string>> = [];
   const seen = new Set<string>();
+  const hasStrictVariant = hasStrictModelVariantSelection(selection);
 
   const pushSelector = (candidate: {
     id?: string;
@@ -176,13 +179,16 @@ function buildModelSelectorCandidates(
       family: selection.modelFamily,
       version: selection.modelVersion,
     });
-    pushSelector({
-      id: selection.model,
-      vendor: selection.modelVendor,
-    });
-    pushSelector({
-      id: selection.model,
-    });
+    if (!selection.modelVersion) {
+      pushSelector({
+        id: selection.model,
+        vendor: selection.modelVendor,
+      });
+      pushSelector({
+        id: selection.model,
+      });
+    }
+    return selectors;
   }
 
   pushSelector({
@@ -190,17 +196,19 @@ function buildModelSelectorCandidates(
     family: selection.modelFamily,
     version: selection.modelVersion,
   });
-  pushSelector({
-    vendor: selection.modelVendor,
-    family: selection.modelFamily,
-  });
-  pushSelector({
-    family: selection.modelFamily,
-    version: selection.modelVersion,
-  });
-  pushSelector({
-    family: selection.modelFamily,
-  });
+  if (!hasStrictVariant) {
+    pushSelector({
+      vendor: selection.modelVendor,
+      family: selection.modelFamily,
+    });
+    pushSelector({
+      family: selection.modelFamily,
+      version: selection.modelVersion,
+    });
+    pushSelector({
+      family: selection.modelFamily,
+    });
+  }
 
   return selectors;
 }
@@ -727,7 +735,7 @@ export class CopilotExecutor {
           });
         }
 
-        return { models: modelInfos, source: "api" };
+        return { models: normalizeModelCatalog(modelInfos), source: "api" };
       }
     } catch (error) {
       // Language Model API may not be available
@@ -748,55 +756,13 @@ export class CopilotExecutor {
    * Get fallback model list
    */
   static getFallbackModels(): ModelInfo[] {
-    return [
+    return normalizeModelCatalog([
       {
         id: "",
         name: messages.modelDefaultName(),
         description: messages.modelDefaultDesc(),
         vendor: "",
       },
-      {
-        id: "gpt-4o",
-        name: "GPT-4o",
-        description: "OpenAI GPT-4o",
-        vendor: "",
-        family: "gpt-4o",
-      },
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        description: "OpenAI GPT-4o Mini",
-        vendor: "",
-        family: "gpt-4o-mini",
-      },
-      {
-        id: "o3-mini",
-        name: "o3-mini",
-        description: "OpenAI o3-mini",
-        vendor: "",
-        family: "o3-mini",
-      },
-      {
-        id: "claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        description: "Anthropic Claude Sonnet 4",
-        vendor: "",
-        family: "claude-sonnet-4",
-      },
-      {
-        id: "claude-3.5-sonnet",
-        name: "Claude 3.5 Sonnet",
-        description: "Anthropic Claude 3.5 Sonnet",
-        vendor: "",
-        family: "claude-3.5-sonnet",
-      },
-      {
-        id: "gemini-2.0-flash",
-        name: "Gemini 2.0 Flash",
-        description: "Google Gemini 2.0 Flash",
-        vendor: "",
-        family: "gemini-2.0-flash",
-      },
-    ];
+    ]);
   }
 }

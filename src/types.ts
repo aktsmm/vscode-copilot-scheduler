@@ -221,6 +221,9 @@ export interface ModelInfo {
   /** Display name */
   name: string;
 
+  /** Optional UI label used to disambiguate variants in pickers */
+  label?: string;
+
   /** Description */
   description: string;
 

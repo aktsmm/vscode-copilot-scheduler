@@ -810,6 +810,28 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("initial HTML model options use disambiguated labels and preserve raw metadata", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      'data-model-name="${escapeHtmlAttr(m.name || "")}"',
+      'data-model-vendor="${escapeHtmlAttr(m.vendor || "")}"',
+      'data-model-family="${escapeHtmlAttr(m.family || "")}"',
+      'data-model-version="${escapeHtmlAttr(m.version || "")}"',
+      'escapeHtml(m.label || m.name || "")',
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected initial model option token not found: ${token}`,
+      );
+    }
+  });
+
   test("renderTaskList updates summary counters and empty-state create CTA", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
@@ -866,6 +888,37 @@ suite("SchedulerWebview Script Contract Tests", () => {
       !renderSource.includes('task-name clickable" data-action="toggle"'),
       "Task title should no longer toggle enabled state directly.",
     );
+  });
+
+  test("updateModelOptions uses disambiguated labels and keeps raw model metadata", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const updateModelOptionsSource = extractBlockFromStartToken(
+      source,
+      "function updateModelOptions() {",
+    );
+
+    const expectedTokens = [
+      'data-model-name="',
+      'escapeAttr(m.name || "")',
+      'data-model-vendor="',
+      'escapeAttr(m.vendor || "")',
+      'data-model-family="',
+      'escapeAttr(m.family || "")',
+      'data-model-version="',
+      'escapeAttr(m.version || "")',
+      'escapeHtml(m.label || m.name || "")',
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(updateModelOptionsSource, token),
+        `Expected updateModelOptions token not found: ${token}`,
+      );
+    }
   });
 });
 

@@ -1749,7 +1749,7 @@ export class SchedulerWebview {
             <div class="form-group col-6">
               <label for="model-select">${escapeHtml(strings.labelModel)}</label>
               <select id="model-select">
-                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}">${escapeHtml(m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
+                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}" data-model-name="${escapeHtmlAttr(m.name || "")}" data-model-vendor="${escapeHtmlAttr(m.vendor || "")}" data-model-family="${escapeHtmlAttr(m.family || "")}" data-model-version="${escapeHtmlAttr(m.version || "")}">${escapeHtml(m.label || m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
               </select>
               <p class="note">${escapeHtml(strings.labelModelNote)}</p>
             </div>

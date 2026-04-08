@@ -1,5 +1,5 @@
 import * as assert from "assert";
-import { __testOnly } from "../../copilotExecutor";
+import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
   test("Converts slash-command agents without prefix", () => {
@@ -25,5 +25,27 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
   test("Trims and handles empty values", () => {
     assert.strictEqual(__testOnly.normalizeAgentPrefix("  /edit  "), "/edit");
     assert.strictEqual(__testOnly.normalizeAgentPrefix("   "), "");
+  });
+
+  test("strict variant selector candidates do not fall back to plain id", () => {
+    const selectors = __testOnly.buildModelSelectorCandidates({
+      model: "copilot-gpt-4o",
+      modelFamily: "gpt-4o",
+      modelVersion: "high",
+    });
+
+    assert.deepStrictEqual(selectors, [
+      {
+        id: "copilot-gpt-4o",
+        family: "gpt-4o",
+        version: "high",
+      },
+    ]);
+  });
+
+  test("fallback models only expose the default option", () => {
+    const models = CopilotExecutor.getFallbackModels();
+    assert.strictEqual(models.length, 1);
+    assert.strictEqual(models[0]?.id, "");
   });
 });

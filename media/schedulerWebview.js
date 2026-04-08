@@ -1726,7 +1726,7 @@
               '" data-model-version="' +
               escapeAttr(m.version || "") +
               '">' +
-              escapeHtml(m.name) +
+              escapeHtml(m.label || m.name || "") +
               "</option>"
             );
           })
@@ -1858,6 +1858,10 @@
     }
 
     if (!targetId) {
+      return false;
+    }
+
+    if (targetVendor || targetFamily || targetVersion) {
       return false;
     }
 
