@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.28] - 2026-04-09
+
+### Fixed
+
+- **Strict model variant selection**: Explicit model variants such as `high` and `low` are now selected only when that exact variant is available. The scheduler no longer silently falls back to a different variant.
+- **Model picker availability**: When the Language Model API cannot enumerate models, the Webview now shows only the default model option instead of static placeholder model entries that may not be selectable in the current environment.
+
+### Improved
+
+- **Model picker labels**: Duplicate model entries are collapsed, and same-name variants are rendered with disambiguated labels such as `GPT-4o (High)`.
+
 ## [1.0.27] - 2026-04-08
 
 ### Added
