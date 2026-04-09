@@ -22,6 +22,7 @@ import { logError } from "./logger";
 import { validateTemplateLoadRequest } from "./templateValidation";
 import { resolveGlobalPromptsRoot } from "./promptResolver";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { filterPickerModelCatalog } from "./modelSelection";
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 
@@ -578,13 +579,14 @@ export class SchedulerWebview {
 
     try {
       const result = await CopilotExecutor.getAvailableModelsWithSource();
+      const pickerModels = filterPickerModelCatalog(result.models);
       if (
         result.source === "fallback" &&
         this.hasResolvedModelCatalog(this.cachedModels)
       ) {
         this.cachedModels = this.localizeCachedModels(this.cachedModels);
       } else {
-        this.cachedModels = this.localizeCachedModels(result.models);
+        this.cachedModels = this.localizeCachedModels(pickerModels);
       }
     } catch {
       this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)

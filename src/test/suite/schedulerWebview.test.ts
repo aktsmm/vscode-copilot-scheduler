@@ -925,6 +925,26 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("webview refresh filters Copilot CLI models before populating picker data", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      'import { filterPickerModelCatalog } from "./modelSelection";',
+      "const pickerModels = filterPickerModelCatalog(result.models);",
+      "this.cachedModels = this.localizeCachedModels(pickerModels);",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected picker filter token not found: ${token}`,
+      );
+    }
+  });
+
   test("unresolved saved model selections remain visible in the webview", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

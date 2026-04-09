@@ -36,6 +36,14 @@ function normalizeKey(value: string | undefined): string {
     .replace(/^-|-$/g, "");
 }
 
+export function isCopilotCliModel(model: ModelInfo): boolean {
+  const values = [model.id, model.name, model.label, model.family];
+  return values.some(
+    (value) =>
+      typeof value === "string" && /copilot(?:[\s-]*)cli/iu.test(value),
+  );
+}
+
 function maybeStripDateSuffix(value: string): string | undefined {
   const stripped = value.replace(/-\d{4}(?:-\d{2}){2}$/u, "");
   return stripped && stripped !== value ? stripped : undefined;
@@ -77,7 +85,9 @@ function maybeStripNamedVariant(value: string): string | undefined {
   return stripped && stripped !== value ? stripped : undefined;
 }
 
-function normalizeNamedVariantLabel(value: string | undefined): string | undefined {
+function normalizeNamedVariantLabel(
+  value: string | undefined,
+): string | undefined {
   const trimmed = trimOptionalText(value);
   if (!trimmed) {
     return undefined;
@@ -657,6 +667,12 @@ export function normalizeModelCatalog(
   }));
 
   return uniquifyModelDisplayLabels(labeledModels);
+}
+
+export function filterPickerModelCatalog(
+  models: readonly ModelInfo[],
+): ModelInfo[] {
+  return models.filter((model) => !isCopilotCliModel(model));
 }
 
 export function hasModelSelection(

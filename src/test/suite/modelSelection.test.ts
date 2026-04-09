@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import {
+  filterPickerModelCatalog,
   findBestMatchingModel,
   normalizeModelCatalog,
 } from "../../modelSelection";
@@ -96,7 +97,7 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(match, undefined);
   });
 
-  test("normalizeModelCatalog strips provider suffix from base labels", () => {
+  test("normalizeModelCatalog keeps Copilot CLI variants for restore and healing", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-opus-4.6-copilot",
@@ -112,10 +113,36 @@ suite("Model Selection Catalog Tests", () => {
       },
     ]);
 
+    assert.strictEqual(catalog.length, 2);
     assert.deepStrictEqual(
       catalog.map((model) => model.label),
       ["Claude Opus 4.6 (Copilot)", "Claude Opus 4.6 (Copilotcli)"],
     );
+  });
+
+  test("filterPickerModelCatalog excludes Copilot CLI variants from the picker", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6-copilot",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "claude-opus-4.6-copilotcli-high",
+        name: "Claude Opus 4.6 High (Copilotcli)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    const pickerCatalog = filterPickerModelCatalog(catalog);
+
+    assert.strictEqual(catalog.length, 2);
+    assert.strictEqual(pickerCatalog.length, 1);
+    assert.strictEqual(pickerCatalog[0]?.id, "claude-opus-4.6-copilot");
   });
 
   test("findBestMatchingModel infers variant from display name when version is missing", () => {
@@ -188,10 +215,7 @@ suite("Model Selection Catalog Tests", () => {
 
     assert.deepStrictEqual(
       catalog.map((model) => model.label),
-      [
-        "Claude Opus 4.6 (2025-02-19)",
-        "Claude Opus 4.6 (2025-03-01)",
-      ],
+      ["Claude Opus 4.6 (2025-02-19)", "Claude Opus 4.6 (2025-03-01)"],
     );
   });
 
