@@ -1294,7 +1294,11 @@ export class ScheduleManager {
       }
 
       const matched = findBestMatchingModel(currentSelection, selectableModels);
-      const nextSelection = matched ? modelInfoToSelection(matched) : {};
+      if (!matched) {
+        continue;
+      }
+
+      const nextSelection = modelInfoToSelection(matched);
       if (applyModelSelectionToTask(task, nextSelection)) {
         task.updatedAt = new Date();
         changed += 1;

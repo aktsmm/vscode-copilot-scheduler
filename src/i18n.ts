@@ -326,6 +326,13 @@ export const messages = {
       "Model selection is a preview feature and may not apply in all environments. If needed, pick the model directly in the Copilot Chat panel.",
       "モデルの選択はプレビュー機能で、環境によって反映されない場合があります。Copilot Chat パネルのモデルも確認してください。",
     ),
+  labelModelUnavailableNote: () =>
+    t(
+      "The saved model is not in the current list and will be kept until you choose another model.",
+      "保存済みのモデルは現在の一覧にないため、別のモデルを選択するまで保持されます。",
+    ),
+  labelModelUnavailableSuffix: () =>
+    t("(saved, unavailable)", "（保存済み・現在利用不可）"),
   labelScope: () => t("Scope", "スコープ"),
   labelScopeGlobal: () =>
     t("Global (All Workspaces)", "グローバル（全ワークスペース）"),

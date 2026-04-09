@@ -48,4 +48,26 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     assert.strictEqual(models.length, 1);
     assert.strictEqual(models[0]?.id, "");
   });
+
+  test("legacy model picker candidates prefer disambiguated labels", () => {
+    const candidates = __testOnly.buildLegacyModelPickerCandidates(
+      {
+        id: "claude-opus-4.6-copilot-high",
+        name: "Claude Opus 4.6 High (Copilot)",
+        label: "Claude Opus 4.6 (High, Copilot)",
+        description: "",
+        vendor: "Anthropic",
+      },
+      {
+        model: "claude-opus-4.6-copilot-high",
+        modelName: "Claude Opus 4.6 High (Copilot)",
+      },
+    );
+
+    assert.deepStrictEqual(candidates, [
+      "Claude Opus 4.6 (High, Copilot)",
+      "Claude Opus 4.6 High (Copilot)",
+      "claude-opus-4.6-copilot-high",
+    ]);
+  });
 });

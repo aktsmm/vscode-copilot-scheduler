@@ -39,6 +39,58 @@ function maybeStripTrailingNumericVariant(value: string): string | undefined {
   return stripped && stripped !== value ? stripped : undefined;
 }
 
+function stripTrailingParenthesizedGroups(value: string): string {
+  return value.replace(/(?:\s*\([^()]*\))+\s*$/u, "").trim();
+}
+
+function extractTrailingParenthesizedDetail(
+  value: string | undefined,
+): string | undefined {
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const match = trimmed.match(/((?:\s*\([^()]*\))+)[\s]*$/u);
+  if (!match) {
+    return undefined;
+  }
+
+  const detail = match[1]
+    .replace(/\)\s*\(/g, ", ")
+    .replace(/[()]/g, "")
+    .trim();
+  return detail || undefined;
+}
+
+function maybeStripNamedVariant(value: string): string | undefined {
+  const stripped = value.replace(/(?:[-\s]+)(high|medium|low)$/iu, "").trim();
+  return stripped && stripped !== value ? stripped : undefined;
+}
+
+function extractNamedVariant(value: string | undefined): string | undefined {
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const withoutParens = stripTrailingParenthesizedGroups(trimmed);
+  const match = withoutParens.match(/(?:^|[-\s])(high|medium|low)$/iu);
+  return match ? formatModelDetail(match[1]) : undefined;
+}
+
+function canonicalizeModelDisplayName(
+  value: string | undefined,
+): string | undefined {
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const withoutParens = stripTrailingParenthesizedGroups(trimmed);
+  return maybeStripNamedVariant(withoutParens) || withoutParens;
+}
+
 function normalizeModelInfo(model: ModelInfo): ModelInfo {
   return {
     id: trimRequiredText(model.id),
@@ -62,7 +114,56 @@ function buildModelCatalogKey(model: ModelInfo): string {
 }
 
 function getModelGroupKey(model: ModelInfo): string {
-  return normalizeKey(model.name || model.id);
+  return normalizeKey(
+    canonicalizeModelDisplayName(model.name) ||
+      canonicalizeModelDisplayName(model.family) ||
+      model.id,
+  );
+}
+
+function getModelDetailCandidates(
+  model: ModelInfo,
+  groupedModels: readonly ModelInfo[],
+): string[] {
+  const hasDistinctVersions =
+    new Set(groupedModels.map((entry) => normalizeKey(entry.version))).size > 1;
+  const hasDistinctVendors =
+    new Set(groupedModels.map((entry) => normalizeKey(entry.vendor))).size > 1;
+
+  const detailCandidates = [
+    extractNamedVariant(model.name),
+    extractVariantTail(model.id, [model.family, model.name]),
+    extractVariantTail(model.family, [model.name]),
+    extractTrailingParenthesizedDetail(model.name),
+    hasDistinctVersions ? model.version : undefined,
+    hasDistinctVendors ? model.vendor : undefined,
+    groupedModels.length > 1 ? model.id : undefined,
+  ];
+
+  const details: string[] = [];
+  const seen = new Set<string>();
+  const baseName =
+    canonicalizeModelDisplayName(model.name) ||
+    canonicalizeModelDisplayName(model.family) ||
+    model.name ||
+    model.id;
+
+  for (const candidate of detailCandidates) {
+    const detail = formatModelDetail(candidate);
+    if (!detail) {
+      continue;
+    }
+
+    const key = normalizeKey(detail);
+    if (!key || seen.has(key) || detailAppearsInName(detail, baseName)) {
+      continue;
+    }
+
+    seen.add(key);
+    details.push(detail);
+  }
+
+  return details;
 }
 
 function extractVariantTail(
@@ -119,7 +220,11 @@ function buildModelDisplayLabel(
   model: ModelInfo,
   groupedModels: readonly ModelInfo[],
 ): string {
-  const baseName = model.name || model.id;
+  const baseName =
+    canonicalizeModelDisplayName(model.name) ||
+    canonicalizeModelDisplayName(model.family) ||
+    model.name ||
+    model.id;
   if (!baseName) {
     return "";
   }
@@ -128,36 +233,40 @@ function buildModelDisplayLabel(
     return baseName;
   }
 
-  const hasDistinctVersions =
-    new Set(groupedModels.map((entry) => normalizeKey(entry.version))).size > 1;
-  const hasDistinctVendors =
-    new Set(groupedModels.map((entry) => normalizeKey(entry.vendor))).size > 1;
-
-  const detailCandidates = [
-    extractVariantTail(model.id, [model.family, model.name]),
-    extractVariantTail(model.family, [model.name]),
-    hasDistinctVersions ? model.version : undefined,
-    hasDistinctVendors ? model.vendor : undefined,
-    groupedModels.length > 1 ? model.id : undefined,
-  ];
-
-  const seen = new Set<string>();
-  for (const candidate of detailCandidates) {
-    const detail = formatModelDetail(candidate);
-    if (!detail) {
-      continue;
-    }
-
-    const key = normalizeKey(detail);
-    if (!key || seen.has(key) || detailAppearsInName(detail, baseName)) {
-      continue;
-    }
-
-    seen.add(key);
-    return `${baseName} (${detail})`;
+  const detailCandidates = getModelDetailCandidates(model, groupedModels);
+  if (detailCandidates.length === 0) {
+    return baseName;
   }
 
-  return baseName;
+  const detailCounts = detailCandidates.map((_detail, index) => {
+    const counts = new Map<string, number>();
+    for (const entry of groupedModels) {
+      const entryKey = getModelDetailCandidates(entry, groupedModels)
+        .slice(0, index + 1)
+        .map((value) => normalizeKey(value))
+        .join("|");
+      if (!entryKey) {
+        continue;
+      }
+      counts.set(entryKey, (counts.get(entryKey) || 0) + 1);
+    }
+    return counts;
+  });
+
+  for (let index = 0; index < detailCandidates.length; index += 1) {
+    const currentKey = detailCandidates
+      .slice(0, index + 1)
+      .map((value) => normalizeKey(value))
+      .join("|");
+    if (!currentKey) {
+      continue;
+    }
+    if (detailCounts[index]?.get(currentKey) === 1) {
+      return `${baseName} (${detailCandidates.slice(0, index + 1).join(", ")})`;
+    }
+  }
+
+  return `${baseName} (${detailCandidates.join(", ")})`;
 }
 
 function buildMatchKeys(value: string | undefined): Set<string> {
@@ -182,6 +291,22 @@ function buildMatchKeys(value: string | undefined): Set<string> {
   const withoutVariant = maybeStripTrailingNumericVariant(normalized);
   if (withoutVariant) {
     keys.add(withoutVariant);
+  }
+
+  const withoutNamedVariant = maybeStripNamedVariant(normalized);
+  if (withoutNamedVariant) {
+    keys.add(normalizeKey(withoutNamedVariant));
+  }
+
+  const withoutParens = normalizeKey(
+    stripTrailingParenthesizedGroups(String(value || "")),
+  );
+  if (withoutParens && withoutParens !== normalized) {
+    keys.add(withoutParens);
+    const withoutParensVariant = maybeStripNamedVariant(withoutParens);
+    if (withoutParensVariant) {
+      keys.add(normalizeKey(withoutParensVariant));
+    }
   }
 
   if (withoutDate) {
@@ -271,6 +396,13 @@ function getSelectionVariantKey(
     return variantFromId;
   }
 
+  const variantFromName = normalizeKey(
+    extractNamedVariant(selection.modelName) || "",
+  );
+  if (variantFromName) {
+    return variantFromName;
+  }
+
   return normalizeKey(
     formatModelDetail(
       extractVariantTail(selection.modelFamily, [selection.modelName]),
@@ -291,6 +423,11 @@ function getModelVariantKey(model: ModelInfo): string | undefined {
   );
   if (variantFromId) {
     return variantFromId;
+  }
+
+  const variantFromName = normalizeKey(extractNamedVariant(model.name) || "");
+  if (variantFromName) {
+    return variantFromName;
   }
 
   return normalizeKey(

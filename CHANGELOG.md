@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.30] - 2026-04-09
+
+### Fixed
+
+- **Model variant matching**: Variant identifiers such as `high`, `medium`, and `low` are now inferred from model display names as well as explicit version fields, improving exact-model selection across providers.
+- **Unresolved saved models**: When a previously saved model is not in the current model list, the Webview now keeps that selection visible and preserves its metadata instead of silently dropping it on edit/save.
+
+### Improved
+
+- **Model picker labels**: Provider suffixes such as `Copilot` and `Copilotcli` are treated as label details rather than base-name duplicates, reducing visually confusing duplicates in the picker.
+- **Model list refresh resilience**: Once a real model catalog has been loaded, temporary fallback refreshes no longer replace it with a default-only list during language changes or transient API unavailability.
+- **Legacy model selection**: Legacy chat execution now tries disambiguated model labels before raw ids, improving model selection when `chat.open` cannot apply structured selectors.
+
 ## [1.0.29] - 2026-04-09
 
 ### Improved

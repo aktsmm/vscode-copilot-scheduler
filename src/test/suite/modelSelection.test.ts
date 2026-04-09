@@ -95,4 +95,52 @@ suite("Model Selection Catalog Tests", () => {
 
     assert.strictEqual(match, undefined);
   });
+
+  test("normalizeModelCatalog strips provider suffix from base labels", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6-copilot",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+      },
+      {
+        id: "claude-opus-4.6-copilotcli",
+        name: "Claude Opus 4.6 (Copilotcli)",
+        description: "",
+        vendor: "Anthropic",
+      },
+    ]);
+
+    assert.deepStrictEqual(
+      catalog.map((model) => model.label),
+      ["Claude Opus 4.6 (Copilot)", "Claude Opus 4.6 (Copilotcli)"],
+    );
+  });
+
+  test("findBestMatchingModel infers variant from display name when version is missing", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6-copilot-high",
+        name: "Claude Opus 4.6 High (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+      },
+      {
+        id: "claude-opus-4.6-copilot-low",
+        name: "Claude Opus 4.6 Low (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+      },
+    ]);
+
+    const match = findBestMatchingModel(
+      {
+        modelName: "Claude Opus 4.6 High (Copilot)",
+      },
+      catalog,
+    );
+
+    assert.strictEqual(match?.id, "claude-opus-4.6-copilot-high");
+  });
 });

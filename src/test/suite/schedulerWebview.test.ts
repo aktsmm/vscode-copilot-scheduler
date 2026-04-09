@@ -817,11 +817,13 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
 
     const expectedTokens = [
+      'data-model-id="${escapeHtmlAttr(m.id || "")}"',
       'data-model-name="${escapeHtmlAttr(m.name || "")}"',
       'data-model-vendor="${escapeHtmlAttr(m.vendor || "")}"',
       'data-model-family="${escapeHtmlAttr(m.family || "")}"',
       'data-model-version="${escapeHtmlAttr(m.version || "")}"',
       'escapeHtml(m.label || m.name || "")',
+      'id="model-selection-status"',
     ];
 
     for (const token of expectedTokens) {
@@ -902,6 +904,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
 
     const expectedTokens = [
+      'data-model-id="',
+      'escapeAttr(m.id || "")',
       'data-model-name="',
       'escapeAttr(m.name || "")',
       'data-model-vendor="',
@@ -917,6 +921,29 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(updateModelOptionsSource, token),
         `Expected updateModelOptions token not found: ${token}`,
+      );
+    }
+  });
+
+  test("unresolved saved model selections remain visible in the webview", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      'var modelSelectionStatus = document.getElementById("model-selection-status")',
+      'function ensureUnavailableModelOption(selectEl, selection) {',
+      'option.dataset.unresolved = "true"',
+      'option.dataset.modelId = modelId',
+      'strings.labelModelUnavailableNote || ""',
+      'selectedModelOption.dataset.modelId || selectedModelOption.value || ""',
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected unresolved model token not found: ${token}`,
       );
     }
   });

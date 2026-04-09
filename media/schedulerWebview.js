@@ -368,6 +368,87 @@
   var summaryTotal = document.getElementById("summary-total");
   var summaryEnabled = document.getElementById("summary-enabled");
   var summaryPaused = document.getElementById("summary-paused");
+  var modelSelectionStatus = document.getElementById("model-selection-status");
+
+  function getSelectedModelOption() {
+    if (!modelSelect || modelSelect.selectedIndex < 0) return null;
+    return modelSelect.options[modelSelect.selectedIndex] || null;
+  }
+
+  function clearPendingModelSelection() {
+    pendingModelValue = "";
+    pendingModelName = "";
+    pendingModelVendor = "";
+    pendingModelFamily = "";
+    pendingModelVersion = "";
+  }
+
+  function clearUnavailableModelOptions(selectEl) {
+    if (!selectEl || !selectEl.options) return;
+    for (var i = selectEl.options.length - 1; i >= 0; i--) {
+      var option = selectEl.options[i];
+      if (option && option.dataset && option.dataset.unresolved === "true") {
+        selectEl.remove(i);
+      }
+    }
+  }
+
+  function buildUnavailableModelLabel(selection) {
+    var base = String(selection.modelName || selection.model || "").trim();
+    var suffix = String(strings.labelModelUnavailableSuffix || "").trim();
+    if (!base) {
+      base = String(selection.model || "").trim();
+    }
+    return suffix && base ? base + " " + suffix : base;
+  }
+
+  function updateModelSelectionStatus() {
+    if (!modelSelectionStatus) return;
+    var selectedModelOption = getSelectedModelOption();
+    if (
+      selectedModelOption &&
+      selectedModelOption.dataset &&
+      selectedModelOption.dataset.unresolved === "true"
+    ) {
+      modelSelectionStatus.textContent = String(
+        strings.labelModelUnavailableNote || "",
+      );
+      modelSelectionStatus.style.display = "block";
+      return;
+    }
+
+    modelSelectionStatus.textContent = "";
+    modelSelectionStatus.style.display = "none";
+  }
+
+  function ensureUnavailableModelOption(selectEl, selection) {
+    if (!selectEl || !selection) return false;
+    var modelId = String(selection.model || "").trim();
+    var modelName = String(selection.modelName || "").trim();
+    if (!modelId && !modelName) {
+      updateModelSelectionStatus();
+      return false;
+    }
+
+    clearUnavailableModelOptions(selectEl);
+
+    var option = document.createElement("option");
+    option.value = modelId;
+    option.textContent = buildUnavailableModelLabel({
+      model: modelId,
+      modelName: modelName,
+    });
+    option.dataset.unresolved = "true";
+    option.dataset.modelId = modelId;
+    option.dataset.modelName = modelName;
+    option.dataset.modelVendor = String(selection.modelVendor || "");
+    option.dataset.modelFamily = String(selection.modelFamily || "");
+    option.dataset.modelVersion = String(selection.modelVersion || "");
+    selectEl.appendChild(option);
+    selectEl.selectedIndex = selectEl.options.length - 1;
+    updateModelSelectionStatus();
+    return true;
+  }
 
   function normalizeWorkspacePath(p) {
     if (!p) return "";
@@ -459,11 +540,9 @@
   }
   if (modelSelect) {
     modelSelect.addEventListener("change", function () {
-      pendingModelValue = "";
-      pendingModelName = "";
-      pendingModelVendor = "";
-      pendingModelFamily = "";
-      pendingModelVersion = "";
+      clearUnavailableModelOptions(modelSelect);
+      clearPendingModelSelection();
+      updateModelSelectionStatus();
     });
   }
   if (templateSelect) {
@@ -613,15 +692,15 @@
       if (editingTaskId && !agentValue && pendingAgentValue) {
         agentValue = pendingAgentValue;
       }
-      var modelValue = modelSelect ? modelSelect.value : "";
-      if (editingTaskId && !modelValue && pendingModelValue) {
-        modelValue = pendingModelValue;
-      }
-      var selectedModelOption = null;
-      if (modelSelect && modelSelect.selectedIndex >= 0) {
-        selectedModelOption =
-          modelSelect.options[modelSelect.selectedIndex] || null;
-      }
+      var selectedModelOption = getSelectedModelOption();
+      var modelValue =
+        selectedModelOption && selectedModelOption.dataset
+          ? selectedModelOption.dataset.modelId ||
+            selectedModelOption.value ||
+            ""
+          : modelSelect
+            ? modelSelect.value
+            : "";
       var modelNameValue =
         selectedModelOption && selectedModelOption.dataset
           ? selectedModelOption.dataset.modelName || ""
@@ -1647,13 +1726,11 @@
     setTemplatePromptBaseline(null);
     clearTemplateLoading();
     pendingAgentValue = "";
-    pendingModelValue = "";
-    pendingModelName = "";
-    pendingModelVendor = "";
-    pendingModelFamily = "";
-    pendingModelVersion = "";
+    clearPendingModelSelection();
     pendingTemplatePath = "";
     editingTaskEnabled = true;
+    clearUnavailableModelOptions(modelSelect);
+    updateModelSelectionStatus();
     applyPromptSource("inline");
     if (friendlyFrequency) friendlyFrequency.value = "";
     if (jitterSecondsInput)
@@ -1717,6 +1794,8 @@
             return (
               '<option value="' +
               escapeAttr(m.id) +
+              '" data-model-id="' +
+              escapeAttr(m.id || "") +
               '" data-model-name="' +
               escapeAttr(m.name || "") +
               '" data-model-vendor="' +
@@ -1732,6 +1811,7 @@
           })
           .join("");
     }
+    updateModelSelectionStatus();
   }
 
   function updateTemplateOptions(source, selectedPath) {
@@ -1831,6 +1911,7 @@
   function trySelectModelOptionBySelection(selectEl, selection) {
     if (!selectEl || !selection) return false;
     var targetId = String(selection.model || "");
+    var targetName = String(selection.modelName || "");
     var targetVendor = String(selection.modelVendor || "");
     var targetFamily = String(selection.modelFamily || "");
     var targetVersion = String(selection.modelVersion || "");
@@ -1841,7 +1922,18 @@
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       if (!option) continue;
-      if (String(option.value || "") !== targetId) continue;
+      var optionId = option.dataset
+        ? option.dataset.modelId || option.value || ""
+        : String(option.value || "");
+      var optionName = option.dataset ? option.dataset.modelName || "" : "";
+
+      if (targetId) {
+        if (optionId !== targetId) continue;
+      } else if (targetName) {
+        if (optionName !== targetName) continue;
+      } else {
+        continue;
+      }
 
       var optionVendor = option.dataset ? option.dataset.modelVendor || "" : "";
       var optionFamily = option.dataset ? option.dataset.modelFamily || "" : "";
@@ -1861,7 +1953,7 @@
       return false;
     }
 
-    if (targetVendor || targetFamily || targetVersion) {
+    if (targetName || targetVendor || targetFamily || targetVersion) {
       return false;
     }
 
@@ -1908,26 +2000,27 @@
       }
     }
     if (modelSelect) {
-      if (pendingModelValue) {
+      if (pendingModelValue || pendingModelName) {
         var restoredModelOption = trySelectModelOptionBySelection(modelSelect, {
           model: pendingModelValue,
+          modelName: pendingModelName,
           modelVendor: pendingModelVendor,
           modelFamily: pendingModelFamily,
           modelVersion: pendingModelVersion,
         });
         if (restoredModelOption) {
-          pendingModelValue = "";
-          pendingModelName = "";
-          pendingModelVendor = "";
-          pendingModelFamily = "";
-          pendingModelVersion = "";
+          clearPendingModelSelection();
         } else {
-          modelSelect.value = "";
+          ensureUnavailableModelOption(modelSelect, {
+            model: pendingModelValue,
+            modelName: pendingModelName,
+            modelVendor: pendingModelVendor,
+            modelFamily: pendingModelFamily,
+            modelVersion: pendingModelVersion,
+          });
         }
       }
-      if (!pendingModelValue) {
-        pendingModelValue = "";
-      }
+      updateModelSelectionStatus();
     }
     editingTaskEnabled = task.enabled !== false;
     var scopeValue = task.scope || "workspace";
@@ -2088,6 +2181,7 @@
           {
             var currentModelValue =
               pendingModelValue || (modelSelect ? modelSelect.value : "");
+            var currentModelName = pendingModelName;
             var currentModelVendor = pendingModelVendor;
             var currentModelFamily = pendingModelFamily;
             var currentModelVersion = pendingModelVersion;
@@ -2095,6 +2189,10 @@
               var selectedModelOption =
                 modelSelect.options[modelSelect.selectedIndex];
               if (selectedModelOption && selectedModelOption.dataset) {
+                currentModelName =
+                  currentModelName ||
+                  selectedModelOption.dataset.modelName ||
+                  "";
                 currentModelVendor =
                   currentModelVendor ||
                   selectedModelOption.dataset.modelVendor ||
@@ -2111,25 +2209,32 @@
             }
             models = Array.isArray(message.models) ? message.models : [];
             updateModelOptions();
-            if (modelSelect && currentModelValue) {
+            if (modelSelect && (currentModelValue || currentModelName)) {
               var restored = trySelectModelOptionBySelection(modelSelect, {
                 model: currentModelValue,
+                modelName: currentModelName,
                 modelVendor: currentModelVendor,
                 modelFamily: currentModelFamily,
                 modelVersion: currentModelVersion,
               });
               if (restored) {
-                pendingModelValue = "";
-                pendingModelVendor = "";
-                pendingModelFamily = "";
-                pendingModelVersion = "";
+                clearPendingModelSelection();
               } else {
                 pendingModelValue = currentModelValue;
+                pendingModelName = currentModelName;
                 pendingModelVendor = currentModelVendor;
                 pendingModelFamily = currentModelFamily;
                 pendingModelVersion = currentModelVersion;
+                ensureUnavailableModelOption(modelSelect, {
+                  model: currentModelValue,
+                  modelName: currentModelName,
+                  modelVendor: currentModelVendor,
+                  modelFamily: currentModelFamily,
+                  modelVersion: currentModelVersion,
+                });
               }
             }
+            updateModelSelectionStatus();
           }
           break;
         case "updatePromptTemplates":

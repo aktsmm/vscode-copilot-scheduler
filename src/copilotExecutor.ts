@@ -62,6 +62,11 @@ type PromptRouting = {
   legacyPrompt: string;
 };
 
+type ResolvedModelSelectionResult = {
+  selection: NormalizedModelSelection;
+  matched?: ModelInfo;
+};
+
 function normalizeAgentPrefix(agent: string): string {
   const normalized = agent.trim();
   if (!normalized) {
@@ -213,6 +218,31 @@ function buildModelSelectorCandidates(
   return selectors;
 }
 
+function buildLegacyModelPickerCandidates(
+  matchedModel: ModelInfo | undefined,
+  selection: NormalizedModelSelection,
+): string[] {
+  const rawCandidates = [
+    matchedModel?.label,
+    selection.modelName,
+    matchedModel?.name,
+    selection.model,
+  ];
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of rawCandidates) {
+    const value = typeof candidate === "string" ? candidate.trim() : "";
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    candidates.push(value);
+  }
+
+  return candidates;
+}
+
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   const sanitized = sanitizeAbsolutePathDetails(
@@ -229,6 +259,7 @@ export const __testOnly = {
   stripLeadingBuiltInModePrefix,
   buildPromptRouting,
   buildModelSelectorCandidates,
+  buildLegacyModelPickerCandidates,
 };
 
 /**
@@ -287,7 +318,8 @@ export class CopilotExecutor {
         );
         await this.executePromptLegacy(
           routing.legacyPrompt,
-          chatOpenResult.resolvedSelection.model || requestedModel.model || "",
+          chatOpenResult.resolvedSelection,
+          chatOpenResult.resolvedModel,
           chatSession,
           delayFactor,
         );
@@ -315,9 +347,14 @@ export class CopilotExecutor {
     chatOpenPrompt: string,
     mode: BuiltInChatMode | undefined,
     requestedSelection: NormalizedModelSelection,
-  ): Promise<{ opened: boolean; resolvedSelection: NormalizedModelSelection }> {
-    const resolvedSelection =
+  ): Promise<{
+    opened: boolean;
+    resolvedSelection: NormalizedModelSelection;
+    resolvedModel?: ModelInfo;
+  }> {
+    const resolved =
       await CopilotExecutor.resolveRequestedModelSelection(requestedSelection);
+    const resolvedSelection = resolved.selection;
 
     if (!areModelSelectionsEqual(requestedSelection, resolvedSelection)) {
       logDebug(
@@ -336,7 +373,11 @@ export class CopilotExecutor {
           mode,
           modelSelector: selector,
         });
-        return { opened: true, resolvedSelection };
+        return {
+          opened: true,
+          resolvedSelection,
+          resolvedModel: resolved.matched,
+        };
       } catch (error) {
         logDebug(
           `[CopilotScheduler] chat.open with model selector failed: ${toSafeErrorDetails(error)}`,
@@ -353,34 +394,46 @@ export class CopilotExecutor {
         isPartialQuery: false,
         mode,
       });
-      return { opened: true, resolvedSelection };
+      return {
+        opened: true,
+        resolvedSelection,
+        resolvedModel: resolved.matched,
+      };
     } catch (error) {
       logDebug(
         `[CopilotScheduler] chat.open without model selector failed: ${toSafeErrorDetails(error)}`,
       );
-      return { opened: false, resolvedSelection };
+      return {
+        opened: false,
+        resolvedSelection,
+        resolvedModel: resolved.matched,
+      };
     }
   }
 
   private static async resolveRequestedModelSelection(
     selection: NormalizedModelSelection,
-  ): Promise<NormalizedModelSelection> {
+  ): Promise<ResolvedModelSelectionResult> {
     if (!hasModelSelection(selection)) {
-      return selection;
+      return { selection };
     }
 
     const { models } = await CopilotExecutor.getAvailableModelsWithSource();
     const matched = findBestMatchingModel(selection, models);
     if (!matched) {
-      return selection;
+      return { selection };
     }
 
-    return modelInfoToSelection(matched);
+    return {
+      selection: modelInfoToSelection(matched),
+      matched,
+    };
   }
 
   private async executePromptLegacy(
     fullPrompt: string,
-    model: string,
+    selection: NormalizedModelSelection,
+    matchedModel: ModelInfo | undefined,
     chatSession: ChatSessionBehavior,
     delayFactor: number,
   ): Promise<void> {
@@ -395,23 +448,39 @@ export class CopilotExecutor {
     await this.delay(this.getAdjustedDelayMs(focusDelayMs, delayFactor));
 
     // Try to set model if specified
-    if (model) {
-      try {
-        logDebug(`[CopilotScheduler] Attempting to select model: ${model}`);
-        const result = await vscode.commands.executeCommand(
-          "workbench.action.chat.selectModel",
-          model,
-        );
-        logDebug(`[CopilotScheduler] Model selection result:`, result);
-        await this.delay(
-          this.getAdjustedDelayMs(DELAY_AFTER_MODEL_SELECT_MS, delayFactor),
-        );
-      } catch (error) {
+    const modelCandidates = buildLegacyModelPickerCandidates(
+      matchedModel,
+      selection,
+    );
+    if (modelCandidates.length > 0) {
+      let modelSelected = false;
+      for (const candidate of modelCandidates) {
+        try {
+          logDebug(
+            `[CopilotScheduler] Attempting to select legacy model candidate: ${candidate}`,
+          );
+          const result = await vscode.commands.executeCommand(
+            "workbench.action.chat.selectModel",
+            candidate,
+          );
+          logDebug(`[CopilotScheduler] Model selection result:`, result);
+          modelSelected = true;
+          await this.delay(
+            this.getAdjustedDelayMs(DELAY_AFTER_MODEL_SELECT_MS, delayFactor),
+          );
+          break;
+        } catch (error) {
+          logDebug(
+            `[CopilotScheduler] Legacy model selection failed for ${candidate}: ${toSafeErrorDetails(error)}`,
+          );
+        }
+      }
+
+      if (!modelSelected) {
         logError(
           `[CopilotScheduler] Model selection failed:`,
-          toSafeErrorDetails(error),
+          formatModelSelectionForLog(selection),
         );
-        // Model selection may not be available, continue without it
       }
     } else {
       logDebug(`[CopilotScheduler] No model specified or model is empty`);

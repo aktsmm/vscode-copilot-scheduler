@@ -49,6 +49,36 @@ export class SchedulerWebview {
     this.pendingMessages = [];
   }
 
+  private static hasResolvedModelCatalog(
+    models: readonly ModelInfo[],
+  ): boolean {
+    return models.some(
+      (model) => typeof model.id === "string" && model.id.trim().length > 0,
+    );
+  }
+
+  private static localizeCachedModels(
+    models: readonly ModelInfo[],
+  ): ModelInfo[] {
+    if (!Array.isArray(models) || models.length === 0) {
+      return CopilotExecutor.getFallbackModels();
+    }
+
+    return models.map((model) => {
+      if ((model.id || "").trim().length > 0) {
+        return model;
+      }
+
+      return {
+        ...model,
+        name: messages.modelDefaultName(),
+        label: messages.modelDefaultName(),
+        description: messages.modelDefaultDesc(),
+        vendor: "",
+      };
+    });
+  }
+
   /**
    * Dispose the webview panel (e.g., on extension deactivation)
    */
@@ -110,6 +140,8 @@ export class SchedulerWebview {
     }
     if (this.cachedModels.length === 0) {
       this.cachedModels = CopilotExecutor.getFallbackModels();
+    } else {
+      this.cachedModels = this.localizeCachedModels(this.cachedModels);
     }
 
     const refreshInBackground = (forcePromptRefresh: boolean): void => {
@@ -292,7 +324,9 @@ export class SchedulerWebview {
       // Synchronously rebuild built-in agents/models so the initial HTML
       // already reflects the new language (U17: avoid stale localized names).
       this.cachedAgents = CopilotExecutor.getBuiltInAgents();
-      this.cachedModels = CopilotExecutor.getFallbackModels();
+      this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
+        ? this.localizeCachedModels(this.cachedModels)
+        : CopilotExecutor.getFallbackModels();
 
       // Regenerate HTML with new language
       this.panel.webview.html = this.getWebviewContent(
@@ -331,7 +365,9 @@ export class SchedulerWebview {
       await this.refreshAgentsAndModels(force);
     } catch {
       this.cachedAgents = CopilotExecutor.getBuiltInAgents();
-      this.cachedModels = CopilotExecutor.getFallbackModels();
+      this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
+        ? this.localizeCachedModels(this.cachedModels)
+        : CopilotExecutor.getFallbackModels();
     }
 
     try {
@@ -541,9 +577,19 @@ export class SchedulerWebview {
     }
 
     try {
-      this.cachedModels = await CopilotExecutor.getAvailableModels();
+      const result = await CopilotExecutor.getAvailableModelsWithSource();
+      if (
+        result.source === "fallback" &&
+        this.hasResolvedModelCatalog(this.cachedModels)
+      ) {
+        this.cachedModels = this.localizeCachedModels(this.cachedModels);
+      } else {
+        this.cachedModels = this.localizeCachedModels(result.models);
+      }
     } catch {
-      this.cachedModels = CopilotExecutor.getFallbackModels();
+      this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
+        ? this.localizeCachedModels(this.cachedModels)
+        : CopilotExecutor.getFallbackModels();
     }
 
     // Ensure we always have at least fallback data
@@ -552,6 +598,8 @@ export class SchedulerWebview {
     }
     if (this.cachedModels.length === 0) {
       this.cachedModels = CopilotExecutor.getFallbackModels();
+    } else {
+      this.cachedModels = this.localizeCachedModels(this.cachedModels);
     }
   }
 
@@ -888,6 +936,8 @@ export class SchedulerWebview {
       placeholderSelectModel: messages.webviewSelectModelPlaceholder(),
       placeholderNoModels: messages.webviewNoModelsAvailable(),
       placeholderSelectTemplate: messages.webviewSelectTemplatePlaceholder(),
+      labelModelUnavailableNote: messages.labelModelUnavailableNote(),
+      labelModelUnavailableSuffix: messages.labelModelUnavailableSuffix(),
 
       // Webview JS error text
       webviewScriptErrorPrefix: messages.webviewScriptErrorPrefix(),
@@ -1749,9 +1799,10 @@ export class SchedulerWebview {
             <div class="form-group col-6">
               <label for="model-select">${escapeHtml(strings.labelModel)}</label>
               <select id="model-select">
-                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}" data-model-name="${escapeHtmlAttr(m.name || "")}" data-model-vendor="${escapeHtmlAttr(m.vendor || "")}" data-model-family="${escapeHtmlAttr(m.family || "")}" data-model-version="${escapeHtmlAttr(m.version || "")}">${escapeHtml(m.label || m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
+                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}" data-model-id="${escapeHtmlAttr(m.id || "")}" data-model-name="${escapeHtmlAttr(m.name || "")}" data-model-vendor="${escapeHtmlAttr(m.vendor || "")}" data-model-family="${escapeHtmlAttr(m.family || "")}" data-model-version="${escapeHtmlAttr(m.version || "")}">${escapeHtml(m.label || m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
               </select>
               <p class="note">${escapeHtml(strings.labelModelNote)}</p>
+              <p class="note" id="model-selection-status" style="display:none;"></p>
             </div>
 
             <div class="form-group col-6">

@@ -712,6 +712,61 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
     }
   });
 
+  test("healTaskModelSelections keeps unresolved strict variants", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const rawTask = {
+        id: "t-unresolved-model-variant",
+        name: "strict-variant-task",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        enabled: false,
+        scope: "global",
+        promptSource: "inline",
+        model: "copilot-gpt-4o",
+        modelName: "GPT-4o High",
+        modelFamily: "gpt-4o",
+        modelVersion: "high",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+
+      const changed = await manager.healTaskModelSelections([
+        {
+          id: "copilot-gpt-4o",
+          name: "GPT-4o Low",
+          description: "",
+          vendor: "OpenAI",
+          family: "gpt-4o",
+          version: "low",
+        },
+      ]);
+
+      const loaded = manager.getTask(rawTask.id);
+      assert.strictEqual(changed, 0);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.model, "copilot-gpt-4o");
+      assert.strictEqual(loaded?.modelVersion, "high");
+      assert.strictEqual(loaded?.modelName, "GPT-4o High");
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("duplicateTask preserves workspacePath for workspace-scoped tasks", async () => {
     const workspaceA = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-a-"));
     const workspaceB = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-b-"));
