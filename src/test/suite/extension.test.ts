@@ -86,13 +86,18 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
     const source = fs.readFileSync(sourcePath, "utf8");
 
-    const createGuiStart = source.indexOf("function registerCreateTaskGuiCommand(");
+    const createGuiStart = source.indexOf(
+      "function registerCreateTaskGuiCommand(",
+    );
     assert.ok(createGuiStart >= 0, "registerCreateTaskGuiCommand not found");
     const createGuiEnd = source.indexOf(
       "function registerListTasksCommand(",
       createGuiStart,
     );
-    assert.ok(createGuiEnd > createGuiStart, "registerCreateTaskGuiCommand end not found");
+    assert.ok(
+      createGuiEnd > createGuiStart,
+      "registerCreateTaskGuiCommand end not found",
+    );
     const createGuiBlock = source.slice(createGuiStart, createGuiEnd);
     assert.ok(
       createGuiBlock.includes("handleTestPromptAction"),
@@ -105,7 +110,10 @@ suite("Webview Test Prompt Wiring Tests", () => {
       "function registerEditTaskCommand(",
       listCmdStart,
     );
-    assert.ok(listCmdEnd > listCmdStart, "registerListTasksCommand end not found");
+    assert.ok(
+      listCmdEnd > listCmdStart,
+      "registerListTasksCommand end not found",
+    );
     const listCmdBlock = source.slice(listCmdStart, listCmdEnd);
     assert.ok(
       listCmdBlock.includes("handleTestPromptAction"),
@@ -117,12 +125,52 @@ suite("Webview Test Prompt Wiring Tests", () => {
       "function registerDeleteTaskCommand()",
       editCmdStart,
     );
-    assert.ok(editCmdEnd > editCmdStart, "registerEditTaskCommand end not found");
+    assert.ok(
+      editCmdEnd > editCmdStart,
+      "registerEditTaskCommand end not found",
+    );
     const editCmdBlock = source.slice(editCmdStart, editCmdEnd);
     assert.ok(
       editCmdBlock.includes("handleTestPromptAction"),
       "registerEditTaskCommand should pass handleTestPromptAction to SchedulerWebview.show",
     );
+  });
+
+  test("buildPromptExecutionOptions keeps structured model selection fields", async () => {
+    const { __testOnly } = await import("../../extension");
+    const buildPromptExecutionOptions =
+      __testOnly.buildPromptExecutionOptions as
+        | ((request: ScheduledTask) => Record<string, string | undefined>)
+        | undefined;
+
+    assert.ok(typeof buildPromptExecutionOptions === "function");
+
+    const options = buildPromptExecutionOptions({
+      id: "t-model-options",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      agent: "edit",
+      model: "gpt-5.4",
+      modelName: "GPT-5.4",
+      modelVendor: "OpenAI",
+      modelFamily: "gpt-5.4",
+      modelVersion: "high",
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    assert.deepStrictEqual(options, {
+      agent: "edit",
+      model: "gpt-5.4",
+      modelName: "GPT-5.4",
+      modelVendor: "OpenAI",
+      modelFamily: "gpt-5.4",
+      modelVersion: "high",
+    });
   });
 });
 
@@ -472,6 +520,53 @@ suite("Frontmatter Resolution Tests", () => {
     assert.strictEqual(resolved.prompt, "Body");
     assert.strictEqual(resolved.agent, "edit");
     assert.strictEqual(resolved.model, "claude-sonnet-4");
+  });
+
+  test("Preserves structured model selection metadata from task", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as
+      | ((
+          task: ScheduledTask,
+          preferOpenDocument?: boolean,
+        ) => Promise<{
+          prompt: string;
+          agent?: string;
+          model?: string;
+          modelName?: string;
+          modelVendor?: string;
+          modelFamily?: string;
+          modelVersion?: string;
+        }>)
+      | undefined;
+
+    assert.ok(typeof resolvePromptExecution === "function");
+
+    const task = {
+      id: "t-frontmatter-structured-model",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      agent: "edit",
+      model: "gpt-5.4",
+      modelName: "GPT-5.4",
+      modelVendor: "OpenAI",
+      modelFamily: "gpt-5.4",
+      modelVersion: "high",
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const resolved = await resolvePromptExecution(task, true);
+    assert.strictEqual(resolved.prompt, "Body");
+    assert.strictEqual(resolved.agent, "edit");
+    assert.strictEqual(resolved.model, "gpt-5.4");
+    assert.strictEqual(resolved.modelName, "GPT-5.4");
+    assert.strictEqual(resolved.modelVendor, "OpenAI");
+    assert.strictEqual(resolved.modelFamily, "gpt-5.4");
+    assert.strictEqual(resolved.modelVersion, "high");
   });
 
   test("Explicit empty task agent/model fallback to frontmatter", async () => {

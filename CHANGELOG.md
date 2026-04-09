@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.31] - 2026-04-09
 
+### Fixed
+
+- **Structured model execution metadata**: Prompt execution now preserves model name, vendor, family, and version fields when resolving scheduled tasks and Webview test runs, avoiding accidental loss of exact model-selection context.
+
 ### Improved
 
+- **Model label derivation**: Model picker labels now recognize `Extra High` variants and version-style path segments such as `.../versions/2025-02-19`, improving disambiguation across provider catalogs.
+- **Duplicate label disambiguation**: When two models still collapse to the same display label, the picker now appends the raw model id so each option remains uniquely selectable.
 - **Release operation guidance**: Repository-local instructions now require deciding before every push whether the task is a normal sync or a release-complete operation, and require matching version/changelog/tag steps when publication is expected.
 
 ## [1.0.30] - 2026-04-09

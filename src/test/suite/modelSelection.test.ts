@@ -143,4 +143,75 @@ suite("Model Selection Catalog Tests", () => {
 
     assert.strictEqual(match?.id, "claude-opus-4.6-copilot-high");
   });
+
+  test("normalizeModelCatalog derives extra-high variants from id tails", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "anthropic/claude-opus-4.6-extra-high",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "anthropic/claude-opus-4.6-low",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    assert.deepStrictEqual(
+      catalog.map((model) => model.label),
+      ["Claude Opus 4.6 (Extra High)", "Claude Opus 4.6 (Low)"],
+    );
+  });
+
+  test("normalizeModelCatalog derives version labels from path segments", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "anthropic/claude-opus-4.6/versions/2025-02-19",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "anthropic/claude-opus-4.6/versions/2025-03-01",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    assert.deepStrictEqual(
+      catalog.map((model) => model.label),
+      [
+        "Claude Opus 4.6 (2025-02-19)",
+        "Claude Opus 4.6 (2025-03-01)",
+      ],
+    );
+  });
+
+  test("normalizeModelCatalog keeps display labels unique for indistinguishable ids", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "provider-a-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "OpenAI",
+      },
+      {
+        id: "provider-b-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "OpenAI",
+      },
+    ]);
+
+    assert.strictEqual(catalog.length, 2);
+    assert.notStrictEqual(catalog[0]?.label, catalog[1]?.label);
+  });
 });

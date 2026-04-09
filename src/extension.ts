@@ -30,6 +30,7 @@ import type {
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
 type ExecutionTrigger = "auto" | "manual";
 type ExecutionHistoryStatus = "success" | "failed";
+type PromptExecutionOptions = Omit<PromptExecutionRequest, "prompt">;
 
 type ExecutionHistoryEntry = {
   taskId: string;
@@ -77,6 +78,19 @@ function resolveDisplayErrorMessage(message: string): string {
 function resolveDisplayErrorMessageFromSanitized(safeMessage: string): string {
   const firstLine = safeMessage.split(/\r?\n/)[0] ?? "";
   return firstLine.trim() ? firstLine : messages.webviewUnknown();
+}
+
+function buildPromptExecutionOptions(
+  request: PromptExecutionRequest,
+): PromptExecutionOptions {
+  return {
+    agent: request.agent,
+    model: request.model,
+    modelName: request.modelName,
+    modelVendor: request.modelVendor,
+    modelFamily: request.modelFamily,
+    modelVersion: request.modelVersion,
+  };
 }
 
 async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
@@ -743,10 +757,10 @@ async function executeTask(task: ScheduledTask): Promise<void> {
 
     // Execute the prompt
     try {
-      await copilotExecutor.executePrompt(resolved.prompt, {
-        agent: resolved.agent,
-        model: resolved.model,
-      });
+      await copilotExecutor.executePrompt(
+        resolved.prompt,
+        buildPromptExecutionOptions(resolved),
+      );
     } catch (error) {
       // executePrompt displays its own warning on failure.
       markExecutionErrorAsUserNotified(error);
@@ -1002,6 +1016,7 @@ export const __testOnly = {
   parsePromptFrontmatter,
   resolveExecutionOption,
   applyAutoModeHint,
+  buildPromptExecutionOptions,
   resolvePromptExecution,
   sanitizeErrorDetailsForLog,
   resolveDisplayErrorMessage,
@@ -1307,14 +1322,10 @@ async function handleTestPromptAction(
   // executePrompt already shows a user-facing warning with copy-to-clipboard
   // on failure, so we only log the error here to avoid double notification (U20).
   try {
-    await copilotExecutor.executePrompt(request.prompt, {
-      agent: request.agent,
-      model: request.model,
-      modelName: request.modelName,
-      modelVendor: request.modelVendor,
-      modelFamily: request.modelFamily,
-      modelVersion: request.modelVersion,
-    });
+    await copilotExecutor.executePrompt(
+      request.prompt,
+      buildPromptExecutionOptions(request),
+    );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const safeErrorMessage = sanitizeErrorDetailsForLog(errorMessage);

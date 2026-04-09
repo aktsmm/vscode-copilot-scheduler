@@ -1,5 +1,12 @@
 import type { ModelInfo, ModelSelectionFields } from "./types";
 
+const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /^extra[-\s]+high$/iu, label: "Extra High" },
+  { pattern: /^high$/iu, label: "High" },
+  { pattern: /^medium$/iu, label: "Medium" },
+  { pattern: /^low$/iu, label: "Low" },
+];
+
 export type NormalizedModelSelection = {
   model?: string;
   modelName?: string;
@@ -64,8 +71,25 @@ function extractTrailingParenthesizedDetail(
 }
 
 function maybeStripNamedVariant(value: string): string | undefined {
-  const stripped = value.replace(/(?:[-\s]+)(high|medium|low)$/iu, "").trim();
+  const stripped = value
+    .replace(/(?:[-\s]+)(extra[-\s]+high|high|medium|low)$/iu, "")
+    .trim();
   return stripped && stripped !== value ? stripped : undefined;
+}
+
+function normalizeNamedVariantLabel(value: string | undefined): string | undefined {
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  for (const entry of NAMED_VARIANT_PATTERNS) {
+    if (entry.pattern.test(trimmed)) {
+      return entry.label;
+    }
+  }
+
+  return undefined;
 }
 
 function extractNamedVariant(value: string | undefined): string | undefined {
@@ -75,8 +99,10 @@ function extractNamedVariant(value: string | undefined): string | undefined {
   }
 
   const withoutParens = stripTrailingParenthesizedGroups(trimmed);
-  const match = withoutParens.match(/(?:^|[-\s])(high|medium|low)$/iu);
-  return match ? formatModelDetail(match[1]) : undefined;
+  const match = withoutParens.match(
+    /(?:^|[-\s])(extra[-\s]+high|high|medium|low)$/iu,
+  );
+  return match ? normalizeNamedVariantLabel(match[1]) : undefined;
 }
 
 function canonicalizeModelDisplayName(
@@ -170,18 +196,54 @@ function extractVariantTail(
   value: string | undefined,
   baseCandidates: Array<string | undefined>,
 ): string | undefined {
-  const normalizedValue = normalizeKey(value);
-  if (!normalizedValue) {
+  const trimmedValue = trimOptionalText(value);
+  if (!trimmedValue) {
     return undefined;
   }
+
+  const normalizedValue = normalizeKey(trimmedValue);
+  const normalizedSegments = trimmedValue
+    .split(/[\\/]+/u)
+    .map((segment) => normalizeKey(segment))
+    .filter(Boolean);
+  const sourceCandidates = [normalizedValue, ...normalizedSegments];
 
   for (const candidate of baseCandidates) {
     const normalizedBase = normalizeKey(candidate);
     if (!normalizedBase) {
       continue;
     }
-    if (normalizedValue.startsWith(normalizedBase + "-")) {
-      return normalizedValue.slice(normalizedBase.length + 1);
+
+    for (const source of sourceCandidates) {
+      if (source.startsWith(normalizedBase + "-")) {
+        return source.slice(normalizedBase.length + 1);
+      }
+
+      const embeddedIndex = source.lastIndexOf(`-${normalizedBase}-`);
+      if (embeddedIndex >= 0) {
+        return source.slice(embeddedIndex + normalizedBase.length + 2);
+      }
+    }
+
+    for (let index = 0; index < normalizedSegments.length; index += 1) {
+      if (normalizedSegments[index] !== normalizedBase) {
+        continue;
+      }
+
+      const next = normalizedSegments[index + 1];
+      if (!next) {
+        continue;
+      }
+
+      if (next === "versions") {
+        const versionSegment = normalizedSegments[index + 2];
+        if (versionSegment) {
+          return versionSegment;
+        }
+        continue;
+      }
+
+      return next;
     }
   }
 
@@ -192,6 +254,11 @@ function formatModelDetail(detail: string | undefined): string | undefined {
   const trimmed = trimOptionalText(detail);
   if (!trimmed) {
     return undefined;
+  }
+
+  const namedVariant = normalizeNamedVariantLabel(trimmed);
+  if (namedVariant) {
+    return namedVariant;
   }
 
   if (/^\d{4}(?:-\d{2}){2}$/u.test(trimmed)) {
@@ -267,6 +334,28 @@ function buildModelDisplayLabel(
   }
 
   return `${baseName} (${detailCandidates.join(", ")})`;
+}
+
+function uniquifyModelDisplayLabels(models: readonly ModelInfo[]): ModelInfo[] {
+  const labelCounts = new Map<string, number>();
+
+  for (const model of models) {
+    const key = normalizeKey(model.label || model.name || model.id);
+    labelCounts.set(key, (labelCounts.get(key) || 0) + 1);
+  }
+
+  return models.map((model) => {
+    const label = model.label || model.name || model.id;
+    const key = normalizeKey(label);
+    if (!key || (labelCounts.get(key) || 0) <= 1) {
+      return model;
+    }
+
+    return {
+      ...model,
+      label: `${label} [${model.id}]`,
+    };
+  });
 }
 
 function buildMatchKeys(value: string | undefined): Set<string> {
@@ -559,13 +648,15 @@ export function normalizeModelCatalog(
     }
   }
 
-  return normalizedModels.map((model) => ({
+  const labeledModels = normalizedModels.map((model) => ({
     ...model,
     label: buildModelDisplayLabel(
       model,
       groupedModels.get(getModelGroupKey(model)) || [model],
     ),
   }));
+
+  return uniquifyModelDisplayLabels(labeledModels);
 }
 
 export function hasModelSelection(
