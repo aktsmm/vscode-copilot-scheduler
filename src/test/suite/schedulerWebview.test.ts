@@ -933,9 +933,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     const expectedTokens = [
       'var modelSelectionStatus = document.getElementById("model-selection-status")',
-      'function ensureUnavailableModelOption(selectEl, selection) {',
+      "function ensureUnavailableModelOption(selectEl, selection) {",
       'option.dataset.unresolved = "true"',
-      'option.dataset.modelId = modelId',
+      "option.dataset.modelId = modelId",
       'strings.labelModelUnavailableNote || ""',
       'selectedModelOption.dataset.modelId || selectedModelOption.value || ""',
     ];
