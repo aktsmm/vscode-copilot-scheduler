@@ -290,6 +290,12 @@
   var tasks = Array.isArray(initialData.tasks) ? initialData.tasks : [];
   var agents = Array.isArray(initialData.agents) ? initialData.agents : [];
   var models = Array.isArray(initialData.models) ? initialData.models : [];
+  var modelPickerDefault = Array.isArray(initialData.modelPickerDefault)
+    ? initialData.modelPickerDefault
+    : [];
+  var modelPickerAll = Array.isArray(initialData.modelPickerAll)
+    ? initialData.modelPickerAll
+    : [];
   var promptTemplates = Array.isArray(initialData.promptTemplates)
     ? initialData.promptTemplates
     : [];
@@ -344,6 +350,9 @@
   var cronExpression = document.getElementById("cron-expression");
   var agentSelect = document.getElementById("agent-select");
   var modelSelect = document.getElementById("model-select");
+  var modelVariantGroup = document.getElementById("model-variant-group");
+  var modelVariantSelect = document.getElementById("model-variant-select");
+  var showAllModelsInput = document.getElementById("show-all-models");
   var templateSelect = document.getElementById("template-select");
   var templateSelectGroup = document.getElementById("template-select-group");
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
@@ -372,9 +381,27 @@
   var summaryPaused = document.getElementById("summary-paused");
   var modelSelectionStatus = document.getElementById("model-selection-status");
 
-  function getSelectedModelOption() {
+  function getSelectedBaseModelOption() {
     if (!modelSelect || modelSelect.selectedIndex < 0) return null;
     return modelSelect.options[modelSelect.selectedIndex] || null;
+  }
+
+  function getSelectedVariantOption() {
+    if (
+      !modelVariantSelect ||
+      !modelVariantGroup ||
+      modelVariantGroup.style.display === "none" ||
+      modelVariantSelect.selectedIndex < 0
+    ) {
+      return null;
+    }
+    return modelVariantSelect.options[modelVariantSelect.selectedIndex] || null;
+  }
+
+  function getActiveModelPickerGroups() {
+    return showAllModelsInput && showAllModelsInput.checked
+      ? modelPickerAll
+      : modelPickerDefault;
   }
 
   function clearPendingModelSelection() {
@@ -383,6 +410,89 @@
     pendingModelVendor = "";
     pendingModelFamily = "";
     pendingModelVersion = "";
+  }
+
+  function buildModelSelectionFromOption(option) {
+    if (!option || !option.dataset) return null;
+    return {
+      model: option.dataset.modelId || option.value || "",
+      modelName: option.dataset.modelName || "",
+      modelVendor: option.dataset.modelVendor || "",
+      modelFamily: option.dataset.modelFamily || "",
+      modelVersion: option.dataset.modelVersion || "",
+    };
+  }
+
+  function findModelPickerGroup(groups, key) {
+    if (!Array.isArray(groups) || !key) return null;
+    for (var i = 0; i < groups.length; i++) {
+      var group = groups[i];
+      if (group && group.key === key) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  function selectionMatchesModelSelection(selection, candidate) {
+    if (!selection || !candidate) return false;
+    var targetId = String(selection.model || "");
+    var targetName = String(selection.modelName || "");
+    var targetVendor = String(selection.modelVendor || "");
+    var targetFamily = String(selection.modelFamily || "");
+    var targetVersion = String(selection.modelVersion || "");
+
+    if (targetId) {
+      if (String(candidate.model || "") !== targetId) return false;
+    } else if (targetName) {
+      if (String(candidate.modelName || "") !== targetName) return false;
+    } else {
+      return false;
+    }
+
+    if (targetVendor && String(candidate.modelVendor || "") !== targetVendor) {
+      return false;
+    }
+    if (targetFamily && String(candidate.modelFamily || "") !== targetFamily) {
+      return false;
+    }
+    if (
+      targetVersion &&
+      String(candidate.modelVersion || "") !== targetVersion
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function findModelPickerSelection(groups, selection) {
+    if (!Array.isArray(groups) || !selection) return null;
+    for (var i = 0; i < groups.length; i++) {
+      var group = groups[i];
+      var variants =
+        group && Array.isArray(group.variants) ? group.variants : [];
+      for (var j = 0; j < variants.length; j++) {
+        var variant = variants[j];
+        var model = variant ? variant.model || null : null;
+        if (!model) continue;
+        if (
+          selectionMatchesModelSelection(selection, {
+            model: model.id || "",
+            modelName: model.name || "",
+            modelVendor: model.vendor || "",
+            modelFamily: model.family || "",
+            modelVersion: model.version || "",
+          })
+        ) {
+          return {
+            group: group,
+            variant: variant,
+          };
+        }
+      }
+    }
+    return null;
   }
 
   function clearUnavailableModelOptions(selectEl) {
@@ -404,9 +514,94 @@
     return suffix && base ? base + " " + suffix : base;
   }
 
+  function clearModelVariantOptions() {
+    if (!modelVariantSelect) return;
+    var placeholderText = strings.placeholderSelectModelVariant || "";
+    modelVariantSelect.innerHTML =
+      '<option value="">' + escapeHtml(placeholderText) + "</option>";
+    if (modelVariantGroup) {
+      modelVariantGroup.style.display = "none";
+    }
+  }
+
+  function updateModelVariantOptions(group, selection) {
+    if (!modelVariantSelect) return;
+
+    var variants = group && Array.isArray(group.variants) ? group.variants : [];
+    if (variants.length <= 1) {
+      clearModelVariantOptions();
+      return;
+    }
+
+    var placeholderText = strings.placeholderSelectModelVariant || "";
+    modelVariantSelect.innerHTML =
+      '<option value="">' +
+      escapeHtml(placeholderText) +
+      "</option>" +
+      variants
+        .map(function (variant) {
+          var model = variant && variant.model ? variant.model : {};
+          return (
+            '<option value="' +
+            escapeAttr(variant.key || "") +
+            '" data-model-id="' +
+            escapeAttr(model.id || "") +
+            '" data-model-name="' +
+            escapeAttr(model.name || "") +
+            '" data-model-vendor="' +
+            escapeAttr(model.vendor || "") +
+            '" data-model-family="' +
+            escapeAttr(model.family || "") +
+            '" data-model-version="' +
+            escapeAttr(model.version || "") +
+            '">' +
+            escapeHtml(variant.label || model.label || model.name || model.id || "") +
+            "</option>"
+          );
+        })
+        .join("");
+
+    if (modelVariantGroup) {
+      modelVariantGroup.style.display = "block";
+    }
+
+    var matchedVariantKey = "";
+    var matchedSelection = findModelPickerSelection([group], selection);
+    if (matchedSelection && matchedSelection.variant) {
+      matchedVariantKey = matchedSelection.variant.key || "";
+    }
+
+    if (
+      matchedVariantKey &&
+      selectHasOptionValue(modelVariantSelect, matchedVariantKey)
+    ) {
+      modelVariantSelect.value = matchedVariantKey;
+    } else if (modelVariantSelect.options.length > 1) {
+      modelVariantSelect.selectedIndex = 1;
+    }
+  }
+
+  function getCurrentModelSelection() {
+    var selectedVariantOption = getSelectedVariantOption();
+    if (selectedVariantOption && selectedVariantOption.dataset) {
+      return buildModelSelectionFromOption(selectedVariantOption);
+    }
+
+    var selectedModelOption = getSelectedBaseModelOption();
+    if (selectedModelOption && selectedModelOption.dataset) {
+      var fromBase = buildModelSelectionFromOption(selectedModelOption);
+      if (fromBase && (fromBase.model || fromBase.modelName)) {
+        return fromBase;
+      }
+    }
+
+    return null;
+  }
+
   function updateModelSelectionStatus() {
     if (!modelSelectionStatus) return;
-    var selectedModelOption = getSelectedModelOption();
+    var selectedModelOption =
+      getSelectedVariantOption() || getSelectedBaseModelOption();
     if (
       selectedModelOption &&
       selectedModelOption.dataset &&
@@ -433,6 +628,7 @@
     }
 
     clearUnavailableModelOptions(selectEl);
+    clearModelVariantOptions();
 
     var option = document.createElement("option");
     option.value = modelId;
@@ -450,6 +646,99 @@
     selectEl.selectedIndex = selectEl.options.length - 1;
     updateModelSelectionStatus();
     return true;
+  }
+
+  function updateModelOptions(selection) {
+    if (!modelSelect) return false;
+
+    var groups = Array.isArray(getActiveModelPickerGroups())
+      ? getActiveModelPickerGroups()
+      : [];
+    clearUnavailableModelOptions(modelSelect);
+
+    if (groups.length === 0) {
+      var noText = strings.placeholderNoModels || "";
+      modelSelect.innerHTML =
+        '<option value="">' + escapeHtml(noText) + "</option>";
+      clearModelVariantOptions();
+      updateModelSelectionStatus();
+      return false;
+    }
+
+    var matchedSelection = findModelPickerSelection(groups, selection);
+    var previousGroupKey = modelSelect.value || "";
+    var selectText = strings.placeholderSelectModel || "";
+    var placeholder =
+      '<option value="">' + escapeHtml(selectText) + "</option>";
+    modelSelect.innerHTML =
+      placeholder +
+      groups
+        .map(function (group) {
+          var defaultVariant =
+            group && Array.isArray(group.variants) && group.variants.length > 0
+              ? group.variants[0]
+              : null;
+          var defaultModel =
+            defaultVariant && defaultVariant.model ? defaultVariant.model : {};
+          return (
+            '<option value="' +
+            escapeAttr(group.key || "") +
+            '" data-model-id="' +
+            escapeAttr(defaultModel.id || "") +
+            '" data-model-name="' +
+            escapeAttr(defaultModel.name || "") +
+            '" data-model-vendor="' +
+            escapeAttr(defaultModel.vendor || "") +
+            '" data-model-family="' +
+            escapeAttr(defaultModel.family || "") +
+            '" data-model-version="' +
+            escapeAttr(defaultModel.version || "") +
+            '">' +
+            escapeHtml(group.label || "") +
+            "</option>"
+          );
+        })
+        .join("");
+
+    if (matchedSelection && matchedSelection.group) {
+      modelSelect.value = matchedSelection.group.key || "";
+    } else if (
+      previousGroupKey &&
+      selectHasOptionValue(modelSelect, previousGroupKey)
+    ) {
+      modelSelect.value = previousGroupKey;
+    } else {
+      modelSelect.value = "";
+    }
+
+    var selectedGroup = findModelPickerGroup(groups, modelSelect.value || "");
+    updateModelVariantOptions(selectedGroup, selection);
+    updateModelSelectionStatus();
+    return selection ? !!matchedSelection : !!selectedGroup;
+  }
+
+  function applyModelSelection(selection) {
+    if (!selection) {
+      updateModelOptions(null);
+      return false;
+    }
+
+    if (updateModelOptions(selection)) {
+      return true;
+    }
+
+    if (
+      showAllModelsInput &&
+      !showAllModelsInput.checked &&
+      findModelPickerSelection(modelPickerAll, selection)
+    ) {
+      showAllModelsInput.checked = true;
+      if (updateModelOptions(selection)) {
+        return true;
+      }
+    }
+
+    return ensureUnavailableModelOption(modelSelect, selection);
   }
 
   function normalizeWorkspacePath(p) {
@@ -544,7 +833,38 @@
     modelSelect.addEventListener("change", function () {
       clearUnavailableModelOptions(modelSelect);
       clearPendingModelSelection();
+      updateModelVariantOptions(
+        findModelPickerGroup(getActiveModelPickerGroups(), modelSelect.value),
+        null,
+      );
       updateModelSelectionStatus();
+    });
+  }
+  if (modelVariantSelect) {
+    modelVariantSelect.addEventListener("change", function () {
+      clearPendingModelSelection();
+      updateModelSelectionStatus();
+    });
+  }
+  if (showAllModelsInput) {
+    showAllModelsInput.addEventListener("change", function () {
+      var currentSelection = getCurrentModelSelection() || {
+        model: pendingModelValue,
+        modelName: pendingModelName,
+        modelVendor: pendingModelVendor,
+        modelFamily: pendingModelFamily,
+        modelVersion: pendingModelVersion,
+      };
+      if (
+        currentSelection &&
+        (currentSelection.model || currentSelection.modelName)
+      ) {
+        if (!updateModelOptions(currentSelection)) {
+          ensureUnavailableModelOption(modelSelect, currentSelection);
+        }
+      } else {
+        updateModelOptions(null);
+      }
     });
   }
   if (templateSelect) {
@@ -694,31 +1014,22 @@
       if (editingTaskId && !agentValue && pendingAgentValue) {
         agentValue = pendingAgentValue;
       }
-      var selectedModelOption = getSelectedModelOption();
-      var modelValue =
-        selectedModelOption && selectedModelOption.dataset
-          ? selectedModelOption.dataset.modelId ||
-            selectedModelOption.value ||
-            ""
-          : modelSelect
-            ? modelSelect.value
-            : "";
-      var modelNameValue =
-        selectedModelOption && selectedModelOption.dataset
-          ? selectedModelOption.dataset.modelName || ""
-          : "";
-      var modelVendorValue =
-        selectedModelOption && selectedModelOption.dataset
-          ? selectedModelOption.dataset.modelVendor || ""
-          : "";
-      var modelFamilyValue =
-        selectedModelOption && selectedModelOption.dataset
-          ? selectedModelOption.dataset.modelFamily || ""
-          : "";
-      var modelVersionValue =
-        selectedModelOption && selectedModelOption.dataset
-          ? selectedModelOption.dataset.modelVersion || ""
-          : "";
+      var currentModelSelection = getCurrentModelSelection();
+      var modelValue = currentModelSelection
+        ? currentModelSelection.model || ""
+        : "";
+      var modelNameValue = currentModelSelection
+        ? currentModelSelection.modelName || ""
+        : "";
+      var modelVendorValue = currentModelSelection
+        ? currentModelSelection.modelVendor || ""
+        : "";
+      var modelFamilyValue = currentModelSelection
+        ? currentModelSelection.modelFamily || ""
+        : "";
+      var modelVersionValue = currentModelSelection
+        ? currentModelSelection.modelVersion || ""
+        : "";
       if (editingTaskId) {
         if (!modelNameValue && pendingModelName) {
           modelNameValue = pendingModelName;
@@ -900,12 +1211,10 @@
       var promptTextEl = document.getElementById("prompt-text");
       var prompt = promptTextEl ? promptTextEl.value : "";
       var agent = agentSelect ? agentSelect.value : "";
-      var model = modelSelect ? modelSelect.value : "";
-      var selectedModelOption = null;
-      if (modelSelect && modelSelect.selectedIndex >= 0) {
-        selectedModelOption =
-          modelSelect.options[modelSelect.selectedIndex] || null;
-      }
+      var currentModelSelection = getCurrentModelSelection();
+      var model = currentModelSelection
+        ? currentModelSelection.model || ""
+        : "";
       var normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
 
       if (!normalizedPrompt) {
@@ -918,22 +1227,18 @@
         prompt: prompt,
         agent: agent,
         model: model,
-        modelName:
-          selectedModelOption && selectedModelOption.dataset
-            ? selectedModelOption.dataset.modelName || ""
-            : "",
-        modelVendor:
-          selectedModelOption && selectedModelOption.dataset
-            ? selectedModelOption.dataset.modelVendor || ""
-            : "",
-        modelFamily:
-          selectedModelOption && selectedModelOption.dataset
-            ? selectedModelOption.dataset.modelFamily || ""
-            : "",
-        modelVersion:
-          selectedModelOption && selectedModelOption.dataset
-            ? selectedModelOption.dataset.modelVersion || ""
-            : "",
+        modelName: currentModelSelection
+          ? currentModelSelection.modelName || ""
+          : "",
+        modelVendor: currentModelSelection
+          ? currentModelSelection.modelVendor || ""
+          : "",
+        modelFamily: currentModelSelection
+          ? currentModelSelection.modelFamily || ""
+          : "",
+        modelVersion: currentModelSelection
+          ? currentModelSelection.modelVersion || ""
+          : "",
       });
     });
   }
@@ -1731,7 +2036,10 @@
     clearPendingModelSelection();
     pendingTemplatePath = "";
     editingTaskEnabled = true;
+    if (showAllModelsInput) showAllModelsInput.checked = false;
     clearUnavailableModelOptions(modelSelect);
+    clearModelVariantOptions();
+    updateModelOptions(null);
     updateModelSelectionStatus();
     applyPromptSource("inline");
     if (friendlyFrequency) friendlyFrequency.value = "";
@@ -1800,44 +2108,6 @@
           })
           .join("");
     }
-  }
-
-  function updateModelOptions() {
-    if (!modelSelect) return;
-    var items = Array.isArray(models) ? models : [];
-    if (items.length === 0) {
-      var noText = strings.placeholderNoModels || "";
-      modelSelect.innerHTML =
-        '<option value="">' + escapeHtml(noText) + "</option>";
-    } else {
-      var selectText = strings.placeholderSelectModel || "";
-      var placeholder =
-        '<option value="">' + escapeHtml(selectText) + "</option>";
-      modelSelect.innerHTML =
-        placeholder +
-        items
-          .map(function (m) {
-            return (
-              '<option value="' +
-              escapeAttr(m.id) +
-              '" data-model-id="' +
-              escapeAttr(m.id || "") +
-              '" data-model-name="' +
-              escapeAttr(m.name || "") +
-              '" data-model-vendor="' +
-              escapeAttr(m.vendor || "") +
-              '" data-model-family="' +
-              escapeAttr(m.family || "") +
-              '" data-model-version="' +
-              escapeAttr(m.version || "") +
-              '">' +
-              escapeHtml(m.label || m.name || "") +
-              "</option>"
-            );
-          })
-          .join("");
-    }
-    updateModelSelectionStatus();
   }
 
   function updateTemplateOptions(source, selectedPath) {
@@ -1909,7 +2179,7 @@
 
   // Initialize dropdowns with cached data
   updateAgentOptions();
-  updateModelOptions();
+  updateModelOptions(null);
   var initialPromptSource = document.querySelector(
     'input[name="prompt-source"]:checked',
   );
@@ -1933,59 +2203,6 @@
       if (opt && opt.value === value) return true;
     }
     return false;
-  }
-
-  function trySelectModelOptionBySelection(selectEl, selection) {
-    if (!selectEl || !selection) return false;
-    var targetId = String(selection.model || "");
-    var targetName = String(selection.modelName || "");
-    var targetVendor = String(selection.modelVendor || "");
-    var targetFamily = String(selection.modelFamily || "");
-    var targetVersion = String(selection.modelVersion || "");
-
-    var options = selectEl.options;
-    if (!options || typeof options.length !== "number") return false;
-
-    for (var i = 0; i < options.length; i++) {
-      var option = options[i];
-      if (!option) continue;
-      var optionId = option.dataset
-        ? option.dataset.modelId || option.value || ""
-        : String(option.value || "");
-      var optionName = option.dataset ? option.dataset.modelName || "" : "";
-
-      if (targetId) {
-        if (optionId !== targetId) continue;
-      } else if (targetName) {
-        if (optionName !== targetName) continue;
-      } else {
-        continue;
-      }
-
-      var optionVendor = option.dataset ? option.dataset.modelVendor || "" : "";
-      var optionFamily = option.dataset ? option.dataset.modelFamily || "" : "";
-      var optionVersion = option.dataset
-        ? option.dataset.modelVersion || ""
-        : "";
-
-      if (targetVendor && optionVendor !== targetVendor) continue;
-      if (targetFamily && optionFamily !== targetFamily) continue;
-      if (targetVersion && optionVersion !== targetVersion) continue;
-
-      selectEl.selectedIndex = i;
-      return true;
-    }
-
-    if (!targetId) {
-      return false;
-    }
-
-    if (targetName || targetVendor || targetFamily || targetVersion) {
-      return false;
-    }
-
-    selectEl.value = targetId;
-    return selectEl.value === targetId;
   }
 
   window.editTask = function (id) {
@@ -2026,28 +2243,17 @@
         agentSelect.value = "";
       }
     }
-    if (modelSelect) {
-      if (pendingModelValue || pendingModelName) {
-        var restoredModelOption = trySelectModelOptionBySelection(modelSelect, {
-          model: pendingModelValue,
-          modelName: pendingModelName,
-          modelVendor: pendingModelVendor,
-          modelFamily: pendingModelFamily,
-          modelVersion: pendingModelVersion,
-        });
-        if (restoredModelOption) {
-          clearPendingModelSelection();
-        } else {
-          ensureUnavailableModelOption(modelSelect, {
-            model: pendingModelValue,
-            modelName: pendingModelName,
-            modelVendor: pendingModelVendor,
-            modelFamily: pendingModelFamily,
-            modelVersion: pendingModelVersion,
-          });
-        }
+    if (modelSelect && (pendingModelValue || pendingModelName)) {
+      applyModelSelection({
+        model: pendingModelValue,
+        modelName: pendingModelName,
+        modelVendor: pendingModelVendor,
+        modelFamily: pendingModelFamily,
+        modelVersion: pendingModelVersion,
+      });
+      if (getCurrentModelSelection()) {
+        clearPendingModelSelection();
       }
-      updateModelSelectionStatus();
     }
     editingTaskEnabled = task.enabled !== false;
     var scopeValue = task.scope || "workspace";
@@ -2206,60 +2412,35 @@
           break;
         case "updateModels":
           {
-            var currentModelValue =
-              pendingModelValue || (modelSelect ? modelSelect.value : "");
-            var currentModelName = pendingModelName;
-            var currentModelVendor = pendingModelVendor;
-            var currentModelFamily = pendingModelFamily;
-            var currentModelVersion = pendingModelVersion;
-            if (modelSelect && modelSelect.selectedIndex >= 0) {
-              var selectedModelOption =
-                modelSelect.options[modelSelect.selectedIndex];
-              if (selectedModelOption && selectedModelOption.dataset) {
-                currentModelName =
-                  currentModelName ||
-                  selectedModelOption.dataset.modelName ||
-                  "";
-                currentModelVendor =
-                  currentModelVendor ||
-                  selectedModelOption.dataset.modelVendor ||
-                  "";
-                currentModelFamily =
-                  currentModelFamily ||
-                  selectedModelOption.dataset.modelFamily ||
-                  "";
-                currentModelVersion =
-                  currentModelVersion ||
-                  selectedModelOption.dataset.modelVersion ||
-                  "";
-              }
-            }
+            var currentModelSelection = getCurrentModelSelection() || {
+              model: pendingModelValue,
+              modelName: pendingModelName,
+              modelVendor: pendingModelVendor,
+              modelFamily: pendingModelFamily,
+              modelVersion: pendingModelVersion,
+            };
             models = Array.isArray(message.models) ? message.models : [];
-            updateModelOptions();
-            if (modelSelect && (currentModelValue || currentModelName)) {
-              var restored = trySelectModelOptionBySelection(modelSelect, {
-                model: currentModelValue,
-                modelName: currentModelName,
-                modelVendor: currentModelVendor,
-                modelFamily: currentModelFamily,
-                modelVersion: currentModelVersion,
-              });
-              if (restored) {
+            modelPickerDefault = Array.isArray(message.modelPickerDefault)
+              ? message.modelPickerDefault
+              : [];
+            modelPickerAll = Array.isArray(message.modelPickerAll)
+              ? message.modelPickerAll
+              : [];
+            if (
+              currentModelSelection &&
+              (currentModelSelection.model || currentModelSelection.modelName)
+            ) {
+              if (applyModelSelection(currentModelSelection)) {
                 clearPendingModelSelection();
               } else {
-                pendingModelValue = currentModelValue;
-                pendingModelName = currentModelName;
-                pendingModelVendor = currentModelVendor;
-                pendingModelFamily = currentModelFamily;
-                pendingModelVersion = currentModelVersion;
-                ensureUnavailableModelOption(modelSelect, {
-                  model: currentModelValue,
-                  modelName: currentModelName,
-                  modelVendor: currentModelVendor,
-                  modelFamily: currentModelFamily,
-                  modelVersion: currentModelVersion,
-                });
+                pendingModelValue = currentModelSelection.model || "";
+                pendingModelName = currentModelSelection.modelName || "";
+                pendingModelVendor = currentModelSelection.modelVendor || "";
+                pendingModelFamily = currentModelSelection.modelFamily || "";
+                pendingModelVersion = currentModelSelection.modelVersion || "";
               }
+            } else {
+              updateModelOptions(null);
             }
             updateModelSelectionStatus();
           }

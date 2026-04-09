@@ -1029,19 +1029,19 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("initial HTML model options use disambiguated labels and preserve raw metadata", () => {
+  test("initial HTML includes grouped model picker controls", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
       "utf8",
     );
 
     const expectedTokens = [
-      'data-model-id="${escapeHtmlAttr(m.id || "")}"',
-      'data-model-name="${escapeHtmlAttr(m.name || "")}"',
-      'data-model-vendor="${escapeHtmlAttr(m.vendor || "")}"',
-      'data-model-family="${escapeHtmlAttr(m.family || "")}"',
-      'data-model-version="${escapeHtmlAttr(m.version || "")}"',
-      'escapeHtml(m.label || m.name || "")',
+      "const initialModelPickerPayload = this.buildModelPickerPayload(initialModels);",
+      "modelPickerDefault: initialModelPickerPayload.modelPickerDefault",
+      "modelPickerAll: initialModelPickerPayload.modelPickerAll",
+      'id="show-all-models"',
+      'id="model-variant-group"',
+      'id="model-variant-select"',
       'id="model-selection-status"',
     ];
 
@@ -1111,7 +1111,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
   });
 
-  test("updateModelOptions uses disambiguated labels and keeps raw model metadata", () => {
+  test("updateModelOptions renders grouped model entries and variant metadata", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
       "utf8",
@@ -1119,41 +1119,65 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     const updateModelOptionsSource = extractBlockFromStartToken(
       source,
-      "function updateModelOptions() {",
+      "function updateModelOptions(selection) {",
     );
 
-    const expectedTokens = [
-      'data-model-id="',
-      'escapeAttr(m.id || "")',
-      'data-model-name="',
-      'escapeAttr(m.name || "")',
-      'data-model-vendor="',
-      'escapeAttr(m.vendor || "")',
-      'data-model-family="',
-      'escapeAttr(m.family || "")',
-      'data-model-version="',
-      'escapeAttr(m.version || "")',
-      'escapeHtml(m.label || m.name || "")',
+    const updateVariantOptionsSource = extractBlockFromStartToken(
+      source,
+      "function updateModelVariantOptions(group, selection) {",
+    );
+
+    const groupTokens = [
+      "var groups = Array.isArray(getActiveModelPickerGroups())",
+      'escapeAttr(group.key || "")',
+      'escapeHtml(group.label || "")',
+      "updateModelVariantOptions(selectedGroup, selection);",
     ];
 
-    for (const token of expectedTokens) {
+    for (const token of groupTokens) {
       assert.ok(
         sourceContainsToken(updateModelOptionsSource, token),
         `Expected updateModelOptions token not found: ${token}`,
       );
     }
+
+    const variantTokens = [
+      'data-model-id="',
+      'escapeAttr(model.id || "")',
+      'data-model-name="',
+      'escapeAttr(model.name || "")',
+      'data-model-vendor="',
+      'escapeAttr(model.vendor || "")',
+      'data-model-family="',
+      'escapeAttr(model.family || "")',
+      'data-model-version="',
+      'escapeAttr(model.version || "")',
+      'escapeHtml(variant.label || model.label || model.name || model.id || "")',
+    ];
+
+    for (const token of variantTokens) {
+      assert.ok(
+        sourceContainsToken(updateVariantOptionsSource, token),
+        `Expected updateModelVariantOptions token not found: ${token}`,
+      );
+    }
   });
 
-  test("webview refresh filters Copilot CLI models before populating picker data", () => {
+  test("webview refresh builds default and expanded model picker payloads", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
       "utf8",
     );
 
     const expectedTokens = [
-      'import { filterPickerModelCatalog } from "./modelSelection";',
-      "const pickerModels = filterPickerModelCatalog(result.models);",
-      "this.cachedModels = this.localizeCachedModels(pickerModels);",
+      "buildModelPickerGroups,",
+      "filterExpandedPickerModelCatalog,",
+      "filterPickerModelCatalog,",
+      "modelPickerDefault: relabelDefaultVariant(",
+      "buildModelPickerGroups(filterPickerModelCatalog(models))",
+      "modelPickerAll: relabelDefaultVariant(",
+      "buildModelPickerGroups(filterExpandedPickerModelCatalog(models))",
+      "this.cachedModels = this.localizeCachedModels(result.models);",
     ];
 
     for (const token of expectedTokens) {
@@ -1176,7 +1200,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'option.dataset.unresolved = "true"',
       "option.dataset.modelId = modelId",
       'strings.labelModelUnavailableNote || ""',
-      'selectedModelOption.dataset.modelId || selectedModelOption.value || ""',
+      "getSelectedVariantOption() || getSelectedBaseModelOption()",
+      "return ensureUnavailableModelOption(modelSelect, selection);",
     ];
 
     for (const token of expectedTokens) {

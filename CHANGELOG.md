@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.34] - 2026-04-10
+
+### Improved
+
+- **Chat-like default model picker**: The Scheduler model picker now defaults to a narrower list closer to the GitHub Copilot Chat model picker, reducing noisy provider duplicates such as extra `claude-code` entries in the default view.
+- **Expanded model discovery toggle**: An in-form option now reveals additional discovered providers and model variants when you need to access entries outside the default Copilot Chat-like list.
+- **Dynamic quality / variant selection**: Model selection is now split into base model plus runtime quality/variant options, so entries such as `High`, `Low`, `Extra High`, and context-specific variants can be selected when the current environment exposes them.
+- **Saved model restore resilience**: Existing saved model selections continue to restore correctly across default/expanded picker modes, and hidden or no-longer-listed variants are still preserved as unavailable selections until explicitly changed.
+
+### Tests
+
+- Added coverage for default-vs-expanded model filtering, grouped variant picker payloads, grouped Webview model UI contracts, and dynamic variant restore behavior.
+
 ## [1.0.33] - 2026-04-10
 
 ### Fixed

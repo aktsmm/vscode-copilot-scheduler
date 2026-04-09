@@ -204,6 +204,8 @@ export const messages = {
   webviewNoAgentsAvailable: () =>
     t("No agents available", "利用可能なAgentがありません"),
   webviewSelectModelPlaceholder: () => t("Select model", "モデルを選択"),
+  webviewSelectModelVariantPlaceholder: () =>
+    t("Select quality / variant", "品質 / バリアントを選択"),
   webviewNoModelsAvailable: () =>
     t("No models available", "利用可能なモデルがありません"),
   webviewSelectTemplatePlaceholder: () =>
@@ -331,10 +333,22 @@ export const messages = {
   labelInterval: () => t("Interval", "間隔"),
   labelAgent: () => t("Agent", "Agent"),
   labelModel: () => t("Model", "モデル"),
+  labelModelVariant: () => t("Quality / Variant", "品質 / バリアント"),
+  labelModelVariantDefault: () => t("Default", "既定"),
+  labelModelShowAll: () =>
+    t(
+      "Show additional discovered models/providers",
+      "追加で見つかったモデル/プロバイダーも表示する",
+    ),
   labelModelNote: () =>
     t(
-      "Model selection is a preview feature and may not apply in all environments. If needed, pick the model directly in the Copilot Chat panel.",
-      "モデルの選択はプレビュー機能で、環境によって反映されない場合があります。Copilot Chat パネルのモデルも確認してください。",
+      "By default, only models similar to the Copilot Chat picker are shown. Turn on the option below to see additional discovered providers or variants.",
+      "既定では Copilot Chat のモデル picker に近い候補だけを表示します。追加で見つかったプロバイダーやバリアントを見たい場合は下のオプションを有効にしてください。",
+    ),
+  labelModelVariantNote: () =>
+    t(
+      "Shown only when the selected model exposes multiple runtime variants such as High/Low or context-specific options.",
+      "選択したモデルに High/Low やコンテキスト別など複数の実行バリアントがある場合のみ表示されます。",
     ),
   labelModelUnavailableNote: () =>
     t(

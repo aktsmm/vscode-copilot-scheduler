@@ -26,7 +26,11 @@ import {
   resolveGlobalPromptsRoot,
 } from "./promptResolver";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
-import { filterPickerModelCatalog } from "./modelSelection";
+import {
+  buildModelPickerGroups,
+  filterExpandedPickerModelCatalog,
+  filterPickerModelCatalog,
+} from "./modelSelection";
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 
@@ -112,6 +116,42 @@ export class SchedulerWebview {
     });
   }
 
+  private static buildModelPickerPayload(models: readonly ModelInfo[]): {
+    modelPickerDefault: ReturnType<typeof buildModelPickerGroups>;
+    modelPickerAll: ReturnType<typeof buildModelPickerGroups>;
+  } {
+    const relabelDefaultVariant = (
+      groups: ReturnType<typeof buildModelPickerGroups>,
+    ) =>
+      groups.map((group) => ({
+        ...group,
+        variants: group.variants.map((variant) => ({
+          ...variant,
+          label:
+            variant.label === "Default"
+              ? messages.labelModelVariantDefault()
+              : variant.label,
+        })),
+      }));
+
+    return {
+      modelPickerDefault: relabelDefaultVariant(
+        buildModelPickerGroups(filterPickerModelCatalog(models)),
+      ),
+      modelPickerAll: relabelDefaultVariant(
+        buildModelPickerGroups(filterExpandedPickerModelCatalog(models)),
+      ),
+    };
+  }
+
+  private static buildUpdateModelsMessage(): OutgoingWebviewMessage {
+    return {
+      type: "updateModels",
+      models: this.cachedModels,
+      ...this.buildModelPickerPayload(this.cachedModels),
+    };
+  }
+
   /**
    * Dispose the webview panel (e.g., on extension deactivation)
    */
@@ -184,10 +224,7 @@ export class SchedulerWebview {
             type: "updateAgents",
             agents: this.cachedAgents,
           });
-          this.postMessage({
-            type: "updateModels",
-            models: this.cachedModels,
-          });
+          this.postMessage(this.buildUpdateModelsMessage());
         })
         .catch((error) => {
           const rawMessage =
@@ -224,10 +261,7 @@ export class SchedulerWebview {
         type: "updateAgents",
         agents: this.cachedAgents,
       });
-      this.postMessage({
-        type: "updateModels",
-        models: this.cachedModels,
-      });
+      this.postMessage(this.buildUpdateModelsMessage());
       this.postMessage({
         type: "updatePromptTemplates",
         templates: this.cachedPromptTemplates,
@@ -375,10 +409,7 @@ export class SchedulerWebview {
         type: "updateAgents",
         agents: this.cachedAgents,
       });
-      this.postMessage({
-        type: "updateModels",
-        models: this.cachedModels,
-      });
+      this.postMessage(this.buildUpdateModelsMessage());
       this.postMessage({
         type: "updatePromptTemplates",
         templates: this.cachedPromptTemplates,
@@ -427,10 +458,7 @@ export class SchedulerWebview {
       type: "updateAgents",
       agents: this.cachedAgents,
     });
-    this.postMessage({
-      type: "updateModels",
-      models: this.cachedModels,
-    });
+    this.postMessage(this.buildUpdateModelsMessage());
     this.postMessage({
       type: "updatePromptTemplates",
       templates: this.cachedPromptTemplates,
@@ -532,10 +560,7 @@ export class SchedulerWebview {
           type: "updateAgents",
           agents: this.cachedAgents,
         });
-        this.postMessage({
-          type: "updateModels",
-          models: this.cachedModels,
-        });
+        this.postMessage(this.buildUpdateModelsMessage());
         break;
 
       case "refreshPrompts":
@@ -649,14 +674,13 @@ export class SchedulerWebview {
 
     try {
       const result = await CopilotExecutor.getAvailableModelsWithSource();
-      const pickerModels = filterPickerModelCatalog(result.models);
       if (
         result.source === "fallback" &&
         this.hasResolvedModelCatalog(this.cachedModels)
       ) {
         this.cachedModels = this.localizeCachedModels(this.cachedModels);
       } else {
-        this.cachedModels = this.localizeCachedModels(pickerModels);
+        this.cachedModels = this.localizeCachedModels(result.models);
       }
     } catch {
       this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
@@ -966,6 +990,8 @@ export class SchedulerWebview {
     const initialTemplates = Array.isArray(promptTemplates)
       ? promptTemplates
       : [];
+    const initialModelPickerPayload =
+      this.buildModelPickerPayload(initialModels);
 
     // Localized strings
     const strings = {
@@ -985,7 +1011,11 @@ export class SchedulerWebview {
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
       labelModel: messages.labelModel(),
+      labelModelVariant: messages.labelModelVariant(),
+      labelModelVariantDefault: messages.labelModelVariantDefault(),
       labelModelNote: messages.labelModelNote(),
+      labelModelShowAll: messages.labelModelShowAll(),
+      labelModelVariantNote: messages.labelModelVariantNote(),
       labelScope: messages.labelScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
       labelScopeWorkspace: messages.labelScopeWorkspace(),
@@ -1069,6 +1099,8 @@ export class SchedulerWebview {
       placeholderSelectAgent: messages.webviewSelectAgentPlaceholder(),
       placeholderNoAgents: messages.webviewNoAgentsAvailable(),
       placeholderSelectModel: messages.webviewSelectModelPlaceholder(),
+      placeholderSelectModelVariant:
+        messages.webviewSelectModelVariantPlaceholder(),
       placeholderNoModels: messages.webviewNoModelsAvailable(),
       placeholderSelectTemplate: messages.webviewSelectTemplatePlaceholder(),
       labelModelUnavailableNote: messages.labelModelUnavailableNote(),
@@ -1114,6 +1146,8 @@ export class SchedulerWebview {
       tasks: initialTasks,
       agents: initialAgents,
       models: initialModels,
+      modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
+      modelPickerAll: initialModelPickerPayload.modelPickerAll,
       promptTemplates: initialTemplates,
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
@@ -1935,10 +1969,22 @@ export class SchedulerWebview {
             <div class="form-group col-6">
               <label for="model-select">${escapeHtml(strings.labelModel)}</label>
               <select id="model-select">
-                ${initialModels.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectModel)}</option>` + initialModels.map((m) => `<option value="${escapeHtmlAttr(m.id || "")}" data-model-id="${escapeHtmlAttr(m.id || "")}" data-model-name="${escapeHtmlAttr(m.name || "")}" data-model-vendor="${escapeHtmlAttr(m.vendor || "")}" data-model-family="${escapeHtmlAttr(m.family || "")}" data-model-version="${escapeHtmlAttr(m.version || "")}">${escapeHtml(m.label || m.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoModels)}</option>`}
+                <option value="">${escapeHtml(initialModelPickerPayload.modelPickerDefault.length > 0 ? strings.placeholderSelectModel : strings.placeholderNoModels)}</option>
               </select>
+              <div class="checkbox-group">
+                <input type="checkbox" id="show-all-models">
+                <label for="show-all-models">${escapeHtml(strings.labelModelShowAll)}</label>
+              </div>
               <p class="note">${escapeHtml(strings.labelModelNote)}</p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
+            </div>
+
+            <div class="form-group col-6" id="model-variant-group" style="display:none;">
+              <label for="model-variant-select">${escapeHtml(strings.labelModelVariant)}</label>
+              <select id="model-variant-select">
+                <option value="">${escapeHtml(strings.placeholderSelectModelVariant)}</option>
+              </select>
+              <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
             </div>
 
             <div class="form-group col-6">

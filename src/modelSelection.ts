@@ -7,6 +7,20 @@ const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^low$/iu, label: "Low" },
 ];
 
+const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [/claude(?:[\s-]*)code/iu];
+
+export type ModelPickerVariant = {
+  key: string;
+  label: string;
+  model: ModelInfo;
+};
+
+export type ModelPickerGroup = {
+  key: string;
+  label: string;
+  variants: ModelPickerVariant[];
+};
+
 export type NormalizedModelSelection = {
   model?: string;
   modelName?: string;
@@ -41,6 +55,21 @@ export function isCopilotCliModel(model: ModelInfo): boolean {
   return values.some(
     (value) =>
       typeof value === "string" && /copilot(?:[\s-]*)cli/iu.test(value),
+  );
+}
+
+export function isNonDefaultPickerModel(model: ModelInfo): boolean {
+  const values = [
+    model.id,
+    model.name,
+    model.label,
+    model.vendor,
+    model.family,
+  ];
+  return values.some(
+    (value) =>
+      typeof value === "string" &&
+      NON_DEFAULT_PICKER_PATTERNS.some((pattern) => pattern.test(value)),
   );
 }
 
@@ -310,9 +339,21 @@ function buildModelDisplayLabel(
     return baseName;
   }
 
+  const detailLabel = buildModelDetailLabel(model, groupedModels);
+  if (!detailLabel) {
+    return baseName;
+  }
+
+  return `${baseName} (${detailLabel})`;
+}
+
+function buildModelDetailLabel(
+  model: ModelInfo,
+  groupedModels: readonly ModelInfo[],
+): string | undefined {
   const detailCandidates = getModelDetailCandidates(model, groupedModels);
   if (detailCandidates.length === 0) {
-    return baseName;
+    return undefined;
   }
 
   const detailCounts = detailCandidates.map((_detail, index) => {
@@ -339,11 +380,11 @@ function buildModelDisplayLabel(
       continue;
     }
     if (detailCounts[index]?.get(currentKey) === 1) {
-      return `${baseName} (${detailCandidates.slice(0, index + 1).join(", ")})`;
+      return detailCandidates.slice(0, index + 1).join(", ");
     }
   }
 
-  return `${baseName} (${detailCandidates.join(", ")})`;
+  return detailCandidates.join(", ");
 }
 
 function uniquifyModelDisplayLabels(models: readonly ModelInfo[]): ModelInfo[] {
@@ -672,7 +713,69 @@ export function normalizeModelCatalog(
 export function filterPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
+  return filterExpandedPickerModelCatalog(models).filter(
+    (model) => !isNonDefaultPickerModel(model),
+  );
+}
+
+export function filterExpandedPickerModelCatalog(
+  models: readonly ModelInfo[],
+): ModelInfo[] {
   return models.filter((model) => !isCopilotCliModel(model));
+}
+
+export function buildModelPickerGroups(
+  models: readonly ModelInfo[],
+): ModelPickerGroup[] {
+  const groupedModels = new Map<string, ModelInfo[]>();
+
+  for (const model of models) {
+    const groupKey = getModelGroupKey(model);
+    const existing = groupedModels.get(groupKey);
+    if (existing) {
+      existing.push(model);
+    } else {
+      groupedModels.set(groupKey, [model]);
+    }
+  }
+
+  const result: ModelPickerGroup[] = [];
+  for (const [groupKey, groupModels] of groupedModels.entries()) {
+    if (groupModels.length === 0) {
+      continue;
+    }
+
+    const firstModel = groupModels[0];
+    const label =
+      canonicalizeModelDisplayName(firstModel?.name) ||
+      canonicalizeModelDisplayName(firstModel?.family) ||
+      firstModel?.name ||
+      firstModel?.id ||
+      "";
+    if (!label) {
+      continue;
+    }
+
+    const variants = groupModels.map((model, index) => ({
+      key: buildModelCatalogKey(model),
+      label:
+        buildModelDetailLabel(model, groupModels) ||
+        (groupModels.length > 1
+          ? index === 0
+            ? "Default"
+            : model.label || model.name || model.id
+          : label),
+      model,
+    }));
+
+    result.push({
+      key: groupKey,
+      label,
+      variants,
+    });
+  }
+
+  return result;
 }
 
 export function hasModelSelection(

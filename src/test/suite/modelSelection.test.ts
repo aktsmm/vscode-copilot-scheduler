@@ -1,5 +1,7 @@
 import * as assert from "assert";
 import {
+  buildModelPickerGroups,
+  filterExpandedPickerModelCatalog,
   filterPickerModelCatalog,
   findBestMatchingModel,
   normalizeModelCatalog,
@@ -143,6 +145,90 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(catalog.length, 2);
     assert.strictEqual(pickerCatalog.length, 1);
     assert.strictEqual(pickerCatalog[0]?.id, "claude-opus-4.6-copilot");
+  });
+
+  test("filterPickerModelCatalog hides claude-code provider variants by default", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-sonnet-4.6-copilot",
+        name: "Claude Sonnet 4.6 (Copilot)",
+        description: "",
+        vendor: "Copilot",
+        family: "claude-sonnet-4.6",
+      },
+      {
+        id: "claude-sonnet-4.6-claude-code",
+        name: "Claude Sonnet 4.6 (claude-code)",
+        description: "",
+        vendor: "claude-code",
+        family: "claude-sonnet-4.6",
+      },
+    ]);
+
+    const pickerCatalog = filterPickerModelCatalog(catalog);
+    assert.deepStrictEqual(
+      pickerCatalog.map((model) => model.id),
+      ["claude-sonnet-4.6-copilot"],
+    );
+  });
+
+  test("filterExpandedPickerModelCatalog keeps non-default provider variants for the optional expanded view", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-sonnet-4.6-copilot",
+        name: "Claude Sonnet 4.6 (Copilot)",
+        description: "",
+        vendor: "Copilot",
+        family: "claude-sonnet-4.6",
+      },
+      {
+        id: "claude-sonnet-4.6-claude-code",
+        name: "Claude Sonnet 4.6 (claude-code)",
+        description: "",
+        vendor: "claude-code",
+        family: "claude-sonnet-4.6",
+      },
+      {
+        id: "claude-sonnet-4.6-copilotcli",
+        name: "Claude Sonnet 4.6 (Copilotcli)",
+        description: "",
+        vendor: "Copilotcli",
+        family: "claude-sonnet-4.6",
+      },
+    ]);
+
+    const expandedCatalog = filterExpandedPickerModelCatalog(catalog);
+    assert.deepStrictEqual(
+      expandedCatalog.map((model) => model.id),
+      ["claude-sonnet-4.6-copilot", "claude-sonnet-4.6-claude-code"],
+    );
+  });
+
+  test("buildModelPickerGroups groups runtime variants under a single base label", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "gpt-5-4-low",
+        name: "GPT-5.4 Low",
+        description: "",
+        vendor: "Copilot",
+        family: "gpt-5.4",
+      },
+      {
+        id: "gpt-5-4-high",
+        name: "GPT-5.4 High",
+        description: "",
+        vendor: "Copilot",
+        family: "gpt-5.4",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog);
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0]?.label, "GPT-5.4");
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => variant.label),
+      ["Low", "High"],
+    );
   });
 
   test("findBestMatchingModel infers variant from display name when version is missing", () => {
