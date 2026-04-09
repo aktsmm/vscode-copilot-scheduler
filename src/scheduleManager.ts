@@ -64,6 +64,7 @@ type ManualRunNextRunPolicy = "advance" | "fromNow";
 type ManualRunFailureReason =
   | "taskNotFound"
   | "executorUnavailable"
+  | "alreadyRunning"
   | "executionFailed"
   | "saveFailed";
 type ManualRunResult =
@@ -207,6 +208,7 @@ export class ScheduleManager {
   private dailyTaskExecCounts: Record<string, number> = {};
   private dailyTaskExecDate = "";
   private dailyLimitNotifiedDate = "";
+  private inFlightTaskIds: Set<string> = new Set();
 
   private storageRevision = 0;
   private saveQueue: Promise<void> = Promise.resolve();
@@ -355,10 +357,14 @@ export class ScheduleManager {
       "",
     );
     if (savedDate === today) {
-      this.dailyExecCount = this.context.globalState.get<number>(
+      const savedCount = this.context.globalState.get<unknown>(
         DAILY_EXEC_COUNT_KEY,
         0,
       );
+      const normalizedCount = Number(savedCount);
+      this.dailyExecCount = Number.isFinite(normalizedCount)
+        ? Math.max(Math.floor(normalizedCount), 0)
+        : 0;
     } else {
       // New day, reset counter
       this.dailyExecCount = 0;
@@ -462,6 +468,24 @@ export class ScheduleManager {
   private getTaskDailyExecCount(taskId: string, date = new Date()): number {
     this.ensureDailyCountersDate(date);
     return this.dailyTaskExecCounts[taskId] ?? 0;
+  }
+
+  private tryStartTaskRun(taskId: string): boolean {
+    if (!taskId) {
+      return false;
+    }
+    if (this.inFlightTaskIds.has(taskId)) {
+      return false;
+    }
+    this.inFlightTaskIds.add(taskId);
+    return true;
+  }
+
+  private finishTaskRun(taskId: string): void {
+    if (!taskId) {
+      return;
+    }
+    this.inFlightTaskIds.delete(taskId);
   }
 
   private async persistDailyExecCount(): Promise<void> {
@@ -1760,13 +1784,16 @@ export class ScheduleManager {
 
     // Read config values once per tick (avoid redundant reads inside the loop)
     const rawMaxDaily = config.get<number>("maxDailyExecutions", 24);
-    const safeMaxDaily = Number.isFinite(rawMaxDaily) ? rawMaxDaily : 24;
+    const safeMaxDaily = Number.isFinite(rawMaxDaily)
+      ? Math.floor(rawMaxDaily)
+      : 24;
     const maxDailyLimit =
       safeMaxDaily === 0 ? 0 : Math.min(Math.max(safeMaxDaily, 1), 100);
     const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
 
     let needsSave = false;
     let executedCount = 0;
+    const dueExecutions: Array<Promise<void>> = [];
 
     for (const task of this.tasks.values()) {
       if (!task.enabled || !task.nextRun) {
@@ -1839,53 +1866,73 @@ export class ScheduleManager {
           continue;
         }
 
-        // Safety: Apply jitter (random delay)
-        const maxJitterSeconds = task.jitterSeconds ?? defaultJitterSeconds;
-        await this.applyJitter(maxJitterSeconds);
-
-        const postJitterNow = new Date();
-        if (
-          !isNowWithinAllowedTimeWindow(
-            postJitterNow,
-            task.allowedTimeStart,
-            task.allowedTimeEnd,
-          )
-        ) {
+        if (!this.tryStartTaskRun(task.id)) {
           logDebug(
-            `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
+            `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(
-            task.cronExpression,
-            postJitterNow,
-          );
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
           needsSave = true;
           continue;
         }
 
-        // Execute
-        if (this.onExecuteCallback) {
-          try {
-            await this.onExecuteCallback(task);
-            // Track daily execution count
-            this.incrementDailyExecCountInMemory(new Date());
-            this.incrementTaskDailyExecCountInMemory(task.id, new Date());
-            executedCount++;
-            // Only record lastRun on successful execution
-            task.lastRun = new Date();
-          } catch (error) {
-            const details = toSafeErrorDetails(error);
-            logError("[CopilotScheduler] Task execution error:", {
-              taskId: task.id,
-              taskName: task.name,
-              error: details,
-            });
-          }
-        }
+        dueExecutions.push(
+          (async () => {
+            try {
+              const maxJitterSeconds =
+                task.jitterSeconds ?? defaultJitterSeconds;
+              await this.applyJitter(maxJitterSeconds);
 
-        // Always advance nextRun to prevent infinite retry loops
-        task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
+              const postJitterNow = new Date();
+              if (
+                !isNowWithinAllowedTimeWindow(
+                  postJitterNow,
+                  task.allowedTimeStart,
+                  task.allowedTimeEnd,
+                )
+              ) {
+                logDebug(
+                  `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
+                );
+                task.nextRun = this.getNextRunForTask(
+                  task.cronExpression,
+                  postJitterNow,
+                );
+                return;
+              }
+
+              if (this.onExecuteCallback) {
+                try {
+                  await this.onExecuteCallback(task);
+                  const executedAt = new Date();
+                  this.incrementDailyExecCountInMemory(executedAt);
+                  this.incrementTaskDailyExecCountInMemory(task.id, executedAt);
+                  executedCount++;
+                  task.lastRun = executedAt;
+                } catch (error) {
+                  const details = toSafeErrorDetails(error);
+                  logError("[CopilotScheduler] Task execution error:", {
+                    taskId: task.id,
+                    taskName: task.name,
+                    error: details,
+                  });
+                }
+              }
+
+              task.nextRun = this.getNextRunForTask(
+                task.cronExpression,
+                new Date(),
+              );
+            } finally {
+              this.finishTaskRun(task.id);
+            }
+          })(),
+        );
         needsSave = true;
       }
+    }
+
+    if (dueExecutions.length > 0) {
+      await Promise.allSettled(dueExecutions);
     }
 
     // Persist once per tick to reduce I/O overhead.
@@ -1924,6 +1971,9 @@ export class ScheduleManager {
     if (!this.onExecuteCallback) {
       return { ok: false, reason: "executorUnavailable" };
     }
+    if (!this.tryStartTaskRun(task.id)) {
+      return { ok: false, reason: "alreadyRunning" };
+    }
 
     const previousNextRun =
       task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
@@ -1935,59 +1985,63 @@ export class ScheduleManager {
         : undefined;
 
     try {
-      await this.onExecuteCallback(task);
-    } catch (error) {
-      const details = toSafeErrorDetails(error);
-      const userNotified =
-        !!error &&
-        typeof error === "object" &&
-        (error as Record<string, unknown>)[
-          USER_NOTIFIED_EXECUTION_ERROR_FLAG
-        ] === true;
-      logError("[CopilotScheduler] runTaskNow failed:", details);
-      return {
-        ok: false,
-        reason: "executionFailed",
-        errorMessage: details,
-        userNotified,
-      };
+      try {
+        await this.onExecuteCallback(task);
+      } catch (error) {
+        const details = toSafeErrorDetails(error);
+        const userNotified =
+          !!error &&
+          typeof error === "object" &&
+          (error as Record<string, unknown>)[
+            USER_NOTIFIED_EXECUTION_ERROR_FLAG
+          ] === true;
+        logError("[CopilotScheduler] runTaskNow failed:", details);
+        return {
+          ok: false,
+          reason: "executionFailed",
+          errorMessage: details,
+          userNotified,
+        };
+      }
+
+      // Update lastRun and nextRun after manual execution
+      const executedAt = new Date();
+      task.lastRun = executedAt;
+      if (task.enabled) {
+        const policy = this.getManualRunNextRunPolicy();
+        const shouldAdvanceFromExisting =
+          policy === "advance" &&
+          previousNextRun &&
+          previousNextRun.getTime() >= executedAt.getTime();
+        const nextRunBase = shouldAdvanceFromExisting
+          ? previousNextRun
+          : executedAt;
+        task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
+      }
+
+      try {
+        await this.saveTasks();
+      } catch (error) {
+        // Keep in-memory state consistent with persisted state on save failures.
+        task.lastRun = previousLastRun
+          ? new Date(previousLastRun.getTime())
+          : undefined;
+        task.nextRun = previousNextRun
+          ? new Date(previousNextRun.getTime())
+          : undefined;
+
+        const details = toSafeErrorDetails(error);
+        logError("[CopilotScheduler] runTaskNow save failed:", details);
+        return {
+          ok: false,
+          reason: "saveFailed",
+          errorMessage: details,
+        };
+      }
+
+      return { ok: true };
+    } finally {
+      this.finishTaskRun(task.id);
     }
-
-    // Update lastRun and nextRun after manual execution
-    const executedAt = new Date();
-    task.lastRun = executedAt;
-    if (task.enabled) {
-      const policy = this.getManualRunNextRunPolicy();
-      const shouldAdvanceFromExisting =
-        policy === "advance" &&
-        previousNextRun &&
-        previousNextRun.getTime() >= executedAt.getTime();
-      const nextRunBase = shouldAdvanceFromExisting
-        ? previousNextRun
-        : executedAt;
-      task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
-    }
-
-    try {
-      await this.saveTasks();
-    } catch (error) {
-      // Keep in-memory state consistent with persisted state on save failures.
-      task.lastRun = previousLastRun
-        ? new Date(previousLastRun.getTime())
-        : undefined;
-      task.nextRun = previousNextRun
-        ? new Date(previousNextRun.getTime())
-        : undefined;
-
-      const details = toSafeErrorDetails(error);
-      logError("[CopilotScheduler] runTaskNow save failed:", details);
-      return {
-        ok: false,
-        reason: "saveFailed",
-        errorMessage: details,
-      };
-    }
-
-    return { ok: true };
   }
 }

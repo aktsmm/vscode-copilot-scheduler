@@ -7,8 +7,141 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { parseExpression } from "cron-parser";
 import type { ScheduledTask } from "../../types";
 import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
+
+function findMatchingBraceEnd(source: string, braceStart: number): number {
+  let depth = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inTemplate = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inTemplate) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "`") {
+        inTemplate = false;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (ch === "`") {
+      inTemplate = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      depth++;
+      continue;
+    }
+
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function extractBlockFromStartToken(
+  source: string,
+  startToken: string,
+): string {
+  const start = source.indexOf(startToken);
+  assert.ok(start >= 0, `Start token not found: ${startToken}`);
+
+  const braceStart = source.indexOf("{", start);
+  assert.ok(braceStart >= 0, `Opening brace not found for: ${startToken}`);
+
+  const end = findMatchingBraceEnd(source, braceStart);
+  assert.ok(end > braceStart, `Closing brace not found for: ${startToken}`);
+
+  return source.slice(start, end);
+}
 
 suite("Extension Test Suite", () => {
   test("Extension should be present", () => {
@@ -62,11 +195,176 @@ suite("Extension Test Suite", () => {
   });
 });
 
+suite("Execution History Queue Tests", () => {
+  test("enqueueExecutionHistory rejects the failed write and recovers the queue", async () => {
+    const { __testOnly } = await import("../../extension");
+    const enqueueExecutionHistory =
+      __testOnly.enqueueExecutionHistory as (entry: {
+        taskId: string;
+        taskName: string;
+        trigger: "manual" | "auto";
+        status: "success" | "failed";
+        executedAt: string;
+        nextRunAt?: string;
+        detail?: string;
+      }) => Promise<void>;
+    const getExecutionHistoryEntries =
+      __testOnly.getExecutionHistoryEntries as () => Array<{
+        taskId: string;
+        taskName: string;
+      }>;
+    const setExtensionContextForTests =
+      __testOnly.setExtensionContextForTests as (
+        context:
+          | {
+              globalState: {
+                get<T>(key: string, defaultValue?: T): T;
+                update(key: string, value: unknown): Thenable<void>;
+              };
+            }
+          | undefined,
+      ) => void;
+    const resetExecutionHistoryQueueForTests =
+      __testOnly.resetExecutionHistoryQueueForTests as () => void;
+
+    const storedEntries: unknown[] = [];
+    let updateCalls = 0;
+
+    try {
+      setExtensionContextForTests({
+        globalState: {
+          get<T>(_key: string, defaultValue?: T): T {
+            return ((storedEntries as unknown) || defaultValue) as T;
+          },
+          update(_key: string, value: unknown): Thenable<void> {
+            updateCalls += 1;
+            if (updateCalls === 1) {
+              return Promise.reject(new Error("history write failed"));
+            }
+            storedEntries.splice(
+              0,
+              storedEntries.length,
+              ...((value as unknown[]) || []),
+            );
+            return Promise.resolve();
+          },
+        },
+      });
+      resetExecutionHistoryQueueForTests();
+
+      await assert.rejects(
+        () =>
+          enqueueExecutionHistory({
+            taskId: "task-1",
+            taskName: "Task 1",
+            trigger: "manual",
+            status: "success",
+            executedAt: "2026-04-10T00:00:00.000Z",
+          }),
+        /history write failed/,
+      );
+
+      await enqueueExecutionHistory({
+        taskId: "task-2",
+        taskName: "Task 2",
+        trigger: "manual",
+        status: "failed",
+        executedAt: "2026-04-10T00:01:00.000Z",
+        detail: "second call should still persist",
+      });
+
+      const entries = getExecutionHistoryEntries();
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0]?.taskId, "task-2");
+      assert.strictEqual(updateCalls, 2);
+    } finally {
+      setExtensionContextForTests(undefined);
+      resetExecutionHistoryQueueForTests();
+    }
+  });
+
+  test("getExecutionHistoryEntries ignores persisted entries with invalid trigger or status", async () => {
+    const { __testOnly } = await import("../../extension");
+    const getExecutionHistoryEntries =
+      __testOnly.getExecutionHistoryEntries as () => Array<{
+        taskId: string;
+        taskName: string;
+        trigger: "manual" | "auto";
+        status: "success" | "failed";
+      }>;
+    const setExtensionContextForTests =
+      __testOnly.setExtensionContextForTests as (
+        context:
+          | {
+              globalState: {
+                get<T>(key: string, defaultValue?: T): T;
+                update(key: string, value: unknown): Thenable<void>;
+              };
+            }
+          | undefined,
+      ) => void;
+
+    try {
+      setExtensionContextForTests({
+        globalState: {
+          get<T>(_key: string, defaultValue?: T): T {
+            void defaultValue;
+            return [
+              {
+                taskId: "task-valid",
+                taskName: "Valid",
+                trigger: "manual",
+                status: "success",
+                executedAt: "2026-04-10T00:00:00.000Z",
+              },
+              {
+                taskId: "task-invalid-trigger",
+                taskName: "Invalid Trigger",
+                trigger: "scheduled",
+                status: "success",
+                executedAt: "2026-04-10T00:01:00.000Z",
+              },
+              {
+                taskId: "task-invalid-status",
+                taskName: "Invalid Status",
+                trigger: "auto",
+                status: "done",
+                executedAt: "2026-04-10T00:02:00.000Z",
+              },
+            ] as unknown as T;
+          },
+          update(): Thenable<void> {
+            return Promise.resolve();
+          },
+        },
+      });
+
+      const entries = getExecutionHistoryEntries();
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0]?.taskId, "task-valid");
+      assert.strictEqual(entries[0]?.trigger, "manual");
+      assert.strictEqual(entries[0]?.status, "success");
+    } finally {
+      setExtensionContextForTests(undefined);
+    }
+  });
+});
+
 suite("Cron Expression Tests", () => {
   test("Valid cron expressions should be accepted", () => {
-    // These tests would require importing ScheduleManager
-    // which needs proper mocking in test environment
-    assert.ok(true);
+    const validCronExpressions = [
+      "* * * * *",
+      "0 * * * *",
+      "15 9 * * 1-5",
+      "0 0 1 * *",
+    ];
+
+    for (const expression of validCronExpressions) {
+      assert.doesNotThrow(
+        () => parseExpression(expression).next().toDate(),
+        `Expected cron expression to be accepted: ${expression}`,
+      );
+    }
   });
 });
 
@@ -136,6 +434,27 @@ suite("Webview Test Prompt Wiring Tests", () => {
     );
   });
 
+  test("Task QuickPick items include workspace/scope metadata", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    assert.ok(
+      source.includes(
+        "function buildTaskQuickPickMeta(task: ScheduledTask): string",
+      ),
+      "extension should define a shared helper for task QuickPick metadata",
+    );
+    assert.ok(
+      source.includes("detail: buildTaskQuickPickMeta(task),"),
+      "task QuickPick items should include workspace/scope metadata in detail",
+    );
+    assert.ok(
+      source.includes("messages.labelScopeWorkspace()") &&
+        source.includes("messages.labelScopeGlobal()"),
+      "task QuickPick metadata should distinguish global and workspace tasks",
+    );
+  });
+
   test("buildPromptExecutionOptions keeps structured model selection fields", async () => {
     const { __testOnly } = await import("../../extension");
     const buildPromptExecutionOptions =
@@ -171,6 +490,325 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelFamily: "gpt-5.4",
       modelVersion: "high",
     });
+  });
+
+  test("ensureCreatedTaskAcceptedAfterDisclaimer rolls back new task when disclaimer is declined", async () => {
+    const { __testOnly } = await import("../../extension");
+    const ensureCreatedTaskAcceptedAfterDisclaimer =
+      __testOnly.ensureCreatedTaskAcceptedAfterDisclaimer as
+        | ((
+            task: ScheduledTask,
+            deps: {
+              maybeShowDisclaimer: (task: ScheduledTask) => Promise<boolean>;
+              deleteTask: (id: string) => Promise<boolean>;
+              disableTask: (id: string) => Promise<ScheduledTask | undefined>;
+              onTasksChanged: () => void;
+              notifyInfo: (message: string) => void;
+              notifyError: (message: string) => void;
+            },
+          ) => Promise<boolean>)
+        | undefined;
+
+    assert.ok(typeof ensureCreatedTaskAcceptedAfterDisclaimer === "function");
+
+    const task: ScheduledTask = {
+      id: "t-created-decline",
+      name: "New task",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    let deletedId: string | undefined;
+    let disabledId: string | undefined;
+    let updateCount = 0;
+    let infoMessage: string | undefined;
+
+    const accepted = await ensureCreatedTaskAcceptedAfterDisclaimer!(task, {
+      maybeShowDisclaimer: async () => false,
+      deleteTask: async (id) => {
+        deletedId = id;
+        return true;
+      },
+      disableTask: async (id) => {
+        disabledId = id;
+        return undefined;
+      },
+      onTasksChanged: () => {
+        updateCount += 1;
+      },
+      notifyInfo: (message) => {
+        infoMessage = message;
+      },
+      notifyError: () => {
+        assert.fail("notifyError should not be called when delete succeeds");
+      },
+    });
+
+    assert.strictEqual(accepted, false);
+    assert.strictEqual(deletedId, task.id);
+    assert.strictEqual(disabledId, undefined);
+    assert.strictEqual(updateCount, 1);
+    assert.strictEqual(
+      infoMessage,
+      (await import("../../i18n")).messages.disclaimerDeclinedTaskCanceled(
+        task.name,
+      ),
+    );
+  });
+
+  test("ensureCreatedTaskAcceptedAfterDisclaimer falls back to disable when rollback fails", async () => {
+    const { __testOnly } = await import("../../extension");
+    const ensureCreatedTaskAcceptedAfterDisclaimer =
+      __testOnly.ensureCreatedTaskAcceptedAfterDisclaimer as
+        | ((
+            task: ScheduledTask,
+            deps: {
+              maybeShowDisclaimer: (task: ScheduledTask) => Promise<boolean>;
+              deleteTask: (id: string) => Promise<boolean>;
+              disableTask: (id: string) => Promise<ScheduledTask | undefined>;
+              onTasksChanged: () => void;
+              notifyInfo: (message: string) => void;
+              notifyError: (message: string) => void;
+            },
+          ) => Promise<boolean>)
+        | undefined;
+
+    assert.ok(typeof ensureCreatedTaskAcceptedAfterDisclaimer === "function");
+
+    const task: ScheduledTask = {
+      id: "t-created-disable-fallback",
+      name: "Fallback task",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    let deleteCount = 0;
+    let disabledId: string | undefined;
+    let updateCount = 0;
+    let infoMessage: string | undefined;
+
+    const accepted = await ensureCreatedTaskAcceptedAfterDisclaimer!(task, {
+      maybeShowDisclaimer: async () => false,
+      deleteTask: async () => {
+        deleteCount += 1;
+        return false;
+      },
+      disableTask: async (id) => {
+        disabledId = id;
+        return task;
+      },
+      onTasksChanged: () => {
+        updateCount += 1;
+      },
+      notifyInfo: (message) => {
+        infoMessage = message;
+      },
+      notifyError: () => {
+        assert.fail("notifyError should not be called when disable succeeds");
+      },
+    });
+
+    assert.strictEqual(accepted, false);
+    assert.strictEqual(deleteCount, 1);
+    assert.strictEqual(disabledId, task.id);
+    assert.strictEqual(updateCount, 1);
+    assert.strictEqual(
+      infoMessage,
+      (await import("../../i18n")).messages.disclaimerDeclinedTaskDisabled(
+        task.name,
+      ),
+    );
+  });
+
+  test("Configuration and workspace watchers keep webview defaults and templates in sync", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const configWatcherStart = source.indexOf(
+      "const configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {",
+    );
+    assert.ok(configWatcherStart >= 0, "configWatcher not found");
+
+    const workspaceWatcherStart = source.indexOf(
+      "const workspaceFoldersWatcher = vscode.workspace.onDidChangeWorkspaceFolders(",
+      configWatcherStart,
+    );
+    assert.ok(
+      workspaceWatcherStart > configWatcherStart,
+      "workspaceFoldersWatcher not found",
+    );
+
+    const configWatcherBlock = source.slice(
+      configWatcherStart,
+      workspaceWatcherStart,
+    );
+    const configTokens = [
+      'e.affectsConfiguration("copilotScheduler.defaultScope")',
+      'e.affectsConfiguration("copilotScheduler.autoModeDefault")',
+      'e.affectsConfiguration("copilotScheduler.jitterSeconds")',
+      "SchedulerWebview.refreshFormDefaults();",
+      'e.affectsConfiguration("copilotScheduler.globalPromptsPath")',
+      'e.affectsConfiguration("copilotScheduler.globalAgentsPath")',
+      "registerPromptResourceWatchers();",
+    ];
+
+    for (const token of configTokens) {
+      assert.ok(
+        configWatcherBlock.includes(token),
+        `Config watcher should include token: ${token}`,
+      );
+    }
+
+    const subscriptionsStart = source.indexOf(
+      "  // Register subscriptions",
+      workspaceWatcherStart,
+    );
+    assert.ok(
+      subscriptionsStart > workspaceWatcherStart,
+      "subscriptions anchor not found",
+    );
+
+    const workspaceWatcherBlock = source.slice(
+      workspaceWatcherStart,
+      subscriptionsStart,
+    );
+    assert.ok(
+      workspaceWatcherBlock.includes(
+        "void SchedulerWebview.refreshCachesAndNotifyPanel(true);",
+      ),
+      "workspaceFoldersWatcher should refresh cached webview data",
+    );
+    assert.ok(
+      workspaceWatcherBlock.includes("registerPromptResourceWatchers();"),
+      "workspaceFoldersWatcher should re-register prompt resource watchers",
+    );
+  });
+
+  test("Prompt resource watchers cover workspace prompts and global prompt roots", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const watcherBlock = extractBlockFromStartToken(
+      source,
+      "function registerPromptResourceWatchers(): void {",
+    );
+
+    const watcherTokens = [
+      'watchPattern("**/.github/prompts/**/*.md");',
+      'resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""))',
+      'resolveGlobalAgentRoots(config.get<string>("globalAgentsPath", ""))',
+      'new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md")',
+      "watcher.onDidCreate(refreshCaches)",
+      "watcher.onDidChange(refreshCaches)",
+      "watcher.onDidDelete(refreshCaches)",
+    ];
+
+    for (const token of watcherTokens) {
+      assert.ok(
+        watcherBlock.includes(token),
+        `Prompt resource watcher block should include token: ${token}`,
+      );
+    }
+  });
+
+  test("Command move-to-current-workspace errors stay out of webview inline errors", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const commandStart = source.indexOf(
+      "function registerMoveToCurrentWorkspaceCommand(): vscode.Disposable {",
+    );
+    assert.ok(
+      commandStart >= 0,
+      "registerMoveToCurrentWorkspaceCommand not found",
+    );
+
+    const commandEnd = source.indexOf(
+      "function registerOpenSettingsCommand(): vscode.Disposable {",
+      commandStart,
+    );
+    assert.ok(
+      commandEnd > commandStart,
+      "registerMoveToCurrentWorkspaceCommand end not found",
+    );
+
+    const commandBlock = source.slice(commandStart, commandEnd);
+    assert.ok(
+      commandBlock.includes("notifyError(errorMessage);"),
+      "move-to-current-workspace command should still notify VS Code errors",
+    );
+    assert.ok(
+      !commandBlock.includes("SchedulerWebview.showError(errorMessage);"),
+      "move-to-current-workspace command should not push command errors into the webview",
+    );
+  });
+
+  test("Manual run failure paths resync task lists after run-state rollback", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const webviewRunBlock = extractBlockFromStartToken(source, 'case "run": {');
+    assert.ok(
+      webviewRunBlock.includes(
+        "SchedulerWebview.updateTasks(scheduleManager.getAllTasks());",
+      ),
+      "webview manual-run failure should refresh cached task state",
+    );
+
+    const commandStart = source.indexOf('"copilotScheduler.runNow",');
+    assert.ok(commandStart >= 0, "runNow command registration not found");
+
+    const commandEnd = source.indexOf(
+      "function registerCopyPromptCommand(): vscode.Disposable {",
+      commandStart,
+    );
+    assert.ok(commandEnd > commandStart, "runNow command end not found");
+
+    const commandBlock = source.slice(commandStart, commandEnd);
+    assert.ok(
+      commandBlock.includes(
+        "SchedulerWebview.updateTasks(scheduleManager.getAllTasks());",
+      ),
+      "command manual-run failure should refresh cached task state",
+    );
+  });
+
+  test("Webview move-to-current-workspace reports taskNotFound inline on move failure", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const actionBlock = extractBlockFromStartToken(
+      source,
+      'case "moveToCurrentWorkspace": {',
+    );
+    assert.ok(
+      actionBlock.includes(
+        "const moved = await scheduleManager.moveTaskToCurrentWorkspace(task.id);",
+      ),
+      "webview action should attempt to move the task",
+    );
+    assert.ok(
+      actionBlock.includes("const msg = messages.taskNotFound();"),
+      "webview action should build a localized task-not-found error",
+    );
+    assert.ok(
+      actionBlock.includes("notifyError(msg);"),
+      "webview action should notify VS Code when move fails",
+    );
+    assert.ok(
+      actionBlock.includes("SchedulerWebview.showError(msg);"),
+      "webview action should surface inline error when move fails inside the webview",
+    );
   });
 });
 
@@ -447,6 +1085,140 @@ suite("resolvePromptText Tests", () => {
       } catch {
         // ignore
       }
+      try {
+        fs.rmSync(wsRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("Throws when open prompt template is empty instead of falling back to stored prompt", async () => {
+    const wsRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-ws-"),
+    );
+    const restoreWs = setWorkspaceFoldersForTest(wsRoot);
+    const promptsDir = path.join(wsRoot, ".github", "prompts");
+
+    const fileName = `__test_resolvePromptText_emptyOpenDoc_${Date.now()}.md`;
+    const absPath = path.join(promptsDir, fileName);
+    const relPath = path.join(".github", "prompts", fileName);
+    const uri = vscode.Uri.file(absPath);
+    let doc: vscode.TextDocument | undefined;
+
+    try {
+      fs.mkdirSync(promptsDir, { recursive: true });
+      fs.writeFileSync(absPath, "DISK", "utf8");
+
+      doc = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(doc);
+      assert.ok(editor, "An editor should be available");
+
+      const fullRange = new vscode.Range(
+        doc.positionAt(0),
+        doc.positionAt(doc.getText().length),
+      );
+      await editor!.edit((b) => b.replace(fullRange, "   \n"));
+      assert.strictEqual(doc.isDirty, true);
+
+      const { __testOnly } = await import("../../extension");
+      const { messages } = await import("../../i18n");
+      const task = {
+        id: "t-empty-open-doc",
+        name: "t",
+        cronExpression: "0 * * * *",
+        prompt: "FALLBACK",
+        enabled: true,
+        scope: "global",
+        promptSource: "local",
+        promptPath: relPath,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } satisfies ScheduledTask;
+
+      await assert.rejects(
+        () => __testOnly.resolvePromptText(task, true),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.promptTemplateEmpty(fileName),
+      );
+    } finally {
+      restoreWs();
+      try {
+        if (doc) {
+          await vscode.window.showTextDocument(doc);
+          if (vscode.window.activeTextEditor?.document === doc) {
+            try {
+              await vscode.commands.executeCommand(
+                "workbench.action.revertAndCloseActiveEditor",
+              );
+            } catch {
+              await doc.save();
+              await vscode.commands.executeCommand(
+                "workbench.action.closeActiveEditor",
+              );
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        fs.rmSync(wsRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("Throws when persisted prompt template is empty instead of falling back to stored prompt", async () => {
+    const wsRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-ws-"),
+    );
+    const restoreWs = setWorkspaceFoldersForTest(wsRoot);
+    const promptsDir = path.join(wsRoot, ".github", "prompts");
+
+    const fileName = `__test_resolvePromptText_emptyFile_${Date.now()}.md`;
+    const absPath = path.join(promptsDir, fileName);
+    const relPath = path.join(".github", "prompts", fileName);
+
+    try {
+      fs.mkdirSync(promptsDir, { recursive: true });
+      fs.writeFileSync(absPath, "  \n", "utf8");
+
+      const { __testOnly } = await import("../../extension");
+      const { messages } = await import("../../i18n");
+      const task = {
+        id: "t-empty-file",
+        name: "t",
+        cronExpression: "0 * * * *",
+        prompt: "FALLBACK",
+        enabled: true,
+        scope: "global",
+        promptSource: "local",
+        promptPath: relPath,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } satisfies ScheduledTask;
+
+      await assert.rejects(
+        () => __testOnly.resolvePromptText(task, false),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.promptTemplateEmpty(fileName),
+      );
+    } finally {
+      restoreWs();
       try {
         fs.rmSync(wsRoot, {
           recursive: true,

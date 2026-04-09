@@ -1224,6 +1224,187 @@ suite("ScheduleManager Task-Level Control Tests", () => {
       }
     }
   });
+
+  test("checkAndExecuteTasks treats corrupted persisted daily count as zero", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const context = createMockContext(tmp);
+      const today = new Date();
+      const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+      await context.globalState.update("dailyExecDate", dateKey);
+      await context.globalState.update("dailyExecCount", "not-a-number");
+
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "daily-count-corruption",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+
+      const originalGetConfiguration = vscode.workspace.getConfiguration;
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        value: ((section?: string) => {
+          const config = originalGetConfiguration.call(
+            vscode.workspace,
+            section,
+          );
+          if (section !== "copilotScheduler") {
+            return config;
+          }
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "maxDailyExecutions") {
+                return 1 as T;
+              }
+              return config.get<T>(key, defaultValue as T);
+            },
+          };
+        }) as typeof vscode.workspace.getConfiguration,
+        configurable: true,
+      });
+
+      let executed = 0;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executed++;
+      };
+
+      try {
+        await (
+          manager as unknown as {
+            checkAndExecuteTasks?: () => Promise<void>;
+          }
+        ).checkAndExecuteTasks?.();
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          value: originalGetConfiguration,
+          configurable: true,
+        });
+      }
+
+      assert.strictEqual(executed, 1);
+      assert.ok(task.lastRun instanceof Date);
+      assert.strictEqual(context.globalState.get<number>("dailyExecCount"), 1);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks floors decimal maxDailyExecutions before enforcing the limit", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "daily-limit-decimal",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+
+      const today = new Date();
+      const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      (
+        manager as unknown as {
+          dailyExecDate?: string;
+          dailyExecCount?: number;
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).dailyExecDate = dateKey;
+      (
+        manager as unknown as {
+          dailyExecCount?: number;
+        }
+      ).dailyExecCount = 1;
+
+      const originalGetConfiguration = vscode.workspace.getConfiguration;
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        value: ((section?: string) => {
+          const config = originalGetConfiguration.call(
+            vscode.workspace,
+            section,
+          );
+          if (section !== "copilotScheduler") {
+            return config;
+          }
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "maxDailyExecutions") {
+                return 1.9 as T;
+              }
+              return config.get<T>(key, defaultValue as T);
+            },
+          };
+        }) as typeof vscode.workspace.getConfiguration,
+        configurable: true,
+      });
+
+      let executed = 0;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executed++;
+      };
+
+      try {
+        await (
+          manager as unknown as {
+            checkAndExecuteTasks?: () => Promise<void>;
+          }
+        ).checkAndExecuteTasks?.();
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          value: originalGetConfiguration,
+          configurable: true,
+        });
+      }
+
+      assert.strictEqual(executed, 0);
+      assert.strictEqual(task.lastRun, undefined);
+      assert.ok(task.nextRun instanceof Date);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
 });
 
 suite("ScheduleManager Invalid Cron Enable Safety Tests", () => {
@@ -1462,6 +1643,117 @@ suite("ScheduleManager RunNow Tests", () => {
       if (!result.ok) {
         assert.strictEqual(result.reason, "executorUnavailable");
       }
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("runTaskNowDetailed returns alreadyRunning when the same task is in flight", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-now-detailed-already-running",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+
+      let release!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => blocker;
+
+      const firstRun = manager.runTaskNowDetailed(task.id);
+      await Promise.resolve();
+
+      const secondRun = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(secondRun.ok, false);
+      if (!secondRun.ok) {
+        assert.strictEqual(secondRun.reason, "alreadyRunning");
+      }
+
+      release();
+      const firstResult = await firstRun;
+      assert.strictEqual(firstResult.ok, true);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks skips overlapping auto execution while a task is already running", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "auto-overlap-skip",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      let release!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let executions = 0;
+
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executions++;
+        await blocker;
+      };
+
+      const manualRun = manager.runTaskNowDetailed(task.id);
+      await Promise.resolve();
+
+      task.nextRun = new Date(Date.now() - 60 * 1000);
+      await (
+        manager as unknown as {
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).checkAndExecuteTasks?.();
+
+      assert.strictEqual(executions, 1);
+      assert.ok(task.nextRun instanceof Date);
+      assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
+
+      release();
+      const manualResult = await manualRun;
+      assert.strictEqual(manualResult.ok, true);
     } finally {
       try {
         fs.rmSync(tmp, {

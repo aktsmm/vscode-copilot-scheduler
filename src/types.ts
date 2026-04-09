@@ -258,6 +258,9 @@ export interface PromptTemplate {
   /** Template name (derived from filename) */
   name: string;
 
+  /** Optional UI label used to disambiguate templates with the same name */
+  displayName?: string;
+
   /** Source type */
   source: "local" | "global";
 

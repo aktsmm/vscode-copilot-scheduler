@@ -15,6 +15,7 @@ import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
   normalizeForCompare,
+  resolveGlobalAgentRoots,
   resolveGlobalPromptPath,
   resolveLocalPromptPath,
   resolveGlobalPromptsRoot,
@@ -46,6 +47,7 @@ const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
 const EXECUTION_HISTORY_KEY = "executionHistory";
 const EXECUTION_HISTORY_DEFAULT_LIMIT = 50;
+const EMPTY_PROMPT_TEMPLATE_ERROR_NAME = "PromptTemplateEmptyError";
 
 function sanitizeErrorDetailsForLog(message: string): string {
   const sanitized = sanitizeAbsolutePathDetails(
@@ -78,6 +80,20 @@ function resolveDisplayErrorMessage(message: string): string {
 function resolveDisplayErrorMessageFromSanitized(safeMessage: string): string {
   const firstLine = safeMessage.split(/\r?\n/)[0] ?? "";
   return firstLine.trim() ? firstLine : messages.webviewUnknown();
+}
+
+function createEmptyPromptTemplateError(filePath: string): Error {
+  const error = new Error(
+    messages.promptTemplateEmpty(path.basename(filePath)),
+  );
+  error.name = EMPTY_PROMPT_TEMPLATE_ERROR_NAME;
+  return error;
+}
+
+function isEmptyPromptTemplateError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.name === EMPTY_PROMPT_TEMPLATE_ERROR_NAME
+  );
 }
 
 function buildPromptExecutionOptions(
@@ -136,6 +152,53 @@ async function ensureTaskEnabledAfterDisclaimer(
     return false;
   }
   notifyError(messages.taskNotFound());
+  return false;
+}
+
+type CreatedTaskDisclaimerDeps = {
+  maybeShowDisclaimer: (task: ScheduledTask) => Promise<boolean>;
+  deleteTask: (id: string) => Promise<boolean>;
+  disableTask: (id: string) => Promise<ScheduledTask | undefined>;
+  onTasksChanged: () => void;
+  notifyInfo: (message: string) => void;
+  notifyError: (message: string) => void;
+};
+
+async function ensureCreatedTaskAcceptedAfterDisclaimer(
+  task: ScheduledTask,
+  deps?: CreatedTaskDisclaimerDeps,
+): Promise<boolean> {
+  const resolvedDeps: CreatedTaskDisclaimerDeps = deps ?? {
+    maybeShowDisclaimer: maybeShowDisclaimerOnce,
+    deleteTask: (id) => scheduleManager.deleteTask(id),
+    disableTask: (id) => scheduleManager.setTaskEnabled(id, false),
+    onTasksChanged: () => {
+      SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+    },
+    notifyInfo,
+    notifyError,
+  };
+
+  const accepted = await resolvedDeps.maybeShowDisclaimer(task);
+  if (accepted) {
+    return true;
+  }
+
+  const deleted = await resolvedDeps.deleteTask(task.id);
+  if (deleted) {
+    resolvedDeps.onTasksChanged();
+    resolvedDeps.notifyInfo(messages.disclaimerDeclinedTaskCanceled(task.name));
+    return false;
+  }
+
+  const disabled = await resolvedDeps.disableTask(task.id);
+  if (disabled) {
+    resolvedDeps.onTasksChanged();
+    resolvedDeps.notifyInfo(messages.disclaimerDeclinedTaskDisabled(task.name));
+    return false;
+  }
+
+  resolvedDeps.notifyError(messages.taskNotFound());
   return false;
 }
 
@@ -260,6 +323,9 @@ function getNotificationNextRun(
     if (tz) {
       try {
         const interval = parseExpression(task.cronExpression, { currentDate });
+        logDebug(
+          `[CopilotScheduler] Invalid timezone \"${tz}\" for notification nextRun; falling back to local time.`,
+        );
         return interval.next().toDate();
       } catch {
         return undefined;
@@ -292,6 +358,21 @@ function buildExecutionSummary(
   );
 }
 
+function isExecutionHistoryEntry(item: unknown): item is ExecutionHistoryEntry {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+
+  const entry = item as ExecutionHistoryEntry;
+  return (
+    typeof entry.taskId === "string" &&
+    typeof entry.taskName === "string" &&
+    (entry.trigger === "auto" || entry.trigger === "manual") &&
+    (entry.status === "success" || entry.status === "failed") &&
+    typeof entry.executedAt === "string"
+  );
+}
+
 async function appendExecutionHistory(
   entry: ExecutionHistoryEntry,
 ): Promise<void> {
@@ -304,15 +385,7 @@ async function appendExecutionHistory(
     [],
   );
   const safeCurrent = Array.isArray(current)
-    ? current.filter(
-        (item): item is ExecutionHistoryEntry =>
-          !!item &&
-          typeof item === "object" &&
-          typeof (item as ExecutionHistoryEntry).taskId === "string" &&
-          typeof (item as ExecutionHistoryEntry).taskName === "string" &&
-          typeof (item as ExecutionHistoryEntry).status === "string" &&
-          typeof (item as ExecutionHistoryEntry).executedAt === "string",
-      )
+    ? current.filter(isExecutionHistoryEntry)
     : [];
 
   const next = [entry, ...safeCurrent].slice(0, limit);
@@ -331,7 +404,27 @@ function enqueueExecutionHistory(entry: ExecutionHistoryEntry): Promise<void> {
       sanitizeErrorDetailsForLog(errorMessage),
     );
   });
-  return executionHistorySaveQueue;
+  return op;
+}
+
+async function recordExecutionHistoryBestEffort(
+  entry: ExecutionHistoryEntry,
+): Promise<void> {
+  try {
+    await enqueueExecutionHistory(entry);
+  } catch {
+    // enqueueExecutionHistory already logs and recovers the queue.
+  }
+}
+
+function setExtensionContextForTests(
+  context: Pick<vscode.ExtensionContext, "globalState"> | undefined,
+): void {
+  extensionContextRef = context as vscode.ExtensionContext | undefined;
+}
+
+function resetExecutionHistoryQueueForTests(): void {
+  executionHistorySaveQueue = Promise.resolve();
 }
 
 function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
@@ -345,15 +438,7 @@ function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
   if (!Array.isArray(current)) {
     return [];
   }
-  return current.filter(
-    (item): item is ExecutionHistoryEntry =>
-      !!item &&
-      typeof item === "object" &&
-      typeof (item as ExecutionHistoryEntry).taskId === "string" &&
-      typeof (item as ExecutionHistoryEntry).taskName === "string" &&
-      typeof (item as ExecutionHistoryEntry).status === "string" &&
-      typeof (item as ExecutionHistoryEntry).executedAt === "string",
-  );
+  return current.filter(isExecutionHistoryEntry);
 }
 
 async function showExecutionHistoryView(): Promise<void> {
@@ -395,6 +480,7 @@ let scheduleManager: ScheduleManager;
 let copilotExecutor: CopilotExecutor;
 let treeProvider: ScheduledTaskTreeProvider;
 let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
+let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
 let executionHistorySaveQueue: Promise<void> = Promise.resolve();
@@ -406,6 +492,7 @@ type ManualRunFailureResult = {
   reason:
     | "taskNotFound"
     | "executorUnavailable"
+    | "alreadyRunning"
     | "executionFailed"
     | "saveFailed";
   errorMessage?: string;
@@ -433,6 +520,15 @@ function handleManualRunFailure(
   options?: { showWebviewError?: boolean },
 ): void {
   const showWebviewError = options?.showWebviewError === true;
+
+  if (runResult.reason === "alreadyRunning") {
+    const msg = messages.taskAlreadyRunning(taskName);
+    notifyInfo(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
 
   if (runResult.reason === "executionFailed") {
     if (runResult.userNotified) {
@@ -483,6 +579,58 @@ function handleManualRunFailure(
   }
 }
 
+function disposePromptResourceWatchers(): void {
+  for (const disposable of promptResourceWatchers) {
+    try {
+      disposable.dispose();
+    } catch {
+      // best-effort cleanup only
+    }
+  }
+  promptResourceWatchers = [];
+}
+
+function registerPromptResourceWatchers(): void {
+  disposePromptResourceWatchers();
+
+  const refreshCaches = () => {
+    void SchedulerWebview.refreshCachesAndNotifyPanel(true);
+  };
+
+  const watchPattern = (pattern: vscode.GlobPattern): void => {
+    const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    promptResourceWatchers.push(
+      watcher,
+      watcher.onDidCreate(refreshCaches),
+      watcher.onDidChange(refreshCaches),
+      watcher.onDidDelete(refreshCaches),
+    );
+  };
+
+  watchPattern("**/.github/prompts/**/*.md");
+
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const watchedRoots = new Set<string>();
+  const roots = [
+    resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", "")),
+    ...resolveGlobalAgentRoots(config.get<string>("globalAgentsPath", "")),
+  ];
+
+  for (const root of roots) {
+    if (!root) {
+      continue;
+    }
+
+    const normalizedRoot = normalizeForCompare(root);
+    if (!normalizedRoot || watchedRoots.has(normalizedRoot)) {
+      continue;
+    }
+
+    watchedRoots.add(normalizedRoot);
+    watchPattern(new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md"));
+  }
+}
+
 async function appendManualRunHistory(
   task: ScheduledTask,
   runResult: { ok: true } | ManualRunFailureResult,
@@ -500,7 +648,7 @@ async function appendManualRunHistory(
       !Number.isNaN(latestTask.nextRun.getTime())
         ? latestTask.nextRun.toISOString()
         : undefined;
-    await enqueueExecutionHistory({
+    await recordExecutionHistoryBestEffort({
       taskId: task.id,
       taskName: task.name,
       trigger: "manual",
@@ -517,7 +665,7 @@ async function appendManualRunHistory(
       : runResult.reason === "executorUnavailable"
         ? messages.manualRunUnavailable()
         : messages.taskNotFound();
-  await enqueueExecutionHistory({
+  await recordExecutionHistoryBestEffort({
     taskId: task.id,
     taskName: task.name,
     trigger: "manual",
@@ -526,6 +674,34 @@ async function appendManualRunHistory(
     nextRunAt: undefined,
     detail: resolveDisplayErrorMessage(detail),
   });
+}
+
+function buildTaskQuickPickMeta(task: ScheduledTask): string {
+  if (task.scope === "global") {
+    return messages.labelScopeGlobal();
+  }
+
+  const workspaceName = task.workspacePath
+    ? path.basename(task.workspacePath)
+    : messages.tooltipNotSet();
+  const appliesHere = scheduleManager.shouldTaskRunInCurrentWorkspace(task)
+    ? messages.labelThisWorkspaceShort()
+    : messages.labelOtherWorkspaceShort();
+  return `${messages.labelScopeWorkspace()} • ${workspaceName} • ${appliesHere}`;
+}
+
+function buildTaskQuickPickItem(task: ScheduledTask): {
+  label: string;
+  description: string;
+  detail: string;
+  task: ScheduledTask;
+} {
+  return {
+    label: task.name,
+    description: task.cronExpression,
+    detail: buildTaskQuickPickMeta(task),
+    task,
+  };
 }
 
 /**
@@ -642,12 +818,15 @@ export function activate(context: vscode.ExtensionContext): void {
     24 * 60 * 60 * 1000,
   );
 
+  registerPromptResourceWatchers();
+
   context.subscriptions.push({
     dispose: () => {
       if (promptSyncInterval) {
         clearInterval(promptSyncInterval);
         promptSyncInterval = undefined;
       }
+      disposePromptResourceWatchers();
     },
   });
 
@@ -665,9 +844,17 @@ export function activate(context: vscode.ExtensionContext): void {
       treeProvider.refresh();
     }
     if (
+      e.affectsConfiguration("copilotScheduler.defaultScope") ||
+      e.affectsConfiguration("copilotScheduler.autoModeDefault") ||
+      e.affectsConfiguration("copilotScheduler.jitterSeconds")
+    ) {
+      SchedulerWebview.refreshFormDefaults();
+    }
+    if (
       e.affectsConfiguration("copilotScheduler.globalPromptsPath") ||
       e.affectsConfiguration("copilotScheduler.globalAgentsPath")
     ) {
+      registerPromptResourceWatchers();
       void SchedulerWebview.refreshCachesAndNotifyPanel(true);
     }
     // Consolidate timezone / enabled recalculation to avoid duplicate
@@ -716,7 +903,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const workspaceFoldersWatcher = vscode.workspace.onDidChangeWorkspaceFolders(
     () => {
+      registerPromptResourceWatchers();
       SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+      void SchedulerWebview.refreshCachesAndNotifyPanel(true);
       treeProvider.refresh();
     },
   );
@@ -770,7 +959,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
       notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
-      void enqueueExecutionHistory({
+      void recordExecutionHistoryBestEffort({
         taskId: task.id,
         taskName: task.name,
         trigger,
@@ -792,7 +981,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       const nextRunDate = getNotificationNextRun(task, new Date());
       const summary = buildExecutionSummary(task.name, "failed", nextRunDate);
       vscode.window.setStatusBarMessage(`⚠ ${summary}`, 6000);
-      void enqueueExecutionHistory({
+      void recordExecutionHistoryBestEffort({
         taskId: task.id,
         taskName: task.name,
         trigger,
@@ -860,6 +1049,10 @@ async function resolvePromptText(
           );
           return text;
         }
+        logDebug(
+          `[CopilotScheduler] resolvePromptText: empty openDocument (file=${path.basename(filePath)}, dirty=${openDoc.isDirty}, task=${task.id})`,
+        );
+        throw createEmptyPromptTemplateError(filePath);
       }
     }
 
@@ -875,7 +1068,14 @@ async function resolvePromptText(
         );
         return content;
       }
+      logDebug(
+        `[CopilotScheduler] resolvePromptText: empty file (file=${path.basename(filePath)}, task=${task.id})`,
+      );
+      throw createEmptyPromptTemplateError(filePath);
     } catch (error) {
+      if (isEmptyPromptTemplateError(error)) {
+        throw error;
+      }
       const errorMessage =
         error instanceof Error ? error.message : String(error ?? "");
       logDebug(
@@ -1020,6 +1220,11 @@ export const __testOnly = {
   resolvePromptExecution,
   sanitizeErrorDetailsForLog,
   resolveDisplayErrorMessage,
+  ensureCreatedTaskAcceptedAfterDisclaimer,
+  enqueueExecutionHistory,
+  getExecutionHistoryEntries,
+  setExtensionContextForTests,
+  resetExecutionHistoryQueueForTests,
 };
 
 function getWorkspaceFolderPaths(): string[] {
@@ -1085,6 +1290,7 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           });
         if (!runResult.ok) {
           await appendManualRunHistory(runTask, runResult);
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           handleManualRunFailure(runTask.name, runResult, {
             showWebviewError: true,
           });
@@ -1169,7 +1375,7 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           const task = await scheduleManager.createTask(
             action.data as CreateTaskInput,
           );
-          const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+          const accepted = await ensureCreatedTaskAcceptedAfterDisclaimer(task);
           if (!accepted) {
             SchedulerWebview.switchToList();
             break;
@@ -1255,6 +1461,10 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
         if (moved) {
           notifyInfo(messages.taskMovedToCurrentWorkspace(moved.name));
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+        } else {
+          const msg = messages.taskNotFound();
+          notifyError(msg);
+          SchedulerWebview.showError(msg);
         }
         break;
       }
@@ -1300,7 +1510,7 @@ function registerCreateTaskCommand(): vscode.Disposable {
           prompt,
           cronExpression,
         });
-        const accepted = await ensureTaskEnabledAfterDisclaimer(task);
+        const accepted = await ensureCreatedTaskAcceptedAfterDisclaimer(task);
         if (!accepted) {
           return;
         }
@@ -1402,8 +1612,7 @@ function registerEditTaskCommand(
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
-              label: t.name,
-              description: t.cronExpression,
+              ...buildTaskQuickPickItem(t),
               id: t.id,
             })),
             { placeHolder: messages.selectTask() },
@@ -1453,11 +1662,7 @@ function registerDeleteTaskCommand(): vscode.Disposable {
           }
 
           const selected = await vscode.window.showQuickPick(
-            tasks.map((t) => ({
-              label: t.name,
-              description: t.cronExpression,
-              task: t,
-            })),
+            tasks.map((t) => buildTaskQuickPickItem(t)),
             { placeHolder: messages.selectTask() },
           );
 
@@ -1517,8 +1722,8 @@ function registerToggleTaskCommand(): vscode.Disposable {
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
+              ...buildTaskQuickPickItem(t),
               label: `${t.enabled ? "✅" : "⏸️"} ${t.name}`,
-              description: t.cronExpression,
               id: t.id,
             })),
             { placeHolder: messages.selectTask() },
@@ -1573,8 +1778,8 @@ function registerEnableTaskCommand(): vscode.Disposable {
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
+              ...buildTaskQuickPickItem(t),
               label: `⏸️ ${t.name}`,
-              description: t.cronExpression,
               id: t.id,
             })),
             { placeHolder: messages.selectTask() },
@@ -1623,8 +1828,8 @@ function registerDisableTaskCommand(): vscode.Disposable {
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
+              ...buildTaskQuickPickItem(t),
               label: `✅ ${t.name}`,
-              description: t.cronExpression,
               id: t.id,
             })),
             { placeHolder: messages.selectTask() },
@@ -1668,11 +1873,7 @@ function registerRunNowCommand(): vscode.Disposable {
           }
 
           const selected = await vscode.window.showQuickPick(
-            tasks.map((t) => ({
-              label: t.name,
-              description: t.cronExpression,
-              task: t,
-            })),
+            tasks.map((t) => buildTaskQuickPickItem(t)),
             { placeHolder: messages.selectTask() },
           );
 
@@ -1694,6 +1895,7 @@ function registerRunNowCommand(): vscode.Disposable {
           });
         if (!runResult.ok) {
           await appendManualRunHistory(task, runResult);
+          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           handleManualRunFailure(task.name, runResult);
           return;
         }
@@ -1743,9 +1945,8 @@ function registerCopyPromptCommand(): vscode.Disposable {
                     ? t.prompt.substring(0, 50) + "..."
                     : t.prompt;
               return {
-                label: t.name,
+                ...buildTaskQuickPickItem(t),
                 description,
-                task: t,
               };
             }),
             { placeHolder: messages.selectTask() },
@@ -1786,8 +1987,7 @@ function registerDuplicateTaskCommand(): vscode.Disposable {
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
-              label: t.name,
-              description: t.cronExpression,
+              ...buildTaskQuickPickItem(t),
               id: t.id,
             })),
             { placeHolder: messages.selectTask() },
@@ -1833,11 +2033,10 @@ function registerMoveToCurrentWorkspaceCommand(): vscode.Disposable {
 
           const selected = await vscode.window.showQuickPick(
             tasks.map((t) => ({
-              label: t.name,
+              ...buildTaskQuickPickItem(t),
               description: t.workspacePath
                 ? path.basename(t.workspacePath)
                 : "",
-              task: t,
             })),
             { placeHolder: messages.selectTask() },
           );
@@ -1872,7 +2071,6 @@ function registerMoveToCurrentWorkspaceCommand(): vscode.Disposable {
         const errorMessage =
           error instanceof Error ? error.message : String(error ?? "");
         notifyError(errorMessage);
-        SchedulerWebview.showError(errorMessage);
       }
     },
   );

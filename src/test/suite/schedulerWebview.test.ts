@@ -1,6 +1,8 @@
 import * as assert from "assert";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
 import {
@@ -589,6 +591,223 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(updateTasksSource, token),
         `Expected token not found in updateTasks flow: ${token}`,
+      );
+    }
+  });
+
+  test("refreshFormDefaults posts bounded defaults to the webview", () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      refreshFormDefaults?: () => void;
+    };
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+    const sent: unknown[] = [];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+
+      (
+        vscode.workspace as typeof vscode.workspace & {
+          getConfiguration: typeof vscode.workspace.getConfiguration;
+        }
+      ).getConfiguration = (() => {
+        return {
+          get<T>(section: string, defaultValue?: T): T {
+            if (section === "defaultScope") {
+              return "global" as T;
+            }
+            if (section === "autoModeDefault") {
+              return true as T;
+            }
+            if (section === "jitterSeconds") {
+              return 9999 as T;
+            }
+            return defaultValue as T;
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration;
+
+      assert.ok(typeof wv.refreshFormDefaults === "function");
+      wv.refreshFormDefaults();
+
+      assert.strictEqual(sent.length, 1);
+      assert.deepStrictEqual(sent[0], {
+        type: "updateDefaults",
+        defaultScope: "global",
+        defaultAutoMode: true,
+        defaultJitterSeconds: 1800,
+      });
+    } finally {
+      (
+        vscode.workspace as typeof vscode.workspace & {
+          getConfiguration: typeof vscode.workspace.getConfiguration;
+        }
+      ).getConfiguration = originalGetConfiguration;
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+    }
+  });
+
+  test("updateDefaults applies new defaults immediately only in create mode", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const applyDefaultsSource = extractBlockFromStartToken(
+      source,
+      "function applyUpdatedDefaultsToCreateForm() {",
+    );
+
+    const applyDefaultsTokens = [
+      "if (editingTaskId)",
+      "return;",
+      "if (autoModeInput) autoModeInput.checked = defaultAutoMode;",
+      "jitterSecondsInput.value = String(defaultJitterSeconds);",
+      'input[name="scope"][value="\' + defaultScope + \'"]',
+      "defaultScopeInput.checked = true;",
+    ];
+
+    for (const token of applyDefaultsTokens) {
+      assert.ok(
+        sourceContainsToken(applyDefaultsSource, token),
+        `Expected token not found in applyUpdatedDefaultsToCreateForm: ${token}`,
+      );
+    }
+
+    const updateDefaultsStart = source.indexOf('case "updateDefaults":');
+    assert.ok(updateDefaultsStart >= 0, "updateDefaults case was not found.");
+
+    const promptTemplateLoadedStart = source.indexOf(
+      'case "promptTemplateLoaded":',
+      updateDefaultsStart,
+    );
+    assert.ok(
+      promptTemplateLoadedStart > updateDefaultsStart,
+      "updateDefaults case end anchor was not found.",
+    );
+
+    const updateDefaultsSource = source.slice(
+      updateDefaultsStart,
+      promptTemplateLoadedStart,
+    );
+    assert.ok(
+      sourceContainsToken(
+        updateDefaultsSource,
+        "applyUpdatedDefaultsToCreateForm();",
+      ),
+      "updateDefaults should apply defaults to the create form immediately.",
+    );
+  });
+
+  test("resetForm reapplies settings-backed default scope", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const resetSource = extractBlockFromStartToken(
+      source,
+      "function resetForm() {",
+    );
+
+    const expectedTokens = [
+      "document.querySelector(",
+      'input[name="scope"][value="\' + defaultScope + \'"]',
+      "defaultScopeInput.checked = true;",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(resetSource, token),
+        `Expected token not found in resetForm default-scope flow: ${token}`,
+      );
+    }
+  });
+
+  test("guardrail number inputs use integer steps in the initial HTML", async () => {
+    const panel = {
+      webview: {
+        html: "",
+        cspSource: "vscode-webview://test",
+        asWebviewUri: (uri: vscode.Uri) => uri,
+        postMessage: async () => true,
+        onDidReceiveMessage: () => ({ dispose() {} }),
+      },
+      reveal: () => undefined,
+      dispose: () => undefined,
+      onDidDispose: () => ({ dispose() {} }),
+    } as unknown as vscode.WebviewPanel;
+    const originalCreateWebviewPanel = vscode.window.createWebviewPanel;
+
+    Object.defineProperty(vscode.window, "createWebviewPanel", {
+      value: (() => panel) as typeof vscode.window.createWebviewPanel,
+      configurable: true,
+    });
+    try {
+      await SchedulerWebview.show(
+        vscode.Uri.file(path.resolve(__dirname, "../../..")),
+        [],
+        () => {},
+      );
+
+      const html = panel.webview.html;
+      assert.match(
+        html,
+        /id="jitter-seconds"[^>]*step="1"/,
+        "jitter seconds input should use integer steps",
+      );
+      assert.match(
+        html,
+        /id="max-executions-per-day"[^>]*step="1"/,
+        "max executions per day input should use integer steps",
+      );
+    } finally {
+      SchedulerWebview.dispose();
+      Object.defineProperty(vscode.window, "createWebviewPanel", {
+        value: originalCreateWebviewPanel,
+        configurable: true,
+      });
+    }
+  });
+
+  test("form submission normalizes guardrail number inputs to bounded integers", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const submitSource = extractBlockFromStartToken(source, "if (taskForm) {");
+
+    const expectedTokens = [
+      "jitterSeconds: jitterSecondsInput",
+      "? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)",
+      "maxExecutionsPerDay: maxExecutionsPerDayInput",
+      "? boundedNumber(maxExecutionsPerDayInput.value || 0, 0, 100, 0)",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(submitSource, token),
+        `Expected token not found in submit normalization flow: ${token}`,
       );
     }
   });
@@ -1284,5 +1503,348 @@ suite("SchedulerWebview Template Load Error Feedback Tests", () => {
       expectedTokensInOrder,
       "Expected token not found",
     );
+  });
+
+  test("refreshCachesAndNotifyPanel keeps cached templates on refresh failure", async () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      cachedPromptTemplates?: unknown[];
+      hasShownPromptTemplateRefreshError?: boolean;
+      refreshAgentsAndModels?: (force?: boolean) => Promise<void>;
+      refreshPromptTemplates?: (force?: boolean) => Promise<void>;
+      refreshCachesAndNotifyPanel?: (force?: boolean) => Promise<void>;
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalTemplates = wv.cachedPromptTemplates;
+    const originalRefreshAgentsAndModels = wv.refreshAgentsAndModels;
+    const originalRefreshPromptTemplates = wv.refreshPromptTemplates;
+    const originalErrorShown = wv.hasShownPromptTemplateRefreshError;
+
+    const sent: unknown[] = [];
+    const cachedTemplates = [{ path: "a.md", name: "alpha", source: "local" }];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+      wv.cachedPromptTemplates = cachedTemplates;
+      wv.hasShownPromptTemplateRefreshError = false;
+      wv.refreshAgentsAndModels = async () => {};
+      wv.refreshPromptTemplates = async () => {
+        throw new Error("template refresh failed");
+      };
+
+      assert.ok(typeof wv.refreshCachesAndNotifyPanel === "function");
+
+      await wv.refreshCachesAndNotifyPanel!(true);
+      await wv.refreshCachesAndNotifyPanel!(true);
+
+      assert.deepStrictEqual(wv.cachedPromptTemplates, cachedTemplates);
+
+      const templateUpdates = (
+        sent as Array<{ type?: unknown; templates?: unknown }>
+      ).filter((message) => message.type === "updatePromptTemplates");
+      assert.ok(templateUpdates.length >= 1);
+      assert.deepStrictEqual(templateUpdates[0]?.templates, cachedTemplates);
+
+      const showErrors = (
+        sent as Array<{ type?: unknown; text?: unknown }>
+      ).filter((message) => message.type === "showError");
+      assert.strictEqual(showErrors.length, 1);
+      assert.strictEqual(showErrors[0]?.text, messages.templateLoadError());
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.cachedPromptTemplates = originalTemplates;
+      wv.refreshAgentsAndModels = originalRefreshAgentsAndModels;
+      wv.refreshPromptTemplates = originalRefreshPromptTemplates;
+      wv.hasShownPromptTemplateRefreshError = originalErrorShown;
+    }
+  });
+
+  test("refreshPrompts keeps cached templates and shows template error on failure", async () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      cachedPromptTemplates?: unknown[];
+      hasShownPromptTemplateRefreshError?: boolean;
+      refreshPromptTemplates?: (force?: boolean) => Promise<void>;
+      handleMessage?: (message: { type: "refreshPrompts" }) => Promise<void>;
+    };
+
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalTemplates = wv.cachedPromptTemplates;
+    const originalRefreshPromptTemplates = wv.refreshPromptTemplates;
+    const originalErrorShown = wv.hasShownPromptTemplateRefreshError;
+
+    const sent: unknown[] = [];
+    const cachedTemplates = [{ path: "a.md", name: "alpha", source: "local" }];
+
+    try {
+      wv.panel = {
+        webview: {
+          postMessage: (message: unknown) => {
+            sent.push(message);
+            return Promise.resolve(true);
+          },
+        },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+      wv.cachedPromptTemplates = cachedTemplates;
+      wv.hasShownPromptTemplateRefreshError = true;
+      wv.refreshPromptTemplates = async () => {
+        throw new Error("template refresh failed");
+      };
+
+      assert.ok(typeof wv.handleMessage === "function");
+
+      await wv.handleMessage!({ type: "refreshPrompts" });
+
+      assert.deepStrictEqual(wv.cachedPromptTemplates, cachedTemplates);
+      assert.strictEqual(wv.hasShownPromptTemplateRefreshError, true);
+
+      const templateUpdates = (
+        sent as Array<{ type?: unknown; templates?: unknown }>
+      ).filter((message) => message.type === "updatePromptTemplates");
+      assert.strictEqual(templateUpdates.length, 1);
+      assert.deepStrictEqual(templateUpdates[0]?.templates, cachedTemplates);
+
+      const showErrors = (
+        sent as Array<{ type?: unknown; text?: unknown }>
+      ).filter((message) => message.type === "showError");
+      assert.strictEqual(showErrors.length, 1);
+      assert.strictEqual(showErrors[0]?.text, messages.templateLoadError());
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.cachedPromptTemplates = originalTemplates;
+      wv.refreshPromptTemplates = originalRefreshPromptTemplates;
+      wv.hasShownPromptTemplateRefreshError = originalErrorShown;
+    }
+  });
+
+  test("resetWebviewReadyState clears the prompt template refresh error guard", () => {
+    const wv = SchedulerWebview as unknown as {
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      hasShownPromptTemplateRefreshError?: boolean;
+      resetWebviewReadyState?: () => void;
+    };
+
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalErrorShown = wv.hasShownPromptTemplateRefreshError;
+
+    try {
+      wv.webviewReady = true;
+      wv.pendingMessages = [{ type: "updatePromptTemplates" }];
+      wv.hasShownPromptTemplateRefreshError = true;
+
+      assert.ok(typeof wv.resetWebviewReadyState === "function");
+      wv.resetWebviewReadyState();
+
+      assert.strictEqual(wv.webviewReady, false);
+      assert.deepStrictEqual(wv.pendingMessages, []);
+      assert.strictEqual(wv.hasShownPromptTemplateRefreshError, false);
+    } finally {
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.hasShownPromptTemplateRefreshError = originalErrorShown;
+    }
+  });
+
+  test("webview script uses displayName when rendering template options", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+    const updateTemplateOptionsBlock = extractFunctionSource(
+      source,
+      "updateTemplateOptions",
+    );
+
+    assert.ok(
+      sourceContainsToken(
+        updateTemplateOptionsBlock,
+        'var displayName = t.displayName || t.name || "";',
+      ),
+      "template option rendering should prefer displayName over name.",
+    );
+    assert.ok(
+      sourceContainsToken(
+        updateTemplateOptionsBlock,
+        "escapeHtml(displayName)",
+      ),
+      "template option rendering should escape the resolved display name.",
+    );
+  });
+
+  test("prompt template discovery uses Uri-based directory traversal", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-webview-templates-"),
+    );
+    const workspaceOne = path.join(tempRoot, "ws-one");
+    const workspaceTwo = path.join(tempRoot, "ws-two");
+    const globalPromptsRoot = path.join(tempRoot, "global-prompts");
+
+    const wv = SchedulerWebview as unknown as {
+      getPromptTemplates?: () => Promise<
+        Array<{
+          path: string;
+          name: string;
+          source: "local" | "global";
+          displayName?: string;
+        }>
+      >;
+    };
+
+    const originalWorkspaceFolders = vscode.workspace.workspaceFolders;
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+
+    try {
+      fs.mkdirSync(path.join(workspaceOne, ".github", "prompts", "team"), {
+        recursive: true,
+      });
+      fs.mkdirSync(path.join(workspaceTwo, ".github", "prompts"), {
+        recursive: true,
+      });
+      fs.mkdirSync(globalPromptsRoot, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(workspaceOne, ".github", "prompts", "daily.prompt.md"),
+        "daily",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(workspaceOne, ".github", "prompts", "team", "shared.md"),
+        "shared one",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(workspaceOne, ".github", "prompts", "ignore.agent.md"),
+        "agent",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(workspaceTwo, ".github", "prompts", "shared.md"),
+        "shared two",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(globalPromptsRoot, "shared.md"),
+        "shared global",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(globalPromptsRoot, "ignored.instructions.md"),
+        "instructions",
+        "utf8",
+      );
+
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: [
+          {
+            index: 0,
+            name: "ws-one",
+            uri: vscode.Uri.file(workspaceOne),
+          },
+          {
+            index: 1,
+            name: "ws-two",
+            uri: vscode.Uri.file(workspaceTwo),
+          },
+        ] satisfies vscode.WorkspaceFolder[],
+        configurable: true,
+      });
+
+      (
+        vscode.workspace as typeof vscode.workspace & {
+          getConfiguration: typeof vscode.workspace.getConfiguration;
+        }
+      ).getConfiguration = ((section?: string) => {
+        const config = originalGetConfiguration.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") {
+          return config;
+        }
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            if (key === "globalPromptsPath") {
+              return globalPromptsRoot as T;
+            }
+            return config.get<T>(key, defaultValue as T);
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration;
+
+      assert.ok(typeof wv.getPromptTemplates === "function");
+
+      const templates = await wv.getPromptTemplates!();
+      const fileNames = templates.map((template) =>
+        path.basename(template.path),
+      );
+
+      assert.ok(fileNames.includes("daily.prompt.md"));
+      assert.ok(!fileNames.includes("ignore.agent.md"));
+      assert.ok(!fileNames.includes("ignored.instructions.md"));
+
+      const daily = templates.find(
+        (template) => path.basename(template.path) === "daily.prompt.md",
+      );
+      assert.ok(daily);
+      assert.strictEqual(daily?.name, "daily");
+      assert.strictEqual(daily?.displayName, undefined);
+
+      const sharedTemplates = templates.filter(
+        (template) => template.name === "shared",
+      );
+      assert.strictEqual(sharedTemplates.length, 3);
+      assert.ok(
+        sharedTemplates.every(
+          (template) =>
+            typeof template.displayName === "string" &&
+            template.displayName.startsWith("shared ("),
+        ),
+      );
+      assert.strictEqual(
+        new Set(sharedTemplates.map((template) => template.displayName)).size,
+        3,
+      );
+    } finally {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: originalWorkspaceFolders,
+        configurable: true,
+      });
+      (
+        vscode.workspace as typeof vscode.workspace & {
+          getConfiguration: typeof vscode.workspace.getConfiguration;
+        }
+      ).getConfiguration = originalGetConfiguration;
+      fs.rmSync(tempRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
+    }
   });
 });

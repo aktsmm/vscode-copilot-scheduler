@@ -2,7 +2,7 @@ import * as path from "path";
 import * as fs from "fs";
 
 function getDefaultVsCodeUserPromptsRoot(): string {
-  if (process.env.APPDATA) {
+  if (process.platform === "win32" && process.env.APPDATA) {
     // Windows
     return path.join(process.env.APPDATA, "Code", "User", "prompts");
   }
@@ -108,8 +108,25 @@ export function isPathInsideBaseDir(
 
 function isMarkdownFile(p: string): boolean {
   const lower = p.toLowerCase();
-  // Prompt templates are markdown, but agent definitions (*.agent.md) must not be treated as templates.
-  return lower.endsWith(".md") && !lower.endsWith(".agent.md");
+  // Prompt templates are markdown, but agent definitions (*.agent.md)
+  // and instruction files (*.instructions.md) must not be treated as templates.
+  return (
+    lower.endsWith(".md") &&
+    !lower.endsWith(".agent.md") &&
+    !lower.endsWith(".instructions.md")
+  );
+}
+
+export function isPromptTemplateMarkdownFile(p: string): boolean {
+  return isMarkdownFile(p);
+}
+
+export function getPromptTemplateDisplayName(filePath: string): string {
+  const fileName = path.basename(filePath);
+  if (fileName.toLowerCase().endsWith(".prompt.md")) {
+    return fileName.slice(0, -".prompt.md".length);
+  }
+  return path.basename(fileName, path.extname(fileName));
 }
 
 /**

@@ -321,6 +321,8 @@
     return i;
   })();
   var defaultAutoMode = !!initialData.defaultAutoMode;
+  var defaultScope =
+    initialData.defaultScope === "global" ? "global" : "workspace";
   var locale =
     typeof initialData.locale === "string" && initialData.locale
       ? initialData.locale
@@ -757,10 +759,10 @@
         runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
         jitterSeconds: jitterSecondsInput
-          ? Number(jitterSecondsInput.value || 0)
+          ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
           : 0,
         maxExecutionsPerDay: maxExecutionsPerDayInput
-          ? Number(maxExecutionsPerDayInput.value || 0)
+          ? boundedNumber(maxExecutionsPerDayInput.value || 0, 0, 100, 0)
           : 0,
         allowedTimeStart: allowedTimeStartInput
           ? String(allowedTimeStartInput.value || "").trim()
@@ -1745,8 +1747,32 @@
       allowedTimeEndInput.value = "";
     }
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
+    var defaultScopeInput = document.querySelector(
+      'input[name="scope"][value="' + defaultScope + '"]',
+    );
+    if (defaultScopeInput) {
+      defaultScopeInput.checked = true;
+    }
     updateFriendlyVisibility();
     updateCronPreview();
+  }
+
+  function applyUpdatedDefaultsToCreateForm() {
+    if (editingTaskId) {
+      return;
+    }
+
+    if (autoModeInput) autoModeInput.checked = defaultAutoMode;
+    if (jitterSecondsInput) {
+      jitterSecondsInput.value = String(defaultJitterSeconds);
+    }
+
+    var defaultScopeInput = document.querySelector(
+      'input[name="scope"][value="' + defaultScope + '"]',
+    );
+    if (defaultScopeInput) {
+      defaultScopeInput.checked = true;
+    }
   }
 
   function updateAgentOptions() {
@@ -1828,11 +1854,12 @@
       placeholder +
       filtered
         .map(function (t) {
+          var displayName = t.displayName || t.name || "";
           return (
             '<option value="' +
             escapeAttr(t.path) +
             '">' +
-            escapeHtml(t.name) +
+            escapeHtml(displayName) +
             "</option>"
           );
         })
@@ -2265,6 +2292,22 @@
                 templateSelectGroup.style.display = "none";
             }
           }
+          break;
+        case "updateDefaults":
+          defaultScope =
+            message.defaultScope === "global" ? "global" : "workspace";
+          defaultAutoMode = !!message.defaultAutoMode;
+          {
+            var rawJitter =
+              typeof message.defaultJitterSeconds === "number"
+                ? message.defaultJitterSeconds
+                : Number(message.defaultJitterSeconds);
+            if (isFinite(rawJitter)) {
+              var boundedJitter = Math.floor(rawJitter);
+              defaultJitterSeconds = Math.min(Math.max(boundedJitter, 0), 1800);
+            }
+          }
+          applyUpdatedDefaultsToCreateForm();
           break;
         case "promptTemplateLoaded":
           {

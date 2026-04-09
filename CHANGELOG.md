@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.33] - 2026-04-10
+
+### Fixed
+
+- **Prompt template safety**: `.instructions.md` files are now excluded from prompt-template discovery and validation, preventing instruction files from being loaded as runnable templates.
+- **Create-task disclaimer rollback**: Declining the risk disclaimer during task creation now removes or disables the just-created task consistently instead of leaving partial state behind.
+- **Execution guardrails**: Corrupted daily execution counters are normalized safely, decimal daily limits are floored, and overlapping manual/automatic runs of the same task are now blocked.
+- **Prompt resolution failures**: Empty prompt-template files now raise a localized error instead of silently falling back to stale stored prompt text.
+
+### Improved
+
+- **Webview defaults sync**: The Webview now refreshes default scope, auto mode, and jitter settings in place when configuration changes, without requiring a rebuild.
+- **Prompt template refresh resilience**: Template refresh failures now preserve the previous cache and show a bounded inline error instead of clearing the picker state.
+- **Template discovery labels**: Duplicate template names are disambiguated with context-aware display labels, and recursive discovery now uses URI-based traversal for workspace and global prompt roots.
+- **Task management feedback**: Task quick-pick entries now include scope/workspace metadata, and manual-run or move failures refresh task state more consistently.
+
+### Tests
+
+- Expanded coverage for Webview defaults/template refresh flows, prompt-template discovery, execution history queue recovery, overlapping run protection, empty template resolution, and path-escape validation using directory link/junction based tests.
+
 ## [1.0.32] - 2026-04-09
 
 ### Fixed

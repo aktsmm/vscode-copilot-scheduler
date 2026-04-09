@@ -107,6 +107,11 @@ export const messages = {
       "Task execution is currently unavailable",
       "現在タスク実行を利用できません",
     ),
+  taskAlreadyRunning: (name: string) =>
+    t(
+      `Task "${name}" is already running`,
+      `タスク「${name}」はすでに実行中です`,
+    ),
   taskNotFound: () => t("Task not found", "タスクが見つかりません"),
   noTasksFound: () =>
     t("No scheduled tasks found", "スケジュールされたタスクがありません"),
@@ -121,6 +126,11 @@ export const messages = {
   taskNameRequired: () =>
     t("Task name is required", "タスク名を入力してください"),
   promptRequired: () => t("Prompt is required", "プロンプトを入力してください"),
+  promptTemplateEmpty: (name: string) =>
+    t(
+      `Prompt template "${name}" is empty`,
+      `プロンプトテンプレート「${name}」が空です`,
+    ),
   templateRequired: () =>
     t(
       "Prompt template is required",
@@ -502,6 +512,11 @@ export const messages = {
     ),
   disclaimerAccept: () => t("I understand the risks", "リスクを理解しました"),
   disclaimerDecline: () => t("Cancel", "キャンセル"),
+  disclaimerDeclinedTaskCanceled: (name: string) =>
+    t(
+      `Risk notice was canceled. Task "${name}" was not created.`,
+      `リスク通知がキャンセルされたため「${name}」は作成されませんでした。`,
+    ),
   disclaimerDeclinedTaskDisabled: (name: string) =>
     t(
       `Risk notice was canceled. "${name}" remains disabled.`,

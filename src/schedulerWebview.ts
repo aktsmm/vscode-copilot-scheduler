@@ -20,7 +20,11 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { messages, isJapanese, getCronPresets } from "./i18n";
 import { logError } from "./logger";
 import { validateTemplateLoadRequest } from "./templateValidation";
-import { resolveGlobalPromptsRoot } from "./promptResolver";
+import {
+  getPromptTemplateDisplayName,
+  isPromptTemplateMarkdownFile,
+  resolveGlobalPromptsRoot,
+} from "./promptResolver";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { filterPickerModelCatalog } from "./modelSelection";
 
@@ -34,6 +38,7 @@ export class SchedulerWebview {
   private static cachedAgents: AgentInfo[] = [];
   private static cachedModels: ModelInfo[] = [];
   private static cachedPromptTemplates: PromptTemplate[] = [];
+  private static hasShownPromptTemplateRefreshError = false;
   private static onTaskActionCallback:
     | ((action: TaskAction) => void)
     | undefined;
@@ -45,9 +50,36 @@ export class SchedulerWebview {
   private static webviewReady = false;
   private static pendingMessages: OutgoingWebviewMessage[] = [];
 
+  private static getFormDefaults(): {
+    defaultScope: TaskScope;
+    defaultAutoMode: boolean;
+    defaultJitterSeconds: number;
+  } {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
+    const defaultAutoMode = config.get<boolean>("autoModeDefault", false);
+    const defaultJitterSecondsRaw = config.get<number>("jitterSeconds", 600);
+    const defaultJitterSeconds = (() => {
+      const n =
+        typeof defaultJitterSecondsRaw === "number"
+          ? defaultJitterSecondsRaw
+          : Number(defaultJitterSecondsRaw);
+      if (!Number.isFinite(n)) return 600;
+      const i = Math.floor(n);
+      return Math.min(Math.max(i, 0), 1800);
+    })();
+
+    return {
+      defaultScope,
+      defaultAutoMode,
+      defaultJitterSeconds,
+    };
+  }
+
   private static resetWebviewReadyState(): void {
     this.webviewReady = false;
     this.pendingMessages = [];
+    this.hasShownPromptTemplateRefreshError = false;
   }
 
   private static hasResolvedModelCatalog(
@@ -371,10 +403,22 @@ export class SchedulerWebview {
         : CopilotExecutor.getFallbackModels();
     }
 
+    const previousPromptTemplates = this.cachedPromptTemplates;
     try {
       await this.refreshPromptTemplates(force);
-    } catch {
-      this.cachedPromptTemplates = [];
+      this.hasShownPromptTemplateRefreshError = false;
+    } catch (error) {
+      this.cachedPromptTemplates = previousPromptTemplates;
+      const rawMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+      logError(
+        "[CopilotScheduler] Failed to refresh prompt templates:",
+        this.sanitizeErrorDetailsForUser(rawMessage),
+      );
+      if (this.panel && !this.hasShownPromptTemplateRefreshError) {
+        this.hasShownPromptTemplateRefreshError = true;
+        this.showError(messages.templateLoadError());
+      }
     }
 
     if (!this.panel) return;
@@ -390,6 +434,17 @@ export class SchedulerWebview {
     this.postMessage({
       type: "updatePromptTemplates",
       templates: this.cachedPromptTemplates,
+    });
+  }
+
+  /**
+   * Refresh settings-backed defaults in the existing webview without rebuilding HTML.
+   */
+  static refreshFormDefaults(): void {
+    if (!this.panel) return;
+    this.postMessage({
+      type: "updateDefaults",
+      ...this.getFormDefaults(),
     });
   }
 
@@ -484,7 +539,22 @@ export class SchedulerWebview {
         break;
 
       case "refreshPrompts":
-        await this.refreshPromptTemplates(true);
+        {
+          const previousPromptTemplates = this.cachedPromptTemplates;
+          try {
+            await this.refreshPromptTemplates(true);
+            this.hasShownPromptTemplateRefreshError = false;
+          } catch (error) {
+            this.cachedPromptTemplates = previousPromptTemplates;
+            const rawMessage =
+              error instanceof Error ? error.message : String(error ?? "");
+            logError(
+              "[CopilotScheduler] Failed to refresh prompt templates:",
+              this.sanitizeErrorDetailsForUser(rawMessage),
+            );
+            this.showError(messages.templateLoadError());
+          }
+        }
         this.postMessage({
           type: "updatePromptTemplates",
           templates: this.cachedPromptTemplates,
@@ -616,11 +686,83 @@ export class SchedulerWebview {
     this.cachedPromptTemplates = await this.getPromptTemplates();
   }
 
+  private static buildPromptTemplateContextLabel(
+    templatePath: string,
+    source: "local" | "global",
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    globalPath?: string,
+  ): string {
+    const resolvedTemplatePath = path.resolve(templatePath);
+
+    if (source === "local") {
+      for (const folder of workspaceFolders) {
+        const promptsRoot = path.join(folder.uri.fsPath, ".github", "prompts");
+        const relativePath = path.relative(promptsRoot, resolvedTemplatePath);
+        if (
+          !relativePath ||
+          relativePath.startsWith("..") ||
+          path.isAbsolute(relativePath)
+        ) {
+          continue;
+        }
+
+        const relativeDir = path.dirname(relativePath);
+        const sourceLabel = messages.labelPromptLocal();
+        if (relativeDir && relativeDir !== ".") {
+          return `${sourceLabel}: ${folder.name}/${relativeDir}`;
+        }
+        return workspaceFolders.length > 1
+          ? `${sourceLabel}: ${folder.name}`
+          : sourceLabel;
+      }
+
+      return messages.labelPromptLocal();
+    }
+
+    if (globalPath) {
+      const relativePath = path.relative(globalPath, resolvedTemplatePath);
+      if (
+        relativePath &&
+        !relativePath.startsWith("..") &&
+        !path.isAbsolute(relativePath)
+      ) {
+        const relativeDir = path.dirname(relativePath);
+        if (relativeDir && relativeDir !== ".") {
+          return `${messages.labelPromptGlobal()}: ${relativeDir}`;
+        }
+      }
+    }
+
+    return messages.labelPromptGlobal();
+  }
+
+  private static applyPromptTemplateDisplayNames(
+    templates: PromptTemplate[],
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    globalPath?: string,
+  ): PromptTemplate[] {
+    const nameCounts = new Map<string, number>();
+    for (const template of templates) {
+      nameCounts.set(template.name, (nameCounts.get(template.name) ?? 0) + 1);
+    }
+
+    return templates.map((template) => {
+      if ((nameCounts.get(template.name) ?? 0) <= 1) {
+        return template;
+      }
+
+      return {
+        ...template,
+        displayName: `${template.name} (${this.buildPromptTemplateContextLabel(template.path, template.source, workspaceFolders, globalPath)})`,
+      };
+    });
+  }
+
   private static async collectMarkdownTemplatePaths(
-    rootDir: string,
+    rootDir: vscode.Uri,
   ): Promise<string[]> {
     const files: string[] = [];
-    const dirsToScan: string[] = [rootDir];
+    const dirsToScan: vscode.Uri[] = [rootDir];
 
     while (dirsToScan.length > 0) {
       const currentDir = dirsToScan.pop();
@@ -630,18 +772,16 @@ export class SchedulerWebview {
 
       let entries: [string, vscode.FileType][];
       try {
-        entries = await vscode.workspace.fs.readDirectory(
-          vscode.Uri.file(currentDir),
-        );
+        entries = await vscode.workspace.fs.readDirectory(currentDir);
       } catch {
         continue;
       }
 
       for (const [name, fileType] of entries) {
-        const entryPath = path.join(currentDir, name);
+        const entryUri = vscode.Uri.joinPath(currentDir, name);
 
         if (fileType === vscode.FileType.Directory) {
-          dirsToScan.push(entryPath);
+          dirsToScan.push(entryUri);
           continue;
         }
 
@@ -649,15 +789,11 @@ export class SchedulerWebview {
           continue;
         }
 
-        const lower = name.toLowerCase();
-        if (!lower.endsWith(".md")) {
-          continue;
-        }
-        if (lower.endsWith(".agent.md")) {
+        if (!isPromptTemplateMarkdownFile(name)) {
           continue;
         }
 
-        files.push(entryPath);
+        files.push(entryUri.fsPath);
       }
     }
 
@@ -669,19 +805,21 @@ export class SchedulerWebview {
    */
   private static async getPromptTemplates(): Promise<PromptTemplate[]> {
     const templates: PromptTemplate[] = [];
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
     // Get local templates (.github/prompts/*.md)
-    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     for (const folder of workspaceFolders) {
-      const localPromptDir = path.join(folder.uri.fsPath, ".github", "prompts");
+      const localPromptDir = vscode.Uri.joinPath(
+        folder.uri,
+        ".github",
+        "prompts",
+      );
       const templatePaths =
         await this.collectMarkdownTemplatePaths(localPromptDir);
       for (const templatePath of templatePaths) {
-        const fileName = path.basename(templatePath);
-        const displayName = path.basename(fileName, path.extname(fileName));
         templates.push({
           path: templatePath,
-          name: displayName,
+          name: getPromptTemplateDisplayName(templatePath),
           source: "local",
         });
       }
@@ -690,20 +828,27 @@ export class SchedulerWebview {
     // Get global templates
     const globalPath = this.getGlobalPromptsPath();
     if (globalPath) {
-      const templatePaths = await this.collectMarkdownTemplatePaths(globalPath);
+      const templatePaths = await this.collectMarkdownTemplatePaths(
+        vscode.Uri.file(globalPath),
+      );
       for (const templatePath of templatePaths) {
-        const fileName = path.basename(templatePath);
-        const displayName = path.basename(fileName, path.extname(fileName));
         templates.push({
           path: templatePath,
-          name: displayName,
+          name: getPromptTemplateDisplayName(templatePath),
           source: "global",
         });
       }
     }
 
-    templates.sort((a, b) => a.name.localeCompare(b.name));
-    return templates;
+    const templatesWithDisplayNames = this.applyPromptTemplateDisplayNames(
+      templates,
+      workspaceFolders,
+      globalPath,
+    );
+    templatesWithDisplayNames.sort((a, b) =>
+      (a.displayName || a.name).localeCompare(b.displayName || b.name),
+    );
+    return templatesWithDisplayNames;
   }
 
   /**
@@ -813,20 +958,8 @@ export class SchedulerWebview {
     const nonce = this.getNonce();
     const isJa = isJapanese();
     const presets = getCronPresets();
-    const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
-    const defaultAutoMode = config.get<boolean>("autoModeDefault", false);
-    const defaultJitterSecondsRaw = config.get<number>("jitterSeconds", 600);
-    // Keep the Webview resilient even if settings are corrupted/out-of-range.
-    const defaultJitterSeconds = (() => {
-      const n =
-        typeof defaultJitterSecondsRaw === "number"
-          ? defaultJitterSecondsRaw
-          : Number(defaultJitterSecondsRaw);
-      if (!Number.isFinite(n)) return 600;
-      const i = Math.floor(n);
-      return Math.min(Math.max(i, 0), 1800);
-    })();
+    const { defaultScope, defaultAutoMode, defaultJitterSeconds } =
+      this.getFormDefaults();
     const initialTasks = Array.isArray(tasks) ? tasks : [];
     const initialAgents = Array.isArray(agents) ? agents : [];
     const initialModels = Array.isArray(models) ? models : [];
@@ -984,6 +1117,7 @@ export class SchedulerWebview {
       promptTemplates: initialTemplates,
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
+      defaultScope,
       defaultAutoMode,
       defaultJitterSeconds,
       locale: isJa ? "ja-JP" : "en-US",
@@ -1846,13 +1980,13 @@ export class SchedulerWebview {
 
             <div class="form-group col-4">
               <label for="jitter-seconds">${escapeHtml(strings.labelJitterSeconds)}</label>
-              <input type="number" id="jitter-seconds" min="0" max="1800" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
+              <input type="number" id="jitter-seconds" min="0" max="1800" step="1" value="${escapeHtmlAttr(String(defaultJitterSeconds))}">
               <p class="note">${escapeHtml(strings.webviewJitterNote)}</p>
             </div>
 
             <div class="form-group col-4">
               <label for="max-executions-per-day">${escapeHtml(strings.labelMaxExecutionsPerDay)}</label>
-              <input type="number" id="max-executions-per-day" min="0" max="100" value="0">
+              <input type="number" id="max-executions-per-day" min="0" max="100" step="1" value="0">
               <p class="note">${escapeHtml(strings.webviewMaxExecutionsPerDayNote)}</p>
             </div>
 

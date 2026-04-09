@@ -1,6 +1,10 @@
 import * as path from "path";
 import type { PromptSource, PromptTemplate } from "./types";
-import { isPathInsideBaseDir, normalizeForCompare } from "./promptResolver";
+import {
+  isPathInsideBaseDir,
+  isPromptTemplateMarkdownFile,
+  normalizeForCompare,
+} from "./promptResolver";
 
 export type TemplateLoadValidationInput = {
   templatePath: string;
@@ -32,12 +36,7 @@ export function validateTemplateLoadRequest(
     return { ok: false, reason: "invalidPath" };
   }
 
-  if (!templatePath.toLowerCase().endsWith(".md")) {
-    return { ok: false, reason: "notMarkdown" };
-  }
-
-  // Do not allow agent definitions to be loaded as prompt templates.
-  if (templatePath.toLowerCase().endsWith(".agent.md")) {
+  if (!isPromptTemplateMarkdownFile(templatePath)) {
     return { ok: false, reason: "notMarkdown" };
   }
 

@@ -5,6 +5,25 @@ import * as path from "path";
 import type { PromptTemplate } from "../../types";
 import { validateTemplateLoadRequest } from "../../templateValidation";
 
+function createDirectoryEscapeLink(targetDir: string, linkPath: string): void {
+  const linkTypes: Array<"junction" | "dir"> =
+    process.platform === "win32" ? ["junction", "dir"] : ["dir"];
+  let lastError: unknown;
+
+  for (const linkType of linkTypes) {
+    try {
+      fs.symlinkSync(targetDir, linkPath, linkType);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to create directory link for test");
+}
+
 suite("Template Load Validation Tests", () => {
   test("Accepts cached local template under .github/prompts", () => {
     const ws = path.join("/tmp", "ws");
@@ -48,6 +67,30 @@ suite("Template Load Validation Tests", () => {
     const templatePath = path.join(ws, ".github", "prompts", "a.agent.md");
     const cached: PromptTemplate[] = [
       { path: templatePath, name: "a.agent", source: "local" },
+    ];
+    const res = validateTemplateLoadRequest({
+      templatePath,
+      source: "local",
+      cachedTemplates: cached,
+      workspaceFolderPaths: [ws],
+      globalPromptsPath: undefined,
+    });
+    assert.strictEqual(res.ok, false);
+    if (!res.ok) {
+      assert.strictEqual(res.reason, "notMarkdown");
+    }
+  });
+
+  test("Rejects .instructions.md templates", () => {
+    const ws = path.join("/tmp", "ws");
+    const templatePath = path.join(
+      ws,
+      ".github",
+      "prompts",
+      "a.instructions.md",
+    );
+    const cached: PromptTemplate[] = [
+      { path: templatePath, name: "a.instructions", source: "local" },
     ];
     const res = validateTemplateLoadRequest({
       templatePath,
@@ -112,21 +155,16 @@ suite("Template Load Validation Tests", () => {
       const outside = path.join(outsideDir, "secret.md");
       fs.writeFileSync(outside, "secret", "utf8");
 
-      const linkPath = path.join(promptsDir, "link.md");
-      try {
-        fs.symlinkSync(outside, linkPath, "file");
-      } catch {
-        // Symlink may be unavailable (e.g. Windows without privileges).
-        this.skip();
-        return;
-      }
+      const linkPath = path.join(promptsDir, "escaped");
+      createDirectoryEscapeLink(outsideDir, linkPath);
+      const templatePath = path.join(linkPath, "secret.md");
 
       const cached: PromptTemplate[] = [
-        { path: linkPath, name: "link", source: "local" },
+        { path: templatePath, name: "secret", source: "local" },
       ];
 
       const res = validateTemplateLoadRequest({
-        templatePath: linkPath,
+        templatePath,
         source: "local",
         cachedTemplates: cached,
         workspaceFolderPaths: [ws],
