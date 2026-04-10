@@ -20,7 +20,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 🗓️ **Cron Scheduling** - Schedule prompts to run at specific times using cron expressions
 
-🤖 **Agent & Model Selection** - Choose from built-in agents (@workspace, @terminal) and AI models (GPT-4o, Claude Sonnet 4)
+🤖 **Agent & Model Selection** - Choose from built-in agents (@workspace, @terminal) and AI models (GPT-4o, Claude Sonnet 4), including runtime quality or experimental quality variants when available
 
 🌐 **Multi-language Support** - English and Japanese UI with auto-detection
 
@@ -85,6 +85,8 @@ To automatically keep AI-applied edits after review delay, configure VS Code set
 
 Task-level controls (`Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form.
 
+The Webview previews Copilot Chat-like thinking effort options for supported model families. If it fails, choose `Default`.
+
 If execution feels sluggish when a task is triggered, try:
 
 - `copilotScheduler.chatSession = continue`
@@ -140,6 +142,7 @@ Maintainers can publish from GitHub Actions instead of running `vsce publish` lo
 
 - Copilot Chat API is still evolving; some features may require updates as the API stabilizes
 - Model selection may not work in all configurations
+- Experimental model quality relies on evolving VS Code/Copilot internals and may not work in all configurations
 
 **Disclaimer:** This extension automates Copilot Chat. GitHub's [Acceptable Use Policies](https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies#4-spam-and-inauthentic-activity-on-github) prohibit "excessive automated bulk activity", the [Terms of Service § H (API Terms)](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#h-api-terms) allow account suspension for excessive API usage, and the [GitHub Copilot Additional Product Terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot) apply these policies directly to Copilot. Use at your own risk; your account could be rate-limited or restricted. Configure jitter/daily limits/longer intervals to reduce risk, but there is no guarantee.
 

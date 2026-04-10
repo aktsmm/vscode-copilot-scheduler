@@ -15,6 +15,7 @@
   "command.openSettings": "Open Settings",
   "command.showVersion": "Show Version",
   "command.showExecutionHistory": "Show Execution History",
+  "command.dumpModelCatalog": "Dump Model Catalog Diagnostics",
   "config.enabled": "Enable or disable scheduled execution",
   "config.showNotifications": "Show notifications when tasks are executed",
   "config.notificationMode": "Notification mode",

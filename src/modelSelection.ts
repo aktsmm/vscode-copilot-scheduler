@@ -1,4 +1,8 @@
 import type { ModelInfo, ModelSelectionFields } from "./types";
+import {
+  getExperimentalModelQualityVariants,
+  type ExperimentalReasoningEffort,
+} from "./modelQualityExperiment";
 
 const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^extra[-\s]+high$/iu, label: "Extra High" },
@@ -21,6 +25,7 @@ export type ModelPickerVariant = {
   key: string;
   label: string;
   model: ModelInfo;
+  reasoningEffort?: ExperimentalReasoningEffort;
 };
 
 export type ModelPickerGroup = {
@@ -35,6 +40,11 @@ export type NormalizedModelSelection = {
   modelVendor?: string;
   modelFamily?: string;
   modelVersion?: string;
+  modelReasoningEffort?: string;
+};
+
+export type BuildModelPickerGroupsOptions = {
+  includeExperimentalModelQualityVariants?: boolean;
 };
 
 function trimOptionalText(value: unknown): string | undefined {
@@ -47,6 +57,12 @@ function trimOptionalText(value: unknown): string | undefined {
 
 function trimRequiredText(value: unknown): string {
   return trimOptionalText(value) || "";
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function normalizeKey(value: string | undefined): string {
@@ -251,6 +267,7 @@ function normalizeModelInfo(model: ModelInfo): ModelInfo {
     vendor: trimRequiredText(model.vendor),
     family: trimOptionalText(model.family),
     version: trimOptionalText(model.version),
+    maxInputTokens: normalizeOptionalNumber(model.maxInputTokens),
   };
 }
 
@@ -261,11 +278,84 @@ function buildModelCatalogKey(model: ModelInfo): string {
     normalizeKey(model.vendor),
     normalizeKey(model.family),
     normalizeKey(model.version),
+    normalizeOptionalNumber(model.maxInputTokens) ?? "",
   ]);
 }
 
+function formatCompactTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    const compact = Math.round((value / 1_000_000) * 10) / 10;
+    return `${compact % 1 === 0 ? compact.toFixed(0) : compact.toFixed(1)}m`;
+  }
+
+  if (value >= 1_000) {
+    const compact = Math.round((value / 1_000) * 10) / 10;
+    return `${compact % 1 === 0 ? compact.toFixed(0) : compact.toFixed(1)}k`;
+  }
+
+  return String(value);
+}
+
+function formatModelTokenDetail(value: number | undefined): string | undefined {
+  const normalized = normalizeOptionalNumber(value);
+  if (normalized === undefined || normalized <= 0) {
+    return undefined;
+  }
+
+  return formatCompactTokenCount(normalized);
+}
+
+function getRuntimeVariantGroupKey(model: ModelInfo): string | undefined {
+  if (!isRuntimeVariantModel(model)) {
+    return undefined;
+  }
+
+  const familyKey = normalizeKey(
+    canonicalizeModelDisplayName(model.family) ||
+      trimOptionalText(model.family),
+  );
+  if (familyKey) {
+    return familyKey;
+  }
+
+  return (
+    normalizeKey(
+      canonicalizeModelDisplayName(model.name) || trimOptionalText(model.name),
+    ) || undefined
+  );
+}
+
 function getModelGroupKey(model: ModelInfo): string {
+  const runtimeVariantGroupKey = getRuntimeVariantGroupKey(model);
+  if (runtimeVariantGroupKey) {
+    return runtimeVariantGroupKey;
+  }
+
   return normalizeKey(buildModelGroupLabel(model) || model.id);
+}
+
+function getGroupRepresentativeModel(
+  groupedModels: readonly ModelInfo[],
+): ModelInfo | undefined {
+  return (
+    groupedModels.find((model) => !isRuntimeVariantModel(model)) ||
+    groupedModels[0]
+  );
+}
+
+function getGroupRepresentativeLabel(
+  groupedModels: readonly ModelInfo[],
+): string {
+  const representative = getGroupRepresentativeModel(groupedModels);
+  if (!representative) {
+    return "";
+  }
+
+  return (
+    buildModelGroupLabel(representative) ||
+    representative.name ||
+    representative.id
+  );
 }
 
 function getModelDetailCandidates(
@@ -276,6 +366,12 @@ function getModelDetailCandidates(
     new Set(groupedModels.map((entry) => normalizeKey(entry.version))).size > 1;
   const hasDistinctVendors =
     new Set(groupedModels.map((entry) => normalizeKey(entry.vendor))).size > 1;
+  const distinctMaxInputTokens = new Set(
+    groupedModels
+      .map((entry) => normalizeOptionalNumber(entry.maxInputTokens))
+      .filter((value): value is number => value !== undefined),
+  );
+  const hasDistinctMaxInputTokens = distinctMaxInputTokens.size > 1;
 
   const detailCandidates = [
     extractNamedVariant(model.name),
@@ -283,13 +379,20 @@ function getModelDetailCandidates(
     extractVariantTail(model.family, [model.name]),
     extractTrailingParenthesizedDetail(model.name),
     hasDistinctVersions ? model.version : undefined,
+    hasDistinctMaxInputTokens
+      ? formatModelTokenDetail(model.maxInputTokens)
+      : undefined,
     hasDistinctVendors ? model.vendor : undefined,
     groupedModels.length > 1 ? model.id : undefined,
   ];
 
   const details: string[] = [];
   const seen = new Set<string>();
-  const baseName = buildModelGroupLabel(model) || model.name || model.id;
+  const baseName =
+    getGroupRepresentativeLabel(groupedModels) ||
+    buildModelGroupLabel(model) ||
+    model.name ||
+    model.id;
 
   for (const candidate of detailCandidates) {
     const detail = formatModelDetail(candidate);
@@ -404,7 +507,11 @@ function buildModelDisplayLabel(
   model: ModelInfo,
   groupedModels: readonly ModelInfo[],
 ): string {
-  const baseLabel = buildModelGroupLabel(model) || model.name || model.id;
+  const baseLabel =
+    getGroupRepresentativeLabel(groupedModels) ||
+    buildModelGroupLabel(model) ||
+    model.name ||
+    model.id;
   if (!baseLabel) {
     return "";
   }
@@ -738,6 +845,7 @@ export function normalizeModelSelection(
     modelVendor: trimOptionalText(selection?.modelVendor),
     modelFamily: trimOptionalText(selection?.modelFamily),
     modelVersion: trimOptionalText(selection?.modelVersion),
+    modelReasoningEffort: trimOptionalText(selection?.modelReasoningEffort),
   };
 }
 
@@ -848,6 +956,7 @@ export function filterExpandedPickerModelCatalog(
 
 export function buildModelPickerGroups(
   models: readonly ModelInfo[],
+  options: BuildModelPickerGroupsOptions = {},
 ): ModelPickerGroup[] {
   const groupedModels = new Map<string, ModelInfo[]>();
 
@@ -877,12 +986,13 @@ export function buildModelPickerGroups(
     });
 
     const firstModel = orderedGroupModels[0];
-    const label = buildModelGroupLabel(firstModel) || firstModel?.id || "";
+    const label =
+      getGroupRepresentativeLabel(orderedGroupModels) || firstModel?.id || "";
     if (!label) {
       continue;
     }
 
-    const variants = orderedGroupModels.map((model, index) => ({
+    let variants = orderedGroupModels.map((model, index) => ({
       key: buildModelCatalogKey(model),
       label:
         orderedGroupModels.length > 1
@@ -897,6 +1007,23 @@ export function buildModelPickerGroups(
           : label,
       model,
     }));
+
+    if (
+      options.includeExperimentalModelQualityVariants === true &&
+      orderedGroupModels.length === 1
+    ) {
+      const experimentalVariants = getExperimentalModelQualityVariants(
+        orderedGroupModels[0],
+      );
+      if (experimentalVariants.length > 1) {
+        variants = experimentalVariants.map((variant) => ({
+          key: `${buildModelCatalogKey(orderedGroupModels[0])}::reasoning-effort:${variant.reasoningEffort || "default"}`,
+          label: variant.label,
+          model: orderedGroupModels[0],
+          reasoningEffort: variant.reasoningEffort,
+        }));
+      }
+    }
 
     result.push({
       key: groupKey,
@@ -917,7 +1044,8 @@ export function hasModelSelection(
     normalized.modelName ||
     normalized.modelVendor ||
     normalized.modelFamily ||
-    normalized.modelVersion
+    normalized.modelVersion ||
+    normalized.modelReasoningEffort
   );
 }
 
@@ -944,7 +1072,8 @@ export function areModelSelectionsEqual(
     normalizedLeft.modelName === normalizedRight.modelName &&
     normalizedLeft.modelVendor === normalizedRight.modelVendor &&
     normalizedLeft.modelFamily === normalizedRight.modelFamily &&
-    normalizedLeft.modelVersion === normalizedRight.modelVersion
+    normalizedLeft.modelVersion === normalizedRight.modelVersion &&
+    normalizedLeft.modelReasoningEffort === normalizedRight.modelReasoningEffort
   );
 }
 

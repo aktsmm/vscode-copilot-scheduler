@@ -296,6 +296,12 @@
   var promptTemplates = Array.isArray(initialData.promptTemplates)
     ? initialData.promptTemplates
     : [];
+  var experimentalModelQualityEnabled =
+    !!initialData.experimentalModelQualityEnabled;
+  var experimentalModelQualityNote =
+    typeof initialData.experimentalModelQualityNote === "string"
+      ? initialData.experimentalModelQualityNote
+      : "";
   var workspacePaths = Array.isArray(initialData.workspacePaths)
     ? initialData.workspacePaths
     : [];
@@ -307,6 +313,7 @@
   var pendingModelVendor = "";
   var pendingModelFamily = "";
   var pendingModelVersion = "";
+  var pendingModelReasoningEffort = "";
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
   var editingTaskCanDelete = false;
@@ -349,6 +356,9 @@
   var modelSelect = document.getElementById("model-select");
   var modelVariantGroup = document.getElementById("model-variant-group");
   var modelVariantSelect = document.getElementById("model-variant-select");
+  var modelExperimentalNote = document.getElementById(
+    "model-experimental-note",
+  );
   var templateSelect = document.getElementById("template-select");
   var templateSelectGroup = document.getElementById("template-select-group");
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
@@ -404,6 +414,7 @@
     pendingModelVendor = "";
     pendingModelFamily = "";
     pendingModelVersion = "";
+    pendingModelReasoningEffort = "";
   }
 
   function buildModelSelectionFromOption(option) {
@@ -414,6 +425,7 @@
       modelVendor: option.dataset.modelVendor || "",
       modelFamily: option.dataset.modelFamily || "",
       modelVersion: option.dataset.modelVersion || "",
+      modelReasoningEffort: option.dataset.modelReasoningEffort || "",
     };
   }
 
@@ -428,13 +440,18 @@
     return null;
   }
 
-  function selectionMatchesModelSelection(selection, candidate) {
+  function selectionMatchesModelSelection(
+    selection,
+    candidate,
+    ignoreReasoningEffort,
+  ) {
     if (!selection || !candidate) return false;
     var targetId = String(selection.model || "");
     var targetName = String(selection.modelName || "");
     var targetVendor = String(selection.modelVendor || "");
     var targetFamily = String(selection.modelFamily || "");
     var targetVersion = String(selection.modelVersion || "");
+    var targetReasoningEffort = String(selection.modelReasoningEffort || "");
 
     if (targetId) {
       if (String(candidate.model || "") !== targetId) return false;
@@ -456,12 +473,20 @@
     ) {
       return false;
     }
+    if (
+      targetReasoningEffort &&
+      !ignoreReasoningEffort &&
+      String(candidate.modelReasoningEffort || "") !== targetReasoningEffort
+    ) {
+      return false;
+    }
 
     return true;
   }
 
   function findModelPickerSelection(groups, selection) {
     if (!Array.isArray(groups) || !selection) return null;
+    var fallbackMatch = null;
     for (var i = 0; i < groups.length; i++) {
       var group = groups[i];
       var variants =
@@ -477,6 +502,7 @@
             modelVendor: model.vendor || "",
             modelFamily: model.family || "",
             modelVersion: model.version || "",
+            modelReasoningEffort: variant.reasoningEffort || "",
           })
         ) {
           return {
@@ -484,9 +510,29 @@
             variant: variant,
           };
         }
+        if (
+          !fallbackMatch &&
+          selectionMatchesModelSelection(
+            selection,
+            {
+              model: model.id || "",
+              modelName: model.name || "",
+              modelVendor: model.vendor || "",
+              modelFamily: model.family || "",
+              modelVersion: model.version || "",
+              modelReasoningEffort: variant.reasoningEffort || "",
+            },
+            true,
+          )
+        ) {
+          fallbackMatch = {
+            group: group,
+            variant: variant,
+          };
+        }
       }
     }
-    return null;
+    return fallbackMatch;
   }
 
   function clearUnavailableModelOptions(selectEl) {
@@ -518,11 +564,22 @@
     }
   }
 
+  function updateModelExperimentalNote() {
+    if (!modelExperimentalNote) return;
+    if (experimentalModelQualityEnabled && experimentalModelQualityNote) {
+      modelExperimentalNote.textContent = String(experimentalModelQualityNote);
+      modelExperimentalNote.style.display = "block";
+      return;
+    }
+    modelExperimentalNote.textContent = "";
+    modelExperimentalNote.style.display = "none";
+  }
+
   function updateModelVariantOptions(group, selection) {
     if (!modelVariantSelect) return;
 
     var variants = group && Array.isArray(group.variants) ? group.variants : [];
-    if (variants.length === 0) {
+    if (variants.length <= 1) {
       clearModelVariantOptions();
       return;
     }
@@ -536,14 +593,7 @@
         .map(function (variant) {
           var model = variant && variant.model ? variant.model : {};
           var label =
-            variants.length === 1
-              ? String(strings.labelModelVariantDefault || "") ||
-                variant.label ||
-                model.label ||
-                model.name ||
-                model.id ||
-                ""
-              : variant.label || model.label || model.name || model.id || "";
+            variant.label || model.label || model.name || model.id || "";
           return (
             '<option value="' +
             escapeAttr(variant.key || "") +
@@ -557,6 +607,8 @@
             escapeAttr(model.family || "") +
             '" data-model-version="' +
             escapeAttr(model.version || "") +
+            '" data-model-reasoning-effort="' +
+            escapeAttr(variant.reasoningEffort || "") +
             '">' +
             escapeHtml(label) +
             "</option>"
@@ -617,26 +669,6 @@
       return;
     }
 
-    var selectedGroup = modelSelect
-      ? findModelPickerGroup(
-          getActiveModelPickerGroups(),
-          modelSelect.value || "",
-        )
-      : null;
-    if (
-      selectedGroup &&
-      Array.isArray(selectedGroup.variants) &&
-      selectedGroup.variants.length === 1 &&
-      modelSelect &&
-      modelSelect.value
-    ) {
-      modelSelectionStatus.textContent = String(
-        strings.labelModelDefaultOnlyNote || "",
-      );
-      modelSelectionStatus.style.display = "block";
-      return;
-    }
-
     modelSelectionStatus.textContent = "";
     modelSelectionStatus.style.display = "none";
   }
@@ -665,6 +697,9 @@
     option.dataset.modelVendor = String(selection.modelVendor || "");
     option.dataset.modelFamily = String(selection.modelFamily || "");
     option.dataset.modelVersion = String(selection.modelVersion || "");
+    option.dataset.modelReasoningEffort = String(
+      selection.modelReasoningEffort || "",
+    );
     selectEl.appendChild(option);
     selectEl.selectedIndex = selectEl.options.length - 1;
     updateModelSelectionStatus();
@@ -1021,6 +1056,9 @@
       var modelVersionValue = currentModelSelection
         ? currentModelSelection.modelVersion || ""
         : "";
+      var modelReasoningEffortValue = currentModelSelection
+        ? currentModelSelection.modelReasoningEffort || ""
+        : "";
       if (editingTaskId) {
         if (!modelNameValue && pendingModelName) {
           modelNameValue = pendingModelName;
@@ -1033,6 +1071,9 @@
         }
         if (!modelVersionValue && pendingModelVersion) {
           modelVersionValue = pendingModelVersion;
+        }
+        if (!modelReasoningEffortValue && pendingModelReasoningEffort) {
+          modelReasoningEffortValue = pendingModelReasoningEffort;
         }
       }
       var promptPathValue = templateSelect ? templateSelect.value : "";
@@ -1055,6 +1096,7 @@
         modelVendor: modelVendorValue,
         modelFamily: modelFamilyValue,
         modelVersion: modelVersionValue,
+        modelReasoningEffort: modelReasoningEffortValue,
         scope: scopeEl ? scopeEl.value : "workspace",
         promptSource: promptSourceValue,
         promptPath: promptPathValue,
@@ -1229,6 +1271,9 @@
           : "",
         modelVersion: currentModelSelection
           ? currentModelSelection.modelVersion || ""
+          : "",
+        modelReasoningEffort: currentModelSelection
+          ? currentModelSelection.modelReasoningEffort || ""
           : "",
       });
     });
@@ -2170,6 +2215,7 @@
   // Initialize dropdowns with cached data
   updateAgentOptions();
   updateModelOptions(null);
+  updateModelExperimentalNote();
   var initialPromptSource = document.querySelector(
     'input[name="prompt-source"]:checked',
   );
@@ -2221,6 +2267,7 @@
     pendingModelVendor = task.modelVendor || "";
     pendingModelFamily = task.modelFamily || "";
     pendingModelVersion = task.modelVersion || "";
+    pendingModelReasoningEffort = task.modelReasoningEffort || "";
     if (agentSelect) {
       if (
         pendingAgentValue &&
@@ -2234,15 +2281,31 @@
       }
     }
     if (modelSelect && (pendingModelValue || pendingModelName)) {
-      applyModelSelection({
+      var requestedModelSelection = {
         model: pendingModelValue,
         modelName: pendingModelName,
         modelVendor: pendingModelVendor,
         modelFamily: pendingModelFamily,
         modelVersion: pendingModelVersion,
+        modelReasoningEffort: pendingModelReasoningEffort,
+      };
+      applyModelSelection({
+        model: requestedModelSelection.model,
+        modelName: requestedModelSelection.modelName,
+        modelVendor: requestedModelSelection.modelVendor,
+        modelFamily: requestedModelSelection.modelFamily,
+        modelVersion: requestedModelSelection.modelVersion,
+        modelReasoningEffort: requestedModelSelection.modelReasoningEffort,
       });
-      if (getCurrentModelSelection()) {
+      var appliedModelSelection = getCurrentModelSelection();
+      if (appliedModelSelection) {
+        var hiddenReasoningEffort =
+          requestedModelSelection.modelReasoningEffort &&
+          !appliedModelSelection.modelReasoningEffort
+            ? requestedModelSelection.modelReasoningEffort
+            : "";
         clearPendingModelSelection();
+        pendingModelReasoningEffort = hiddenReasoningEffort;
       }
     }
     editingTaskEnabled = task.enabled !== false;
@@ -2408,23 +2471,41 @@
               modelVendor: pendingModelVendor,
               modelFamily: pendingModelFamily,
               modelVersion: pendingModelVersion,
+              modelReasoningEffort: pendingModelReasoningEffort,
             };
             models = Array.isArray(message.models) ? message.models : [];
             modelPickerDefault = Array.isArray(message.modelPickerDefault)
               ? message.modelPickerDefault
               : [];
+            experimentalModelQualityEnabled =
+              !!message.experimentalModelQualityEnabled;
+            experimentalModelQualityNote =
+              typeof message.experimentalModelQualityNote === "string"
+                ? message.experimentalModelQualityNote
+                : "";
+            updateModelExperimentalNote();
             if (
               currentModelSelection &&
               (currentModelSelection.model || currentModelSelection.modelName)
             ) {
               if (applyModelSelection(currentModelSelection)) {
+                var appliedSelection = getCurrentModelSelection();
+                var hiddenReasoningEffort =
+                  currentModelSelection.modelReasoningEffort &&
+                  appliedSelection &&
+                  !appliedSelection.modelReasoningEffort
+                    ? currentModelSelection.modelReasoningEffort
+                    : "";
                 clearPendingModelSelection();
+                pendingModelReasoningEffort = hiddenReasoningEffort;
               } else {
                 pendingModelValue = currentModelSelection.model || "";
                 pendingModelName = currentModelSelection.modelName || "";
                 pendingModelVendor = currentModelSelection.modelVendor || "";
                 pendingModelFamily = currentModelSelection.modelFamily || "";
                 pendingModelVersion = currentModelSelection.modelVersion || "";
+                pendingModelReasoningEffort =
+                  currentModelSelection.modelReasoningEffort || "";
               }
             } else {
               updateModelOptions(null);

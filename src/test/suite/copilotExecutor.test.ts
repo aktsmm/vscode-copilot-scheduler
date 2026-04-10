@@ -108,4 +108,32 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       ["copilot-gpt-5-4", "openai/gpt-5-4-low", "openai/gpt-5-4-high"],
     );
   });
+
+  test("mergeChatModelLists keeps entries that differ only by maxInputTokens", () => {
+    const merged = __testOnly.mergeChatModelLists(
+      [
+        {
+          id: "copilot-gpt-5-4",
+          name: "GPT-5.4",
+          vendor: "copilot",
+          family: "gpt-5.4",
+          maxInputTokens: 32000,
+        },
+      ],
+      [
+        {
+          id: "copilot-gpt-5-4",
+          name: "GPT-5.4",
+          vendor: "copilot",
+          family: "gpt-5.4",
+          maxInputTokens: 128000,
+        },
+      ],
+    );
+
+    assert.deepStrictEqual(
+      merged.map((model) => model.maxInputTokens),
+      [32000, 128000],
+    );
+  });
 });

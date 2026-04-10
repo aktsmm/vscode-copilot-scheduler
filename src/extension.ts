@@ -13,7 +13,11 @@ import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
-import { filterPickerModelCatalog } from "./modelSelection";
+import {
+  buildModelPickerGroups,
+  filterPickerModelCatalog,
+} from "./modelSelection";
+import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import {
   normalizeForCompare,
   resolveGlobalAgentRoots,
@@ -107,6 +111,7 @@ function buildPromptExecutionOptions(
     modelVendor: request.modelVendor,
     modelFamily: request.modelFamily,
     modelVersion: request.modelVersion,
+    modelReasoningEffort: request.modelReasoningEffort,
   };
 }
 
@@ -737,6 +742,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize components
   scheduleManager = new ScheduleManager(context);
   copilotExecutor = new CopilotExecutor();
+  CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
   void CopilotExecutor.getAvailableModelsWithSource()
     .then(async ({ models, source }) => {
@@ -783,6 +789,7 @@ export function activate(context: vscode.ExtensionContext): void {
     registerOpenSettingsCommand(),
     registerShowVersionCommand(context),
     registerShowExecutionHistoryCommand(),
+    registerDumpModelCatalogCommand(),
   ];
 
   // Start scheduler
@@ -1211,6 +1218,7 @@ async function resolvePromptExecution(
     modelVendor: task.modelVendor,
     modelFamily: task.modelFamily,
     modelVersion: task.modelVersion,
+    modelReasoningEffort: task.modelReasoningEffort,
   };
 }
 
@@ -2124,6 +2132,173 @@ function registerShowExecutionHistoryCommand(): vscode.Disposable {
     async () => {
       try {
         await showExecutionHistoryView();
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error ?? "");
+        notifyError(errorMessage);
+      }
+    },
+  );
+}
+
+type SerializableLanguageModelChat = {
+  id: string;
+  name: string;
+  vendor: string;
+  family: string;
+  version: string;
+  maxInputTokens?: number;
+};
+
+function serializeLanguageModelChat(
+  model: vscode.LanguageModelChat,
+): SerializableLanguageModelChat {
+  return {
+    id: model.id,
+    name: model.name,
+    vendor: model.vendor,
+    family: model.family,
+    version: model.version,
+    maxInputTokens:
+      typeof model.maxInputTokens === "number"
+        ? model.maxInputTokens
+        : undefined,
+  };
+}
+
+function serializeModelInfo(model: {
+  id: string;
+  name: string;
+  label?: string;
+  description: string;
+  vendor: string;
+  family?: string;
+  version?: string;
+  maxInputTokens?: number;
+}) {
+  return {
+    id: model.id,
+    name: model.name,
+    label: model.label,
+    description: model.description,
+    vendor: model.vendor,
+    family: model.family,
+    version: model.version,
+    maxInputTokens: model.maxInputTokens,
+  };
+}
+
+async function registerModelCatalogDiagnosticDocument(): Promise<void> {
+  const readSelector = async (
+    selector?: vscode.LanguageModelChatSelector,
+  ): Promise<
+    | {
+        selector: Record<string, string>;
+        count: number;
+        models: SerializableLanguageModelChat[];
+      }
+    | {
+        selector: Record<string, string>;
+        error: string;
+      }
+  > => {
+    const normalizedSelector = Object.fromEntries(
+      Object.entries(selector ?? {}).filter(
+        ([, value]) => typeof value === "string" && value.trim().length > 0,
+      ),
+    ) as Record<string, string>;
+
+    try {
+      const models = await vscode.lm.selectChatModels(selector);
+      return {
+        selector: normalizedSelector,
+        count: models.length,
+        models: models.map(serializeLanguageModelChat),
+      };
+    } catch (error) {
+      return {
+        selector: normalizedSelector,
+        error: sanitizeErrorDetailsForLog(
+          error instanceof Error ? error.message : String(error ?? ""),
+        ),
+      };
+    }
+  };
+
+  const [vendorCopilot, allModels] = await Promise.all([
+    readSelector({ vendor: "copilot" }),
+    readSelector({}),
+  ]);
+
+  let normalizedCatalog:
+    | {
+        source: string;
+        models: ReturnType<typeof serializeModelInfo>[];
+        defaultPickerCatalog: ReturnType<typeof serializeModelInfo>[];
+        defaultPickerGroups: Array<{
+          label: string;
+          variants: Array<{
+            label: string;
+            model: ReturnType<typeof serializeModelInfo>;
+          }>;
+        }>;
+      }
+    | { error: string };
+
+  try {
+    const result = await CopilotExecutor.getAvailableModelsWithSource();
+    const defaultPickerCatalog = filterPickerModelCatalog(result.models);
+    const defaultPickerGroups = buildModelPickerGroups(defaultPickerCatalog, {
+      includeExperimentalModelQualityVariants:
+        isExperimentalModelQualityEnabled(),
+    }).map((group) => ({
+      label: group.label,
+      variants: group.variants.map((variant) => ({
+        label: variant.label,
+        model: serializeModelInfo(variant.model),
+      })),
+    }));
+
+    normalizedCatalog = {
+      source: result.source,
+      models: result.models.map((model) => serializeModelInfo(model)),
+      defaultPickerCatalog: defaultPickerCatalog.map((model) =>
+        serializeModelInfo(model),
+      ),
+      defaultPickerGroups,
+    };
+  } catch (error) {
+    normalizedCatalog = {
+      error: sanitizeErrorDetailsForLog(
+        error instanceof Error ? error.message : String(error ?? ""),
+      ),
+    };
+  }
+
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    vscodeVersion: vscode.version,
+    vscodeLanguage: vscode.env.language,
+    rawSelectors: {
+      vendorCopilot,
+      allModels,
+    },
+    normalizedCatalog,
+  };
+
+  const document = await vscode.workspace.openTextDocument({
+    language: "json",
+    content: JSON.stringify(payload, null, 2),
+  });
+  await vscode.window.showTextDocument(document, { preview: false });
+}
+
+function registerDumpModelCatalogCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand(
+    "copilotScheduler.dumpModelCatalog",
+    async () => {
+      try {
+        await registerModelCatalogDiagnosticDocument();
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error ?? "");

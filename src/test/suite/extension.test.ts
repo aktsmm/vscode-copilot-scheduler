@@ -177,6 +177,7 @@ suite("Extension Test Suite", () => {
       "copilotScheduler.openSettings",
       "copilotScheduler.showVersion",
       "copilotScheduler.showExecutionHistory",
+      "copilotScheduler.dumpModelCatalog",
     ];
 
     for (const cmd of expectedCommands) {
@@ -476,6 +477,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelVendor: "OpenAI",
       modelFamily: "gpt-5.4",
       modelVersion: "high",
+      modelReasoningEffort: "high",
       scope: "global",
       promptSource: "inline",
       createdAt: new Date(),
@@ -489,6 +491,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelVendor: "OpenAI",
       modelFamily: "gpt-5.4",
       modelVersion: "high",
+      modelReasoningEffort: "high",
     });
   });
 
@@ -1308,6 +1311,7 @@ suite("Frontmatter Resolution Tests", () => {
           modelVendor?: string;
           modelFamily?: string;
           modelVersion?: string;
+          modelReasoningEffort?: string;
         }>)
       | undefined;
 
@@ -1325,6 +1329,7 @@ suite("Frontmatter Resolution Tests", () => {
       modelVendor: "OpenAI",
       modelFamily: "gpt-5.4",
       modelVersion: "high",
+      modelReasoningEffort: "high",
       scope: "global",
       promptSource: "inline",
       createdAt: new Date(),
@@ -1339,6 +1344,7 @@ suite("Frontmatter Resolution Tests", () => {
     assert.strictEqual(resolved.modelVendor, "OpenAI");
     assert.strictEqual(resolved.modelFamily, "gpt-5.4");
     assert.strictEqual(resolved.modelVersion, "high");
+    assert.strictEqual(resolved.modelReasoningEffort, "high");
   });
 
   test("Explicit empty task agent/model fallback to frontmatter", async () => {

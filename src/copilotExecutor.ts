@@ -15,6 +15,7 @@ import type {
 import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
 import { resolveGlobalAgentRoots } from "./promptResolver";
 import {
   areModelSelectionsEqual,
@@ -73,6 +74,7 @@ type ChatModelLike = {
   vendor?: string;
   family?: string;
   version?: string;
+  maxInputTokens?: number;
 };
 
 function buildChatModelMergeKey(model: ChatModelLike | undefined): string {
@@ -82,6 +84,7 @@ function buildChatModelMergeKey(model: ChatModelLike | undefined): string {
     String(model?.vendor || "").trim(),
     String(model?.family || "").trim(),
     String(model?.version || "").trim(),
+    typeof model?.maxInputTokens === "number" ? model.maxInputTokens : "",
   ]);
 }
 
@@ -304,6 +307,12 @@ export const __testOnly = {
  * Executes prompts through GitHub Copilot Chat
  */
 export class CopilotExecutor {
+  private static extensionGlobalStorageUri: vscode.Uri | undefined;
+
+  static configureForExtensionContext(globalStorageUri: vscode.Uri): void {
+    this.extensionGlobalStorageUri = globalStorageUri;
+  }
+
   private getPreferredWorkspaceName(): string {
     const activeUri = vscode.window.activeTextEditor?.document.uri;
     if (activeUri) {
@@ -338,6 +347,19 @@ export class CopilotExecutor {
     const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
     const delayFactor = this.getCommandDelayFactor(config);
     const requestedModel = normalizeModelSelection(options);
+    const resolved =
+      await CopilotExecutor.resolveRequestedModelSelection(requestedModel);
+
+    if (!areModelSelectionsEqual(requestedModel, resolved.selection)) {
+      logDebug(
+        `[CopilotScheduler] Resolved model selection to current environment: ${formatModelSelectionForLog(resolved.selection)}`,
+      );
+    }
+
+    await this.syncExperimentalModelQuality(
+      resolved.selection,
+      resolved.matched,
+    );
 
     try {
       // Try to create new session if configured
@@ -348,7 +370,8 @@ export class CopilotExecutor {
       const chatOpenResult = await this.tryOpenChatWithPrompt(
         routing.chatOpenPrompt,
         routing.mode,
-        requestedModel,
+        resolved.selection,
+        resolved.matched,
       );
       if (!chatOpenResult.opened) {
         logDebug(
@@ -384,22 +407,13 @@ export class CopilotExecutor {
   private async tryOpenChatWithPrompt(
     chatOpenPrompt: string,
     mode: BuiltInChatMode | undefined,
-    requestedSelection: NormalizedModelSelection,
+    resolvedSelection: NormalizedModelSelection,
+    resolvedModel: ModelInfo | undefined,
   ): Promise<{
     opened: boolean;
     resolvedSelection: NormalizedModelSelection;
     resolvedModel?: ModelInfo;
   }> {
-    const resolved =
-      await CopilotExecutor.resolveRequestedModelSelection(requestedSelection);
-    const resolvedSelection = resolved.selection;
-
-    if (!areModelSelectionsEqual(requestedSelection, resolvedSelection)) {
-      logDebug(
-        `[CopilotScheduler] Resolved model selection to current environment: ${formatModelSelectionForLog(resolvedSelection)}`,
-      );
-    }
-
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
@@ -414,7 +428,7 @@ export class CopilotExecutor {
         return {
           opened: true,
           resolvedSelection,
-          resolvedModel: resolved.matched,
+          resolvedModel,
         };
       } catch (error) {
         logDebug(
@@ -435,7 +449,7 @@ export class CopilotExecutor {
       return {
         opened: true,
         resolvedSelection,
-        resolvedModel: resolved.matched,
+        resolvedModel,
       };
     } catch (error) {
       logDebug(
@@ -444,7 +458,7 @@ export class CopilotExecutor {
       return {
         opened: false,
         resolvedSelection,
-        resolvedModel: resolved.matched,
+        resolvedModel,
       };
     }
   }
@@ -463,9 +477,35 @@ export class CopilotExecutor {
     }
 
     return {
-      selection: modelInfoToSelection(matched),
+      selection: {
+        ...modelInfoToSelection(matched),
+        modelReasoningEffort: selection.modelReasoningEffort,
+      },
       matched,
     };
+  }
+
+  private async syncExperimentalModelQuality(
+    selection: NormalizedModelSelection,
+    matchedModel: ModelInfo | undefined,
+  ): Promise<void> {
+    const globalStorageUri = CopilotExecutor.extensionGlobalStorageUri;
+    if (!globalStorageUri) {
+      return;
+    }
+
+    try {
+      await applyExperimentalModelQualitySelection({
+        globalStorageUri,
+        selection,
+        matchedModel,
+      });
+    } catch (error) {
+      logError(
+        "[CopilotScheduler] Experimental model quality sync failed:",
+        toSafeErrorDetails(error),
+      );
+    }
   }
 
   private async executePromptLegacy(
@@ -857,6 +897,10 @@ export class CopilotExecutor {
             vendor: model.vendor || "",
             family: model.family || undefined,
             version: model.version || undefined,
+            maxInputTokens:
+              typeof model.maxInputTokens === "number"
+                ? model.maxInputTokens
+                : undefined,
           });
         }
 

@@ -26,6 +26,7 @@ import {
   resolveGlobalPromptsRoot,
 } from "./promptResolver";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import {
   buildModelPickerGroups,
   filterPickerModelCatalog,
@@ -117,7 +118,10 @@ export class SchedulerWebview {
 
   private static buildModelPickerPayload(models: readonly ModelInfo[]): {
     modelPickerDefault: ReturnType<typeof buildModelPickerGroups>;
+    experimentalModelQualityEnabled: boolean;
+    experimentalModelQualityNote: string;
   } {
+    const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
     ) =>
@@ -134,8 +138,15 @@ export class SchedulerWebview {
 
     return {
       modelPickerDefault: relabelDefaultVariant(
-        buildModelPickerGroups(filterPickerModelCatalog(models)),
+        buildModelPickerGroups(filterPickerModelCatalog(models), {
+          includeExperimentalModelQualityVariants:
+            experimentalModelQualityEnabled,
+        }),
       ),
+      experimentalModelQualityEnabled,
+      experimentalModelQualityNote: experimentalModelQualityEnabled
+        ? messages.labelModelExperimentalNote()
+        : "",
     };
   }
 
@@ -545,6 +556,7 @@ export class SchedulerWebview {
             modelVendor: message.modelVendor,
             modelFamily: message.modelFamily,
             modelVersion: message.modelVersion,
+            modelReasoningEffort: message.modelReasoningEffort,
           });
         }
         break;
@@ -1009,6 +1021,7 @@ export class SchedulerWebview {
       labelModelVariant: messages.labelModelVariant(),
       labelModelVariantDefault: messages.labelModelVariantDefault(),
       labelModelNote: messages.labelModelNote(),
+      labelModelExperimentalNote: messages.labelModelExperimentalNote(),
       labelModelVariantNote: messages.labelModelVariantNote(),
       labelModelDefaultOnlyNote: messages.labelModelDefaultOnlyNote(),
       labelScope: messages.labelScope(),
@@ -1142,6 +1155,10 @@ export class SchedulerWebview {
       agents: initialAgents,
       models: initialModels,
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
+      experimentalModelQualityEnabled:
+        initialModelPickerPayload.experimentalModelQualityEnabled,
+      experimentalModelQualityNote:
+        initialModelPickerPayload.experimentalModelQualityNote,
       promptTemplates: initialTemplates,
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
@@ -1966,6 +1983,7 @@ export class SchedulerWebview {
                 <option value="">${escapeHtml(initialModelPickerPayload.modelPickerDefault.length > 0 ? strings.placeholderSelectModel : strings.placeholderNoModels)}</option>
               </select>
               <p class="note">${escapeHtml(strings.labelModelNote)}</p>
+              <p class="note" id="model-experimental-note" style="display:${initialModelPickerPayload.experimentalModelQualityEnabled ? "block" : "none"};">${escapeHtml(initialModelPickerPayload.experimentalModelQualityNote)}</p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
             </div>
 

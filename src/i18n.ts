@@ -205,7 +205,7 @@ export const messages = {
     t("No agents available", "利用可能なAgentがありません"),
   webviewSelectModelPlaceholder: () => t("Select model", "モデルを選択"),
   webviewSelectModelVariantPlaceholder: () =>
-    t("Select quality / variant", "品質 / バリアントを選択"),
+    t("Select thinking effort", "思考の負荷を選択"),
   webviewNoModelsAvailable: () =>
     t("No models available", "利用可能なモデルがありません"),
   webviewSelectTemplatePlaceholder: () =>
@@ -333,7 +333,7 @@ export const messages = {
   labelInterval: () => t("Interval", "間隔"),
   labelAgent: () => t("Agent", "Agent"),
   labelModel: () => t("Model", "モデル"),
-  labelModelVariant: () => t("Quality / Variant", "品質 / バリアント"),
+  labelModelVariant: () => t("Thinking Effort", "思考の負荷"),
   labelModelVariantDefault: () => t("Default", "既定"),
   labelModelShowAll: () =>
     t(
@@ -342,13 +342,18 @@ export const messages = {
     ),
   labelModelNote: () =>
     t(
-      "Only models exposed by GitHub Copilot Chat are shown here. If VS Code exposes runtime qualities such as Low, Medium, or High for the selected model, choose them from the variant field below.",
-      "ここでは GitHub Copilot Chat から選べるモデルだけを表示します。選択したモデルに対して VS Code API が Low、Medium、High などの実行品質を公開している場合は、下のバリアント欄から選択してください。",
+      "Preview: Copilot Scheduler tries to mirror Copilot Chat's thinking effort options.",
+      "プレビュー: Copilot Scheduler は Copilot Chat の思考の負荷候補をできるだけ再現します。",
+    ),
+  labelModelExperimentalNote: () =>
+    t(
+      "If it fails, choose Default.",
+      "失敗するときは「既定」を選んでください。",
     ),
   labelModelVariantNote: () =>
     t(
-      "The default variant is always shown. Additional High/Low or context-specific variants appear only when the VS Code API exposes them for the selected model.",
-      "既定バリアントは常に表示されます。High/Low やコンテキスト別などの追加バリアントは、選択したモデルに対して VS Code API が公開している場合のみ表示されます。",
+      "Available choices vary by model.",
+      "選べる負荷はモデルごとに異なります。",
     ),
   labelModelDefaultOnlyNote: () =>
     t(

@@ -226,6 +226,52 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("filterPickerModelCatalog keeps raw-id runtime variants for Copilot-exposed Claude groups", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "anthropic/claude-opus-4.6/versions/high",
+        name: "anthropic/claude-opus-4.6/versions/high",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+        version: "high",
+      },
+      {
+        id: "anthropic/claude-opus-4.6/versions/medium",
+        name: "anthropic/claude-opus-4.6/versions/medium",
+        description: "",
+        vendor: "Anthropic",
+        family: "claude-opus-4.6",
+        version: "medium",
+      },
+    ]);
+
+    const pickerCatalog = filterPickerModelCatalog(catalog);
+    const groups = buildModelPickerGroups(pickerCatalog);
+
+    assert.deepStrictEqual(
+      pickerCatalog.map((model) => model.id),
+      [
+        "claude-opus-4.6",
+        "anthropic/claude-opus-4.6/versions/high",
+        "anthropic/claude-opus-4.6/versions/medium",
+      ],
+    );
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0]?.label, "Claude Opus 4.6");
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => variant.label),
+      ["Default", "High", "Medium"],
+    );
+  });
+
   // This helper remains part of the internal picker filtering pipeline even
   // after the expanded-toggle UI was removed in v1.0.35.
   test("filterExpandedPickerModelCatalog keeps additional discovered providers available to the internal expanded filter", () => {
@@ -324,6 +370,92 @@ suite("Model Selection Catalog Tests", () => {
     assert.deepStrictEqual(
       groups.map((group) => group.variants.map((variant) => variant.label)),
       [["Claude Opus 4.6"], ["Claude Opus 4.6 (1M context, Internal only)"]],
+    );
+  });
+
+  test("buildModelPickerGroups synthesizes experimental quality variants for single eligible Copilot groups", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "copilot-gpt-5-2-codex",
+        name: "GPT-5.2-Codex",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-5.2-codex",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+      ],
+    );
+  });
+
+  test("buildModelPickerGroups does not synthesize quality variants for families outside the allowlist", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-haiku-4.5",
+        name: "Claude Haiku 4.5",
+        description: "",
+        vendor: "copilot",
+        family: "claude-haiku-4.5",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [["Claude Haiku 4.5", "default"]],
+    );
+  });
+
+  test("buildModelPickerGroups synthesizes preview thinking effort variants for Claude Opus families", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+      ],
     );
   });
 
@@ -454,5 +586,32 @@ suite("Model Selection Catalog Tests", () => {
 
     assert.strictEqual(catalog.length, 2);
     assert.notStrictEqual(catalog[0]?.label, catalog[1]?.label);
+  });
+
+  test("normalizeModelCatalog keeps token-distinct entries separate", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "copilot-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-5.4",
+        maxInputTokens: 32000,
+      },
+      {
+        id: "copilot-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-5.4",
+        maxInputTokens: 128000,
+      },
+    ]);
+
+    assert.strictEqual(catalog.length, 2);
+    assert.deepStrictEqual(
+      catalog.map((model) => model.label),
+      ["GPT-5.4 (32k)", "GPT-5.4 (128k)"],
+    );
   });
 });

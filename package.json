@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -119,6 +119,11 @@
         "title": "%command.showExecutionHistory%",
         "category": "%extension.title%",
         "icon": "$(history)"
+      },
+      {
+        "command": "copilotScheduler.dumpModelCatalog",
+        "title": "%command.dumpModelCatalog%",
+        "category": "%extension.title%"
       }
     ],
     "configuration": {

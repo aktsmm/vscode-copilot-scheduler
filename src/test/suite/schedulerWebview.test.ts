@@ -1038,6 +1038,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const expectedTokens = [
       "const initialModelPickerPayload = this.buildModelPickerPayload(initialModels);",
       "modelPickerDefault: initialModelPickerPayload.modelPickerDefault",
+      'id="model-experimental-note"',
       'id="model-variant-group"',
       'id="model-variant-select"',
       'id="model-selection-status"',
@@ -1178,8 +1179,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'escapeAttr(model.family || "")',
       'data-model-version="',
       'escapeAttr(model.version || "")',
-      "variants.length === 1",
-      'strings.labelModelVariantDefault || ""',
+      'data-model-reasoning-effort="',
+      'escapeAttr(variant.reasoningEffort || "")',
+      "variants.length <= 1",
       "escapeHtml(",
       'variant.label || model.label || model.name || model.id || ""',
     ];
@@ -1202,7 +1204,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "buildModelPickerGroups,",
       "filterPickerModelCatalog,",
       "modelPickerDefault: relabelDefaultVariant(",
-      "buildModelPickerGroups(filterPickerModelCatalog(models))",
+      "includeExperimentalModelQualityVariants:",
+      "experimentalModelQualityEnabled",
+      "messages.labelModelExperimentalNote()",
       "this.cachedModels = this.localizeCachedModels(result.models);",
     ];
 
@@ -1239,7 +1243,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'option.dataset.unresolved = "true"',
       "option.dataset.modelId = modelId",
       'strings.labelModelUnavailableNote || ""',
-      'strings.labelModelDefaultOnlyNote || ""',
+      "option.dataset.modelReasoningEffort = String(",
       "getSelectedVariantOption() || getSelectedBaseModelOption()",
       "return ensureUnavailableModelOption(modelSelect, selection);",
     ];

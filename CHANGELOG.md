@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.40] - 2026-04-10
+
+### Improved
+
+- **Thinking effort preview**: The Scheduler now keeps a Copilot Chat-like thought-depth picker available for supported families, including GPT-5 and Claude Opus/Sonnet preview fallbacks such as `Low` / `Medium` / `High` / `Xhigh` when runtime variants are not exposed directly.
+- **Model picker wording**: The Scheduler UI now labels the selector as `Thinking Effort` / `思考の負荷` and uses shorter preview guidance with a `Default` fallback hint.
+
+### Added
+
+- **Model catalog diagnostics**: Added the `Copilot Scheduler: Dump Model Catalog Diagnostics` command to inspect raw `selectChatModels()` output and the normalized picker catalog when model availability differs from Copilot Chat.
+
+### Tests
+
+- Added coverage for max-input-token-distinct model entries, Copilot Chat diagnostic command registration, and preview thinking-effort family rules.
+
 ## [1.0.39] - 2026-04-10
 
 ### Fixed

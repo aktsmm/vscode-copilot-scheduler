@@ -46,6 +46,9 @@ export interface ModelSelectionFields {
 
   /** Preferred version captured at save time */
   modelVersion?: string;
+
+  /** Experimental reasoning effort captured at save time */
+  modelReasoningEffort?: string;
 }
 
 /**
@@ -84,6 +87,9 @@ export interface ScheduledTask {
 
   /** Saved model version for migration/healing */
   modelVersion?: string;
+
+  /** Experimental reasoning effort for eligible Copilot models */
+  modelReasoningEffort?: string;
 
   /** Task scope */
   scope: TaskScope;
@@ -158,6 +164,9 @@ export interface CreateTaskInput {
 
   /** Saved model version for migration/healing */
   modelVersion?: string;
+
+  /** Experimental reasoning effort for eligible Copilot models */
+  modelReasoningEffort?: string;
 
   /** Task scope (default: "workspace") */
   scope?: TaskScope;
@@ -235,6 +244,9 @@ export interface ModelInfo {
 
   /** Model version when available */
   version?: string;
+
+  /** Max input tokens when exposed by the VS Code API */
+  maxInputTokens?: number;
 }
 
 /**

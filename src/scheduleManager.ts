@@ -184,6 +184,7 @@ function applyModelSelectionToTask(
   target.modelVendor = normalizedSelection.modelVendor;
   target.modelFamily = normalizedSelection.modelFamily;
   target.modelVersion = normalizedSelection.modelVersion;
+  target.modelReasoningEffort = normalizedSelection.modelReasoningEffort;
   return true;
 }
 
@@ -1429,7 +1430,8 @@ export class ScheduleManager {
       updates.modelName !== undefined ||
       updates.modelVendor !== undefined ||
       updates.modelFamily !== undefined ||
-      updates.modelVersion !== undefined
+      updates.modelVersion !== undefined ||
+      updates.modelReasoningEffort !== undefined
     ) {
       applyModelSelectionToTask(task, {
         model: updates.model !== undefined ? updates.model : task.model,
@@ -1447,6 +1449,10 @@ export class ScheduleManager {
           updates.modelVersion !== undefined
             ? updates.modelVersion
             : task.modelVersion,
+        modelReasoningEffort:
+          updates.modelReasoningEffort !== undefined
+            ? updates.modelReasoningEffort
+            : task.modelReasoningEffort,
       });
     }
     if (updates.scope !== undefined) {
@@ -1617,6 +1623,7 @@ export class ScheduleManager {
       modelVendor: original.modelVendor,
       modelFamily: original.modelFamily,
       modelVersion: original.modelVersion,
+      modelReasoningEffort: original.modelReasoningEffort,
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,
