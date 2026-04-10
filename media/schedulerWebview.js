@@ -831,27 +831,6 @@
       updateModelSelectionStatus();
     });
   }
-  if (showAllModelsInput) {
-    showAllModelsInput.addEventListener("change", function () {
-      var currentSelection = getCurrentModelSelection() || {
-        model: pendingModelValue,
-        modelName: pendingModelName,
-        modelVendor: pendingModelVendor,
-        modelFamily: pendingModelFamily,
-        modelVersion: pendingModelVersion,
-      };
-      if (
-        currentSelection &&
-        (currentSelection.model || currentSelection.modelName)
-      ) {
-        if (!updateModelOptions(currentSelection)) {
-          ensureUnavailableModelOption(modelSelect, currentSelection);
-        }
-      } else {
-        updateModelOptions(null);
-      }
-    });
-  }
   if (templateSelect) {
     templateSelect.addEventListener("change", function () {
       pendingTemplatePath = templateSelect ? templateSelect.value : "";
@@ -2021,7 +2000,6 @@
     clearPendingModelSelection();
     pendingTemplatePath = "";
     editingTaskEnabled = true;
-    if (showAllModelsInput) showAllModelsInput.checked = false;
     clearUnavailableModelOptions(modelSelect);
     clearModelVariantOptions();
     updateModelOptions(null);

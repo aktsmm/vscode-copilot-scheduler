@@ -179,7 +179,9 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
-  test("filterExpandedPickerModelCatalog keeps additional discovered providers for the optional expanded view", () => {
+  // This helper remains part of the internal picker filtering pipeline even
+  // after the expanded-toggle UI was removed in v1.0.35.
+  test("filterExpandedPickerModelCatalog keeps additional discovered providers available to the internal expanded filter", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-sonnet-4.6-copilot",
@@ -278,7 +280,7 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
-  test("filterExpandedPickerModelCatalog keeps internal-only context models available in separate groups", () => {
+  test("filterExpandedPickerModelCatalog keeps internal-only context models available to the internal expanded filter", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-opus-4.6",

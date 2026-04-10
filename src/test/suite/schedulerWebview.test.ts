@@ -1063,6 +1063,22 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("webview script removes stale show-all-models references", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const removedTokens = ["showAllModelsInput"];
+
+    for (const token of removedTokens) {
+      assert.ok(
+        !sourceContainsToken(source, token),
+        `Webview script should no longer reference removed model toggle token: ${token}`,
+      );
+    }
+  });
+
   test("renderTaskList updates summary counters and empty-state create CTA", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

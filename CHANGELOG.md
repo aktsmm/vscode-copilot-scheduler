@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.36] - 2026-04-10
+
+### Fixed
+
+- **Webview model-picker hotfix**: Removed the remaining `showAllModelsInput` references from the webview script so the create/edit form no longer throws `Uncaught ReferenceError` after the model-toggle UI was removed.
+
+### Tests
+
+- Added a contract check that the Webview script no longer contains stale `showAllModelsInput` references, and clarified that expanded-filter helper tests now cover internal filtering behavior only.
+
 ## [1.0.35] - 2026-04-10
 
 ### Fixed
