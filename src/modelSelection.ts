@@ -647,6 +647,10 @@ function getModelVariantKey(model: ModelInfo): string | undefined {
   );
 }
 
+function isRuntimeVariantModel(model: ModelInfo): boolean {
+  return !!getModelVariantKey(model);
+}
+
 function compareOptionalTextDescending(
   left: string | undefined,
   right: string | undefined,
@@ -785,7 +789,24 @@ export function normalizeModelCatalog(
 export function filterPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
-  return filterExpandedPickerModelCatalog(models).filter((model) => {
+  const expandedCatalog = filterExpandedPickerModelCatalog(models);
+  const allowedGroupKeys = new Set(
+    expandedCatalog
+      .filter((model) => {
+        if (!model || typeof model.id !== "string") {
+          return false;
+        }
+
+        if (model.id.trim().length === 0) {
+          return false;
+        }
+
+        return isCopilotVendorModel(model) && !isNonDefaultPickerModel(model);
+      })
+      .map((model) => getModelGroupKey(model)),
+  );
+
+  return expandedCatalog.filter((model) => {
     if (!model || typeof model.id !== "string") {
       return false;
     }
@@ -794,7 +815,18 @@ export function filterPickerModelCatalog(
       return true;
     }
 
-    return isCopilotVendorModel(model) && !isNonDefaultPickerModel(model);
+    if (isNonDefaultPickerModel(model)) {
+      return false;
+    }
+
+    if (isCopilotVendorModel(model)) {
+      return true;
+    }
+
+    return (
+      allowedGroupKeys.has(getModelGroupKey(model)) &&
+      isRuntimeVariantModel(model)
+    );
   });
 }
 
@@ -835,18 +867,33 @@ export function buildModelPickerGroups(
       continue;
     }
 
-    const firstModel = groupModels[0];
+    const orderedGroupModels = [...groupModels].sort((left, right) => {
+      const leftIsVariant = isRuntimeVariantModel(left);
+      const rightIsVariant = isRuntimeVariantModel(right);
+      if (leftIsVariant === rightIsVariant) {
+        return 0;
+      }
+      return leftIsVariant ? 1 : -1;
+    });
+
+    const firstModel = orderedGroupModels[0];
     const label = buildModelGroupLabel(firstModel) || firstModel?.id || "";
     if (!label) {
       continue;
     }
 
-    const variants = groupModels.map((model, index) => ({
+    const variants = orderedGroupModels.map((model, index) => ({
       key: buildModelCatalogKey(model),
       label:
-        groupModels.length > 1
-          ? buildModelDetailLabel(model, groupModels) ||
-            (index === 0 ? "Default" : model.label || model.name || model.id)
+        orderedGroupModels.length > 1
+          ? !isRuntimeVariantModel(model)
+            ? index === 0
+              ? "Default"
+              : model.label || model.name || model.id
+            : buildModelDetailLabel(model, orderedGroupModels) ||
+              model.label ||
+              model.name ||
+              model.id
           : label,
       model,
     }));

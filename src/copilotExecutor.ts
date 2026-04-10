@@ -67,6 +67,43 @@ type ResolvedModelSelectionResult = {
   matched?: ModelInfo;
 };
 
+type ChatModelLike = {
+  id?: string;
+  name?: string;
+  vendor?: string;
+  family?: string;
+  version?: string;
+};
+
+function buildChatModelMergeKey(model: ChatModelLike | undefined): string {
+  return JSON.stringify([
+    String(model?.id || "").trim(),
+    String(model?.name || "").trim(),
+    String(model?.vendor || "").trim(),
+    String(model?.family || "").trim(),
+    String(model?.version || "").trim(),
+  ]);
+}
+
+function mergeChatModelLists<T extends ChatModelLike>(
+  preferredModels: readonly T[],
+  discoveredModels: readonly T[],
+): T[] {
+  const merged: T[] = [];
+  const seen = new Set<string>();
+
+  for (const model of [...preferredModels, ...discoveredModels]) {
+    const key = buildChatModelMergeKey(model);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(model);
+  }
+
+  return merged;
+}
+
 function normalizeAgentPrefix(agent: string): string {
   const normalized = agent.trim();
   if (!normalized) {
@@ -260,6 +297,7 @@ export const __testOnly = {
   buildPromptRouting,
   buildModelSelectorCandidates,
   buildLegacyModelPickerCandidates,
+  mergeChatModelLists,
 };
 
 /**
@@ -781,10 +819,24 @@ export class CopilotExecutor {
   static async getAvailableModelsWithSource(): Promise<AvailableModelsResult> {
     try {
       // Prefer the Copilot-contributed chat catalog so the picker stays aligned
-      // with GitHub Copilot Chat rather than unrelated providers.
+      // with GitHub Copilot Chat rather than unrelated providers, but still
+      // merge in the full catalog so matching Low/Medium/High variants remain
+      // available for Copilot-exposed models.
       let models = await vscode.lm.selectChatModels({ vendor: "copilot" });
       if (!models || models.length === 0) {
         models = await vscode.lm.selectChatModels({});
+      } else {
+        try {
+          const discoveredModels = await vscode.lm.selectChatModels({});
+          if (discoveredModels && discoveredModels.length > 0) {
+            models = mergeChatModelLists(models, discoveredModels);
+          }
+        } catch (error) {
+          logDebug(
+            "[CopilotScheduler] Full model catalog lookup unavailable:",
+            toSafeErrorDetails(error),
+          );
+        }
       }
 
       if (models && models.length > 0) {

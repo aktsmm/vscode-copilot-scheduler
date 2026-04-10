@@ -179,6 +179,53 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("filterPickerModelCatalog keeps runtime quality variants for Copilot-exposed groups", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "copilot-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-5.4",
+      },
+      {
+        id: "openai/gpt-5-4-low",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "openai",
+        family: "gpt-5.4",
+      },
+      {
+        id: "openai/gpt-5-4-high",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "openai",
+        family: "gpt-5.4",
+      },
+      {
+        id: "azure-gpt-5-4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "azure",
+        family: "gpt-5.4",
+      },
+    ]);
+
+    const pickerCatalog = filterPickerModelCatalog(catalog);
+    const groups = buildModelPickerGroups(pickerCatalog);
+
+    assert.deepStrictEqual(
+      pickerCatalog.map((model) => model.id),
+      ["copilot-gpt-5-4", "openai/gpt-5-4-low", "openai/gpt-5-4-high"],
+    );
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0]?.label, "GPT-5.4");
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => variant.label),
+      ["Default", "Low", "High"],
+    );
+  });
+
   // This helper remains part of the internal picker filtering pipeline even
   // after the expanded-toggle UI was removed in v1.0.35.
   test("filterExpandedPickerModelCatalog keeps additional discovered providers available to the internal expanded filter", () => {

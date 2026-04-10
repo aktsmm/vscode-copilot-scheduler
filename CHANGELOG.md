@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.38] - 2026-04-10
+
+### Fixed
+
+- **Model variant picker restore**: The Scheduler now keeps Low/Medium/High-style runtime variants available for Copilot-exposed model groups again, even when those variants only appear in the broader VS Code model catalog.
+
+### Tests
+
+- Added coverage for merging vendor-scoped and discovered model catalogs, and for keeping runtime quality variants visible in the grouped picker payload.
+
 ## [1.0.37] - 2026-04-10
 
 ### Improved

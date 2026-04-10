@@ -70,4 +70,42 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       "claude-opus-4.6-copilot-high",
     ]);
   });
+
+  test("vendor-scoped model lists are supplemented with discovered variant entries", () => {
+    const merged = __testOnly.mergeChatModelLists(
+      [
+        {
+          id: "copilot-gpt-5-4",
+          name: "GPT-5.4",
+          vendor: "copilot",
+          family: "gpt-5.4",
+        },
+      ],
+      [
+        {
+          id: "copilot-gpt-5-4",
+          name: "GPT-5.4",
+          vendor: "copilot",
+          family: "gpt-5.4",
+        },
+        {
+          id: "openai/gpt-5-4-low",
+          name: "GPT-5.4",
+          vendor: "openai",
+          family: "gpt-5.4",
+        },
+        {
+          id: "openai/gpt-5-4-high",
+          name: "GPT-5.4",
+          vendor: "openai",
+          family: "gpt-5.4",
+        },
+      ],
+    );
+
+    assert.deepStrictEqual(
+      merged.map((model) => model.id),
+      ["copilot-gpt-5-4", "openai/gpt-5-4-low", "openai/gpt-5-4-high"],
+    );
+  });
 });
