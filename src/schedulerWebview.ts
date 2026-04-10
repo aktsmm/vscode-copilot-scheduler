@@ -1010,6 +1010,7 @@ export class SchedulerWebview {
       labelModelVariantDefault: messages.labelModelVariantDefault(),
       labelModelNote: messages.labelModelNote(),
       labelModelVariantNote: messages.labelModelVariantNote(),
+      labelModelDefaultOnlyNote: messages.labelModelDefaultOnlyNote(),
       labelScope: messages.labelScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
       labelScopeWorkspace: messages.labelScopeWorkspace(),

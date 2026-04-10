@@ -522,7 +522,7 @@
     if (!modelVariantSelect) return;
 
     var variants = group && Array.isArray(group.variants) ? group.variants : [];
-    if (variants.length <= 1) {
+    if (variants.length === 0) {
       clearModelVariantOptions();
       return;
     }
@@ -535,6 +535,15 @@
       variants
         .map(function (variant) {
           var model = variant && variant.model ? variant.model : {};
+          var label =
+            variants.length === 1
+              ? String(strings.labelModelVariantDefault || "") ||
+                variant.label ||
+                model.label ||
+                model.name ||
+                model.id ||
+                ""
+              : variant.label || model.label || model.name || model.id || "";
           return (
             '<option value="' +
             escapeAttr(variant.key || "") +
@@ -549,9 +558,7 @@
             '" data-model-version="' +
             escapeAttr(model.version || "") +
             '">' +
-            escapeHtml(
-              variant.label || model.label || model.name || model.id || "",
-            ) +
+            escapeHtml(label) +
             "</option>"
           );
         })
@@ -605,6 +612,26 @@
     ) {
       modelSelectionStatus.textContent = String(
         strings.labelModelUnavailableNote || "",
+      );
+      modelSelectionStatus.style.display = "block";
+      return;
+    }
+
+    var selectedGroup = modelSelect
+      ? findModelPickerGroup(
+          getActiveModelPickerGroups(),
+          modelSelect.value || "",
+        )
+      : null;
+    if (
+      selectedGroup &&
+      Array.isArray(selectedGroup.variants) &&
+      selectedGroup.variants.length === 1 &&
+      modelSelect &&
+      modelSelect.value
+    ) {
+      modelSelectionStatus.textContent = String(
+        strings.labelModelDefaultOnlyNote || "",
       );
       modelSelectionStatus.style.display = "block";
       return;

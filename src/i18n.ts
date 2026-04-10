@@ -342,13 +342,18 @@ export const messages = {
     ),
   labelModelNote: () =>
     t(
-      "Only models exposed by GitHub Copilot Chat are shown here. If the selected model has runtime qualities such as Low, Medium, or High, choose them from the variant field below.",
-      "ここでは GitHub Copilot Chat から選べるモデルだけを表示します。選択したモデルに Low、Medium、High などの実行品質がある場合は、下のバリアント欄から選択してください。",
+      "Only models exposed by GitHub Copilot Chat are shown here. If VS Code exposes runtime qualities such as Low, Medium, or High for the selected model, choose them from the variant field below.",
+      "ここでは GitHub Copilot Chat から選べるモデルだけを表示します。選択したモデルに対して VS Code API が Low、Medium、High などの実行品質を公開している場合は、下のバリアント欄から選択してください。",
     ),
   labelModelVariantNote: () =>
     t(
-      "Shown only when the selected model exposes multiple runtime variants such as High/Low or context-specific options.",
-      "選択したモデルに High/Low やコンテキスト別など複数の実行バリアントがある場合のみ表示されます。",
+      "The default variant is always shown. Additional High/Low or context-specific variants appear only when the VS Code API exposes them for the selected model.",
+      "既定バリアントは常に表示されます。High/Low やコンテキスト別などの追加バリアントは、選択したモデルに対して VS Code API が公開している場合のみ表示されます。",
+    ),
+  labelModelDefaultOnlyNote: () =>
+    t(
+      "This model currently exposes only the Default variant in the current VS Code session.",
+      "このモデルは現在の VS Code セッションでは既定バリアントのみ公開されています。",
     ),
   labelModelUnavailableNote: () =>
     t(

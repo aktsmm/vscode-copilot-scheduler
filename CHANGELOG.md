@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.39] - 2026-04-10
+
+### Fixed
+
+- **Default model variant visibility**: The Quality / Variant selector now stays visible for models that currently expose only a single variant, so the Default choice no longer disappears from the Scheduler form.
+- **Variant availability messaging**: The model help text now makes it explicit that additional Low/Medium/High-style variants appear only when the current VS Code API session exposes them for the selected model.
+
+### Tests
+
+- Extended the webview contract coverage for single-variant picker rendering and the new default-only status message.
+
 ## [1.0.38] - 2026-04-10
 
 ### Fixed

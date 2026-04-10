@@ -1178,6 +1178,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'escapeAttr(model.family || "")',
       'data-model-version="',
       'escapeAttr(model.version || "")',
+      "variants.length === 1",
+      'strings.labelModelVariantDefault || ""',
       "escapeHtml(",
       'variant.label || model.label || model.name || model.id || ""',
     ];
@@ -1237,6 +1239,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'option.dataset.unresolved = "true"',
       "option.dataset.modelId = modelId",
       'strings.labelModelUnavailableNote || ""',
+      'strings.labelModelDefaultOnlyNote || ""',
       "getSelectedVariantOption() || getSelectedBaseModelOption()",
       "return ensureUnavailableModelOption(modelSelect, selection);",
     ];
