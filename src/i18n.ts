@@ -342,8 +342,8 @@ export const messages = {
     ),
   labelModelNote: () =>
     t(
-      "By default, only models similar to the Copilot Chat picker are shown. Turn on the option below to see additional discovered providers or variants.",
-      "既定では Copilot Chat のモデル picker に近い候補だけを表示します。追加で見つかったプロバイダーやバリアントを見たい場合は下のオプションを有効にしてください。",
+      "Only models exposed by GitHub Copilot Chat are shown here. If the selected model has runtime qualities such as Low, Medium, or High, choose them from the variant field below.",
+      "ここでは GitHub Copilot Chat から選べるモデルだけを表示します。選択したモデルに Low、Medium、High などの実行品質がある場合は、下のバリアント欄から選択してください。",
     ),
   labelModelVariantNote: () =>
     t(

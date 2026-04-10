@@ -28,7 +28,6 @@ import {
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
   buildModelPickerGroups,
-  filterExpandedPickerModelCatalog,
   filterPickerModelCatalog,
 } from "./modelSelection";
 
@@ -118,7 +117,6 @@ export class SchedulerWebview {
 
   private static buildModelPickerPayload(models: readonly ModelInfo[]): {
     modelPickerDefault: ReturnType<typeof buildModelPickerGroups>;
-    modelPickerAll: ReturnType<typeof buildModelPickerGroups>;
   } {
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
@@ -137,9 +135,6 @@ export class SchedulerWebview {
     return {
       modelPickerDefault: relabelDefaultVariant(
         buildModelPickerGroups(filterPickerModelCatalog(models)),
-      ),
-      modelPickerAll: relabelDefaultVariant(
-        buildModelPickerGroups(filterExpandedPickerModelCatalog(models)),
       ),
     };
   }
@@ -1014,7 +1009,6 @@ export class SchedulerWebview {
       labelModelVariant: messages.labelModelVariant(),
       labelModelVariantDefault: messages.labelModelVariantDefault(),
       labelModelNote: messages.labelModelNote(),
-      labelModelShowAll: messages.labelModelShowAll(),
       labelModelVariantNote: messages.labelModelVariantNote(),
       labelScope: messages.labelScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
@@ -1147,7 +1141,6 @@ export class SchedulerWebview {
       agents: initialAgents,
       models: initialModels,
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
-      modelPickerAll: initialModelPickerPayload.modelPickerAll,
       promptTemplates: initialTemplates,
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
@@ -1971,10 +1964,6 @@ export class SchedulerWebview {
               <select id="model-select">
                 <option value="">${escapeHtml(initialModelPickerPayload.modelPickerDefault.length > 0 ? strings.placeholderSelectModel : strings.placeholderNoModels)}</option>
               </select>
-              <div class="checkbox-group">
-                <input type="checkbox" id="show-all-models">
-                <label for="show-all-models">${escapeHtml(strings.labelModelShowAll)}</label>
-              </div>
               <p class="note">${escapeHtml(strings.labelModelNote)}</p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
             </div>

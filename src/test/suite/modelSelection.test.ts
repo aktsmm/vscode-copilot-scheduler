@@ -118,7 +118,7 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(catalog.length, 2);
     assert.deepStrictEqual(
       catalog.map((model) => model.label),
-      ["Claude Opus 4.6 (Copilot)", "Claude Opus 4.6 (Copilotcli)"],
+      ["Claude Opus 4.6", "Claude Opus 4.6 (Copilotcli)"],
     );
   });
 
@@ -128,7 +128,7 @@ suite("Model Selection Catalog Tests", () => {
         id: "claude-opus-4.6-copilot",
         name: "Claude Opus 4.6 (Copilot)",
         description: "",
-        vendor: "Anthropic",
+        vendor: "copilot",
         family: "claude-opus-4.6",
       },
       {
@@ -147,13 +147,13 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(pickerCatalog[0]?.id, "claude-opus-4.6-copilot");
   });
 
-  test("filterPickerModelCatalog hides claude-code provider variants by default", () => {
+  test("filterPickerModelCatalog keeps only Copilot picker models", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-sonnet-4.6-copilot",
         name: "Claude Sonnet 4.6 (Copilot)",
         description: "",
-        vendor: "Copilot",
+        vendor: "copilot",
         family: "claude-sonnet-4.6",
       },
       {
@@ -162,6 +162,13 @@ suite("Model Selection Catalog Tests", () => {
         description: "",
         vendor: "claude-code",
         family: "claude-sonnet-4.6",
+      },
+      {
+        id: "azure-gpt-5.4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "azure",
+        family: "gpt-5.4",
       },
     ]);
 
@@ -172,13 +179,13 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
-  test("filterExpandedPickerModelCatalog keeps non-default provider variants for the optional expanded view", () => {
+  test("filterExpandedPickerModelCatalog keeps additional discovered providers for the optional expanded view", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-sonnet-4.6-copilot",
         name: "Claude Sonnet 4.6 (Copilot)",
         description: "",
-        vendor: "Copilot",
+        vendor: "copilot",
         family: "claude-sonnet-4.6",
       },
       {
@@ -195,12 +202,23 @@ suite("Model Selection Catalog Tests", () => {
         vendor: "Copilotcli",
         family: "claude-sonnet-4.6",
       },
+      {
+        id: "azure-gpt-5.4",
+        name: "GPT-5.4",
+        description: "",
+        vendor: "azure",
+        family: "gpt-5.4",
+      },
     ]);
 
     const expandedCatalog = filterExpandedPickerModelCatalog(catalog);
     assert.deepStrictEqual(
       expandedCatalog.map((model) => model.id),
-      ["claude-sonnet-4.6-copilot", "claude-sonnet-4.6-claude-code"],
+      [
+        "claude-sonnet-4.6-copilot",
+        "claude-sonnet-4.6-claude-code",
+        "azure-gpt-5.4",
+      ],
     );
   });
 
@@ -228,6 +246,70 @@ suite("Model Selection Catalog Tests", () => {
     assert.deepStrictEqual(
       groups[0]?.variants.map((variant) => variant.label),
       ["Low", "High"],
+    );
+  });
+
+  test("buildModelPickerGroups keeps internal-only context models separate from base models", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "claude-opus-4.6-1m",
+        name: "Claude Opus 4.6 (1M context)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog);
+    assert.deepStrictEqual(
+      groups.map((group) => group.label),
+      ["Claude Opus 4.6", "Claude Opus 4.6 (1M context, Internal only)"],
+    );
+    assert.deepStrictEqual(
+      groups.map((group) => group.variants.map((variant) => variant.label)),
+      [["Claude Opus 4.6"], ["Claude Opus 4.6 (1M context, Internal only)"]],
+    );
+  });
+
+  test("filterExpandedPickerModelCatalog keeps internal-only context models available in separate groups", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6 (Copilot)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "claude-opus-4.6-1m",
+        name: "Claude Opus 4.6 (1M context)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.6",
+      },
+      {
+        id: "claude-opus-4.6-copilotcli",
+        name: "Claude Opus 4.6 (Copilotcli)",
+        description: "",
+        vendor: "copilotcli",
+        family: "claude-opus-4.6",
+      },
+    ]);
+
+    const expandedGroups = buildModelPickerGroups(
+      filterExpandedPickerModelCatalog(catalog),
+    );
+
+    assert.deepStrictEqual(
+      expandedGroups.map((group) => group.label),
+      ["Claude Opus 4.6", "Claude Opus 4.6 (1M context, Internal only)"],
     );
   });
 

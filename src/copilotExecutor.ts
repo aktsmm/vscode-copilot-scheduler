@@ -780,8 +780,12 @@ export class CopilotExecutor {
 
   static async getAvailableModelsWithSource(): Promise<AvailableModelsResult> {
     try {
-      // Try to get models from VS Code Language Model API
-      const models = await vscode.lm.selectChatModels({});
+      // Prefer the Copilot-contributed chat catalog so the picker stays aligned
+      // with GitHub Copilot Chat rather than unrelated providers.
+      let models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      if (!models || models.length === 0) {
+        models = await vscode.lm.selectChatModels({});
+      }
 
       if (models && models.length > 0) {
         const modelInfos: ModelInfo[] = [

@@ -5,6 +5,18 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.35] - 2026-04-10
+
+### Fixed
+
+- **Copilot-only model picker**: The Scheduler model picker now uses the GitHub Copilot model catalog only, instead of exposing a secondary toggle for additional discovered providers.
+- **Quality-only variant selection**: The variant selector now focuses on runtime quality variants such as `Low`, `Medium`, `High`, `Extra High`, and date-style versions. Hidden/internal context-specific entries are no longer surfaced as confusing quality choices.
+- **Saved model migration**: Startup model healing now reconciles previously saved hidden model selections against the same visible picker catalog, so existing schedules move toward currently selectable Copilot Chat models when a safe match exists.
+
+### Tests
+
+- Added coverage for hidden-model migration, Copilot-only picker filtering, and removal of the expanded model-toggle Webview path.
+
 ## [1.0.34] - 2026-04-10
 
 ### Improved

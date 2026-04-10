@@ -7,7 +7,15 @@ const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^low$/iu, label: "Low" },
 ];
 
-const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [/claude(?:[\s-]*)code/iu];
+const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [
+  /claude(?:[\s-]*)code/iu,
+  /internal(?:[\s-]*)only/iu,
+];
+const COPILOT_VENDOR_KEYS = new Set([
+  "copilot",
+  "github-copilot",
+  "githubcopilot",
+]);
 
 export type ModelPickerVariant = {
   key: string;
@@ -73,6 +81,10 @@ export function isNonDefaultPickerModel(model: ModelInfo): boolean {
   );
 }
 
+function isCopilotVendorModel(model: ModelInfo): boolean {
+  return COPILOT_VENDOR_KEYS.has(normalizeKey(model.vendor));
+}
+
 function maybeStripDateSuffix(value: string): string | undefined {
   const stripped = value.replace(/-\d{4}(?:-\d{2}){2}$/u, "");
   return stripped && stripped !== value ? stripped : undefined;
@@ -107,6 +119,27 @@ function extractTrailingParenthesizedDetail(
   return detail || undefined;
 }
 
+function extractTrailingParenthesizedDetails(
+  value: string | undefined,
+): string[] {
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return [];
+  }
+
+  const match = trimmed.match(/((?:\s*\([^()]*\))+)[\s]*$/u);
+  if (!match) {
+    return [];
+  }
+
+  return (
+    match[1]
+      .match(/\([^()]*\)/gu)
+      ?.map((entry) => entry.replace(/[()]/g, "").trim())
+      .filter(Boolean) || []
+  );
+}
+
 function maybeStripNamedVariant(value: string): string | undefined {
   const stripped = value
     .replace(/(?:[-\s]+)(extra[-\s]+high|high|medium|low)$/iu, "")
@@ -129,6 +162,24 @@ function normalizeNamedVariantLabel(
   }
 
   return undefined;
+}
+
+function normalizeStrictVariantKey(
+  value: string | undefined,
+): string | undefined {
+  const namedVariant = normalizeNamedVariantLabel(value);
+  if (namedVariant) {
+    return normalizeKey(namedVariant);
+  }
+
+  const trimmed = trimOptionalText(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return /^\d{4}(?:-\d{2}){2}$/u.test(trimmed)
+    ? normalizeKey(trimmed)
+    : undefined;
 }
 
 function extractNamedVariant(value: string | undefined): string | undefined {
@@ -156,6 +207,41 @@ function canonicalizeModelDisplayName(
   return maybeStripNamedVariant(withoutParens) || withoutParens;
 }
 
+function isIgnoredModelGroupDetail(detail: string, model: ModelInfo): boolean {
+  const normalizedDetail = normalizeKey(detail);
+  if (!normalizedDetail) {
+    return true;
+  }
+
+  if (COPILOT_VENDOR_KEYS.has(normalizedDetail)) {
+    return true;
+  }
+
+  const vendorKey = normalizeKey(model.vendor);
+  return !!vendorKey && normalizedDetail === vendorKey;
+}
+
+function buildModelGroupLabel(model: ModelInfo): string {
+  const baseName =
+    canonicalizeModelDisplayName(model.name) ||
+    canonicalizeModelDisplayName(model.family) ||
+    model.name ||
+    model.id;
+  if (!baseName) {
+    return "";
+  }
+
+  const significantDetails = extractTrailingParenthesizedDetails(model.name)
+    .map((detail) => trimRequiredText(detail))
+    .filter((detail) => !isIgnoredModelGroupDetail(detail, model));
+
+  if (significantDetails.length === 0) {
+    return baseName;
+  }
+
+  return `${baseName} (${significantDetails.join(", ")})`;
+}
+
 function normalizeModelInfo(model: ModelInfo): ModelInfo {
   return {
     id: trimRequiredText(model.id),
@@ -179,11 +265,7 @@ function buildModelCatalogKey(model: ModelInfo): string {
 }
 
 function getModelGroupKey(model: ModelInfo): string {
-  return normalizeKey(
-    canonicalizeModelDisplayName(model.name) ||
-      canonicalizeModelDisplayName(model.family) ||
-      model.id,
-  );
+  return normalizeKey(buildModelGroupLabel(model) || model.id);
 }
 
 function getModelDetailCandidates(
@@ -207,11 +289,7 @@ function getModelDetailCandidates(
 
   const details: string[] = [];
   const seen = new Set<string>();
-  const baseName =
-    canonicalizeModelDisplayName(model.name) ||
-    canonicalizeModelDisplayName(model.family) ||
-    model.name ||
-    model.id;
+  const baseName = buildModelGroupLabel(model) || model.name || model.id;
 
   for (const candidate of detailCandidates) {
     const detail = formatModelDetail(candidate);
@@ -326,25 +404,21 @@ function buildModelDisplayLabel(
   model: ModelInfo,
   groupedModels: readonly ModelInfo[],
 ): string {
-  const baseName =
-    canonicalizeModelDisplayName(model.name) ||
-    canonicalizeModelDisplayName(model.family) ||
-    model.name ||
-    model.id;
-  if (!baseName) {
+  const baseLabel = buildModelGroupLabel(model) || model.name || model.id;
+  if (!baseLabel) {
     return "";
   }
 
   if (groupedModels.length <= 1) {
-    return baseName;
+    return baseLabel;
   }
 
   const detailLabel = buildModelDetailLabel(model, groupedModels);
   if (!detailLabel) {
-    return baseName;
+    return baseLabel;
   }
 
-  return `${baseName} (${detailLabel})`;
+  return `${baseLabel} (${detailLabel})`;
 }
 
 function buildModelDetailLabel(
@@ -517,61 +591,59 @@ function buildRequestedKeys(selection: NormalizedModelSelection): {
 function getSelectionVariantKey(
   selection: NormalizedModelSelection,
 ): string | undefined {
-  const explicitVersion = normalizeKey(
-    formatModelDetail(selection.modelVersion) || "",
-  );
+  const explicitVersion = normalizeStrictVariantKey(selection.modelVersion);
   if (explicitVersion) {
     return explicitVersion;
   }
 
-  const variantFromId = normalizeKey(
+  const variantFromId = normalizeStrictVariantKey(
     formatModelDetail(
       extractVariantTail(selection.model, [
         selection.modelFamily,
         selection.modelName,
       ]),
-    ) || "",
+    ),
   );
   if (variantFromId) {
     return variantFromId;
   }
 
-  const variantFromName = normalizeKey(
-    extractNamedVariant(selection.modelName) || "",
+  const variantFromName = normalizeStrictVariantKey(
+    extractNamedVariant(selection.modelName),
   );
   if (variantFromName) {
     return variantFromName;
   }
 
-  return normalizeKey(
+  return normalizeStrictVariantKey(
     formatModelDetail(
       extractVariantTail(selection.modelFamily, [selection.modelName]),
-    ) || "",
+    ),
   );
 }
 
 function getModelVariantKey(model: ModelInfo): string | undefined {
-  const explicitVersion = normalizeKey(formatModelDetail(model.version) || "");
+  const explicitVersion = normalizeStrictVariantKey(model.version);
   if (explicitVersion) {
     return explicitVersion;
   }
 
-  const variantFromId = normalizeKey(
-    formatModelDetail(
-      extractVariantTail(model.id, [model.family, model.name]),
-    ) || "",
+  const variantFromId = normalizeStrictVariantKey(
+    formatModelDetail(extractVariantTail(model.id, [model.family, model.name])),
   );
   if (variantFromId) {
     return variantFromId;
   }
 
-  const variantFromName = normalizeKey(extractNamedVariant(model.name) || "");
+  const variantFromName = normalizeStrictVariantKey(
+    extractNamedVariant(model.name),
+  );
   if (variantFromName) {
     return variantFromName;
   }
 
-  return normalizeKey(
-    formatModelDetail(extractVariantTail(model.family, [model.name])) || "",
+  return normalizeStrictVariantKey(
+    formatModelDetail(extractVariantTail(model.family, [model.name])),
   );
 }
 
@@ -713,15 +785,33 @@ export function normalizeModelCatalog(
 export function filterPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
-  return filterExpandedPickerModelCatalog(models).filter(
-    (model) => !isNonDefaultPickerModel(model),
-  );
+  return filterExpandedPickerModelCatalog(models).filter((model) => {
+    if (!model || typeof model.id !== "string") {
+      return false;
+    }
+
+    if (model.id.trim().length === 0) {
+      return true;
+    }
+
+    return isCopilotVendorModel(model) && !isNonDefaultPickerModel(model);
+  });
 }
 
 export function filterExpandedPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
-  return models.filter((model) => !isCopilotCliModel(model));
+  return models.filter((model) => {
+    if (!model || typeof model.id !== "string") {
+      return false;
+    }
+
+    if (model.id.trim().length === 0) {
+      return true;
+    }
+
+    return !isCopilotCliModel(model);
+  });
 }
 
 export function buildModelPickerGroups(
@@ -746,12 +836,7 @@ export function buildModelPickerGroups(
     }
 
     const firstModel = groupModels[0];
-    const label =
-      canonicalizeModelDisplayName(firstModel?.name) ||
-      canonicalizeModelDisplayName(firstModel?.family) ||
-      firstModel?.name ||
-      firstModel?.id ||
-      "";
+    const label = buildModelGroupLabel(firstModel) || firstModel?.id || "";
     if (!label) {
       continue;
     }
@@ -759,12 +844,10 @@ export function buildModelPickerGroups(
     const variants = groupModels.map((model, index) => ({
       key: buildModelCatalogKey(model),
       label:
-        buildModelDetailLabel(model, groupModels) ||
-        (groupModels.length > 1
-          ? index === 0
-            ? "Default"
-            : model.label || model.name || model.id
-          : label),
+        groupModels.length > 1
+          ? buildModelDetailLabel(model, groupModels) ||
+            (index === 0 ? "Default" : model.label || model.name || model.id)
+          : label,
       model,
     }));
 

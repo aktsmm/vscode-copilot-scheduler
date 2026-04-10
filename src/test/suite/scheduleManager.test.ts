@@ -826,6 +826,62 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
     }
   });
 
+  test("healTaskModelSelections migrates hidden saved models to visible Copilot models", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const rawTask = {
+        id: "t-hidden-model",
+        name: "hidden-model-task",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        enabled: false,
+        scope: "global",
+        promptSource: "inline",
+        model: "claude-opus-4.6-hidden",
+        modelName: "Claude Opus 4.6 (1M context)(Internal only)",
+        modelVendor: "copilot",
+        modelFamily: "claude-opus-4.6",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+
+      const changed = await manager.healTaskModelSelections([
+        {
+          id: "claude-opus-4.6",
+          name: "Claude Opus 4.6",
+          description: "",
+          vendor: "copilot",
+          family: "claude-opus-4.6",
+        },
+      ]);
+
+      const loaded = manager.getTask(rawTask.id);
+      assert.strictEqual(changed, 1);
+      assert.ok(loaded);
+      assert.strictEqual(loaded?.model, "claude-opus-4.6");
+      assert.strictEqual(loaded?.modelName, "Claude Opus 4.6");
+      assert.strictEqual(loaded?.modelVendor, "copilot");
+      assert.strictEqual(loaded?.modelFamily, "claude-opus-4.6");
+      assert.strictEqual(loaded?.modelVersion, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("duplicateTask preserves workspacePath for workspace-scoped tasks", async () => {
     const workspaceA = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-a-"));
     const workspaceB = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-ws-b-"));

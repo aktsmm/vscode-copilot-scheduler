@@ -293,9 +293,6 @@
   var modelPickerDefault = Array.isArray(initialData.modelPickerDefault)
     ? initialData.modelPickerDefault
     : [];
-  var modelPickerAll = Array.isArray(initialData.modelPickerAll)
-    ? initialData.modelPickerAll
-    : [];
   var promptTemplates = Array.isArray(initialData.promptTemplates)
     ? initialData.promptTemplates
     : [];
@@ -352,7 +349,6 @@
   var modelSelect = document.getElementById("model-select");
   var modelVariantGroup = document.getElementById("model-variant-group");
   var modelVariantSelect = document.getElementById("model-variant-select");
-  var showAllModelsInput = document.getElementById("show-all-models");
   var templateSelect = document.getElementById("template-select");
   var templateSelectGroup = document.getElementById("template-select-group");
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
@@ -399,9 +395,7 @@
   }
 
   function getActiveModelPickerGroups() {
-    return showAllModelsInput && showAllModelsInput.checked
-      ? modelPickerAll
-      : modelPickerDefault;
+    return modelPickerDefault;
   }
 
   function clearPendingModelSelection() {
@@ -555,7 +549,9 @@
             '" data-model-version="' +
             escapeAttr(model.version || "") +
             '">' +
-            escapeHtml(variant.label || model.label || model.name || model.id || "") +
+            escapeHtml(
+              variant.label || model.label || model.name || model.id || "",
+            ) +
             "</option>"
           );
         })
@@ -725,17 +721,6 @@
 
     if (updateModelOptions(selection)) {
       return true;
-    }
-
-    if (
-      showAllModelsInput &&
-      !showAllModelsInput.checked &&
-      findModelPickerSelection(modelPickerAll, selection)
-    ) {
-      showAllModelsInput.checked = true;
-      if (updateModelOptions(selection)) {
-        return true;
-      }
     }
 
     return ensureUnavailableModelOption(modelSelect, selection);
@@ -2422,9 +2407,6 @@
             models = Array.isArray(message.models) ? message.models : [];
             modelPickerDefault = Array.isArray(message.modelPickerDefault)
               ? message.modelPickerDefault
-              : [];
-            modelPickerAll = Array.isArray(message.modelPickerAll)
-              ? message.modelPickerAll
               : [];
             if (
               currentModelSelection &&

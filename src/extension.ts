@@ -13,6 +13,7 @@ import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { filterPickerModelCatalog } from "./modelSelection";
 import {
   normalizeForCompare,
   resolveGlobalAgentRoots,
@@ -739,7 +740,9 @@ export function activate(context: vscode.ExtensionContext): void {
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
   void CopilotExecutor.getAvailableModelsWithSource()
     .then(async ({ models, source }) => {
-      const healed = await scheduleManager.healTaskModelSelections(models);
+      const healed = await scheduleManager.healTaskModelSelections(
+        filterPickerModelCatalog(models),
+      );
       if (healed > 0) {
         logDebug(
           `[CopilotScheduler] Healed ${healed} task model selection(s) from ${source} model catalog`,

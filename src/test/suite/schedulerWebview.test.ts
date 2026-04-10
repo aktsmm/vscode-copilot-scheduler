@@ -1038,8 +1038,6 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const expectedTokens = [
       "const initialModelPickerPayload = this.buildModelPickerPayload(initialModels);",
       "modelPickerDefault: initialModelPickerPayload.modelPickerDefault",
-      "modelPickerAll: initialModelPickerPayload.modelPickerAll",
-      'id="show-all-models"',
       'id="model-variant-group"',
       'id="model-variant-select"',
       'id="model-selection-status"',
@@ -1049,6 +1047,18 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(source, token),
         `Expected initial model option token not found: ${token}`,
+      );
+    }
+
+    const removedTokens = [
+      'id="show-all-models"',
+      "modelPickerAll: initialModelPickerPayload.modelPickerAll",
+    ];
+
+    for (const token of removedTokens) {
+      assert.ok(
+        !sourceContainsToken(source, token),
+        `Initial HTML should no longer include token: ${token}`,
       );
     }
   });
@@ -1152,7 +1162,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'escapeAttr(model.family || "")',
       'data-model-version="',
       'escapeAttr(model.version || "")',
-      'escapeHtml(variant.label || model.label || model.name || model.id || "")',
+      "escapeHtml(",
+      'variant.label || model.label || model.name || model.id || ""',
     ];
 
     for (const token of variantTokens) {
@@ -1171,12 +1182,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     const expectedTokens = [
       "buildModelPickerGroups,",
-      "filterExpandedPickerModelCatalog,",
       "filterPickerModelCatalog,",
       "modelPickerDefault: relabelDefaultVariant(",
       "buildModelPickerGroups(filterPickerModelCatalog(models))",
-      "modelPickerAll: relabelDefaultVariant(",
-      "buildModelPickerGroups(filterExpandedPickerModelCatalog(models))",
       "this.cachedModels = this.localizeCachedModels(result.models);",
     ];
 
@@ -1184,6 +1192,19 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(source, token),
         `Expected picker filter token not found: ${token}`,
+      );
+    }
+
+    const removedTokens = [
+      "filterExpandedPickerModelCatalog,",
+      "modelPickerAll: relabelDefaultVariant(",
+      "buildModelPickerGroups(filterExpandedPickerModelCatalog(models))",
+    ];
+
+    for (const token of removedTokens) {
+      assert.ok(
+        !sourceContainsToken(source, token),
+        `Picker payload should no longer include token: ${token}`,
       );
     }
   });
