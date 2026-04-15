@@ -320,6 +320,28 @@
   var pendingSubmit = false;
   var templateLoadingPath = "";
   var templatePromptBaseline = null;
+  var layoutRefreshPending = false;
+
+  function scheduleLayoutRefresh() {
+    if (layoutRefreshPending) return;
+    layoutRefreshPending = true;
+
+    var scheduleFrame =
+      typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : function (callback) {
+            return window.setTimeout(callback, 16);
+          };
+
+    scheduleFrame(function () {
+      scheduleFrame(function () {
+        layoutRefreshPending = false;
+        if (document.body) {
+          void document.body.offsetHeight;
+        }
+      });
+    });
+  }
 
   var defaultJitterSeconds = (function () {
     var raw = initialData.defaultJitterSeconds;
@@ -562,6 +584,7 @@
     if (modelVariantGroup) {
       modelVariantGroup.style.display = "none";
     }
+    scheduleLayoutRefresh();
   }
 
   function updateModelExperimentalNote() {
@@ -634,6 +657,8 @@
     } else if (modelVariantSelect.options.length > 1) {
       modelVariantSelect.selectedIndex = 1;
     }
+
+    scheduleLayoutRefresh();
   }
 
   function getCurrentModelSelection() {
@@ -772,6 +797,7 @@
     var selectedGroup = findModelPickerGroup(groups, modelSelect.value || "");
     updateModelVariantOptions(selectedGroup, selection);
     updateModelSelectionStatus();
+    scheduleLayoutRefresh();
     return selection ? !!matchedSelection : !!selectedGroup;
   }
 
@@ -854,6 +880,7 @@
     var targetContent = document.getElementById(tabName + "-tab");
     if (targetBtn) targetBtn.classList.add("active");
     if (targetContent) targetContent.classList.add("active");
+    scheduleLayoutRefresh();
   }
 
   function openCreateTaskForm() {
@@ -885,12 +912,14 @@
         null,
       );
       updateModelSelectionStatus();
+      scheduleLayoutRefresh();
     });
   }
   if (modelVariantSelect) {
     modelVariantSelect.addEventListener("change", function () {
       clearPendingModelSelection();
       updateModelSelectionStatus();
+      scheduleLayoutRefresh();
     });
   }
   if (templateSelect) {
@@ -899,6 +928,10 @@
       setTemplatePromptBaseline(null);
     });
   }
+
+  window.addEventListener("resize", function () {
+    scheduleLayoutRefresh();
+  });
 
   // Use event delegation for tab buttons (works even when clicking text/child nodes)
   function resolveTabButton(node) {
@@ -2671,6 +2704,7 @@
 
   // Initial render
   renderTaskList(tasks);
+  scheduleLayoutRefresh();
 
   // Notify extension that webview is ready
   vscode.postMessage({ type: "webviewReady" });
