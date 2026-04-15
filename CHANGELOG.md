@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.41] - 2026-04-15
+
+### Fixed
+
+- **Webview repaint recovery**: The Scheduler webview now triggers a lightweight layout refresh on model changes, variant changes, tab switches, resize, and initial render so the panel no longer stays black until the window is resized.
+
 ## [1.0.40] - 2026-04-10
 
 ### Improved
