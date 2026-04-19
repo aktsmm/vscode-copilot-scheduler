@@ -2,6 +2,8 @@ import type { ModelInfo, ModelSelectionFields } from "./types";
 import {
   getExperimentalModelQualityVariants,
   type ExperimentalReasoningEffort,
+  getSupportedExperimentalReasoningEfforts,
+  normalizeExperimentalReasoningEffort,
 } from "./modelQualityExperiment";
 
 const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
@@ -72,6 +74,41 @@ function normalizeKey(value: string | undefined): string {
     .replace(/[_.\s]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function normalizeSelectionReasoningEffort(selection: {
+  model?: string;
+  modelName?: string;
+  modelVendor?: string;
+  modelFamily?: string;
+  modelReasoningEffort?: string;
+}): ExperimentalReasoningEffort | undefined {
+  const reasoningEffort = normalizeExperimentalReasoningEffort(
+    selection.modelReasoningEffort,
+  );
+  if (!reasoningEffort) {
+    return undefined;
+  }
+
+  const family = trimOptionalText(selection.modelFamily);
+  const vendor = trimOptionalText(selection.modelVendor);
+  if (!family || !vendor) {
+    return reasoningEffort;
+  }
+
+  const supportedEfforts = getSupportedExperimentalReasoningEfforts({
+    id: trimOptionalText(selection.model),
+    name: trimOptionalText(selection.modelName),
+    vendor,
+    family,
+  });
+  if (supportedEfforts.length === 0) {
+    return undefined;
+  }
+
+  return supportedEfforts.includes(reasoningEffort)
+    ? reasoningEffort
+    : undefined;
 }
 
 export function isCopilotCliModel(model: ModelInfo): boolean {
@@ -839,7 +876,7 @@ function scoreModelMatch(
 export function normalizeModelSelection(
   selection: ModelSelectionFields | undefined,
 ): NormalizedModelSelection {
-  return {
+  const normalized: NormalizedModelSelection = {
     model: trimOptionalText(selection?.model),
     modelName: trimOptionalText(selection?.modelName),
     modelVendor: trimOptionalText(selection?.modelVendor),
@@ -847,6 +884,11 @@ export function normalizeModelSelection(
     modelVersion: trimOptionalText(selection?.modelVersion),
     modelReasoningEffort: trimOptionalText(selection?.modelReasoningEffort),
   };
+
+  normalized.modelReasoningEffort =
+    normalizeSelectionReasoningEffort(normalized);
+
+  return normalized;
 }
 
 export function hasStrictModelVariantSelection(

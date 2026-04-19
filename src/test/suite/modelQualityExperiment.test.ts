@@ -4,7 +4,9 @@ import * as vscode from "vscode";
 import {
   getLanguageModelsConfigUriFromGlobalStorageUri,
   getExperimentalModelQualityVariants,
+  getSupportedExperimentalReasoningEfforts,
   normalizeExperimentalReasoningEffort,
+  supportsExperimentalModelQuality,
   updateLanguageModelsConfigText,
 } from "../../modelQualityExperiment";
 
@@ -132,6 +134,43 @@ suite("Model Quality Experiment Tests", () => {
         family: "claude-haiku-4.5",
       }),
       [],
+    );
+
+    assert.strictEqual(
+      supportsExperimentalModelQuality({
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      }),
+      false,
+    );
+
+    assert.deepStrictEqual(
+      getSupportedExperimentalReasoningEfforts({
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      }),
+      [],
+    );
+
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      }),
+      [],
+    );
+
+    assert.strictEqual(
+      supportsExperimentalModelQuality({
+        vendor: "copilot",
+        family: "claude-opus",
+        id: "copilot-claude-opus-4.7",
+        name: "Claude Opus 4.7",
+      }),
+      false,
     );
   });
 });

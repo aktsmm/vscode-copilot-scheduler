@@ -17,6 +17,13 @@ export type ExperimentalModelQualityVariant = {
   reasoningEffort?: ExperimentalReasoningEffort;
 };
 
+type ExperimentalModelQualityTarget = {
+  vendor?: string;
+  family?: string;
+  id?: string;
+  name?: string;
+};
+
 type LanguageModelsProviderGroup = {
   name: string;
   vendor: string;
@@ -51,6 +58,10 @@ const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] 
     },
   ];
 
+const EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
+  /^claude-opus-4-7(?:$|-)/u,
+];
+
 function trimOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -70,6 +81,25 @@ function normalizeModelFamilyKey(value: string | undefined): string {
     .replace(/[_.\s]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function getExperimentalModelQualityKeys(
+  model: ExperimentalModelQualityTarget,
+): string[] {
+  const values = [model.family, model.id, model.name]
+    .map((value) => normalizeModelFamilyKey(value))
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function isExcludedExperimentalModelQualityTarget(
+  model: ExperimentalModelQualityTarget,
+): boolean {
+  return getExperimentalModelQualityKeys(model).some((key) =>
+    EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS.some((pattern) =>
+      pattern.test(key),
+    ),
+  );
 }
 
 function getReasoningEffortLabel(
@@ -111,33 +141,43 @@ export function normalizeExperimentalReasoningEffort(
     : undefined;
 }
 
-export function supportsExperimentalModelQuality(model: {
-  vendor?: string;
-  family?: string;
-}): boolean {
+export function supportsExperimentalModelQuality(
+  model: ExperimentalModelQualityTarget,
+): boolean {
   const vendor = normalizeKey(model.vendor);
   if (vendor !== "copilot" && vendor !== "github-copilot") {
     return false;
   }
 
-  const familyKey = normalizeModelFamilyKey(model.family);
-  return EXPERIMENTAL_MODEL_QUALITY_RULES.some((rule) =>
-    rule.familyPattern.test(familyKey),
+  const candidateKeys = getExperimentalModelQualityKeys(model);
+  if (
+    candidateKeys.length === 0 ||
+    isExcludedExperimentalModelQualityTarget(model)
+  ) {
+    return false;
+  }
+
+  return candidateKeys.some((key) =>
+    EXPERIMENTAL_MODEL_QUALITY_RULES.some((rule) =>
+      rule.familyPattern.test(key),
+    ),
   );
 }
 
-export function getSupportedExperimentalReasoningEfforts(model: {
-  vendor?: string;
-  family?: string;
-}): readonly ExperimentalReasoningEffort[] {
+export function getSupportedExperimentalReasoningEfforts(
+  model: ExperimentalModelQualityTarget,
+): readonly ExperimentalReasoningEffort[] {
   if (!supportsExperimentalModelQuality(model)) {
     return [];
   }
 
-  const familyKey = normalizeModelFamilyKey(model.family);
-  const matchedRule = EXPERIMENTAL_MODEL_QUALITY_RULES.find((rule) =>
-    rule.familyPattern.test(familyKey),
-  );
+  const matchedRule = getExperimentalModelQualityKeys(model)
+    .map((key) =>
+      EXPERIMENTAL_MODEL_QUALITY_RULES.find((rule) =>
+        rule.familyPattern.test(key),
+      ),
+    )
+    .find((rule) => !!rule);
 
   return matchedRule?.efforts || [];
 }
@@ -300,9 +340,22 @@ export async function applyExperimentalModelQualitySelection(args: {
     trimOptionalText(matchedModel?.family) ||
     trimOptionalText(args.selection.modelFamily);
 
-  if (!modelId || !supportsExperimentalModelQuality({ vendor, family })) {
+  if (!modelId) {
     return false;
   }
+
+  const supportedEfforts = getSupportedExperimentalReasoningEfforts({
+    vendor,
+    family,
+    id: modelId,
+    name:
+      trimOptionalText(matchedModel?.name) ||
+      trimOptionalText(args.selection.modelName),
+  });
+  const effectiveReasoningEffort =
+    savedReasoningEffort && supportedEfforts.includes(savedReasoningEffort)
+      ? savedReasoningEffort
+      : undefined;
 
   const configUri = getLanguageModelsConfigUriFromGlobalStorageUri(
     args.globalStorageUri,
@@ -322,7 +375,7 @@ export async function applyExperimentalModelQualitySelection(args: {
   const nextText = updateLanguageModelsConfigText(rawText, {
     vendor,
     modelId,
-    reasoningEffort: savedReasoningEffort,
+    reasoningEffort: effectiveReasoningEffort,
   });
 
   if (rawText === undefined && nextText === "[]") {

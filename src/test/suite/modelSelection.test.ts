@@ -4,6 +4,7 @@ import {
   filterExpandedPickerModelCatalog,
   filterPickerModelCatalog,
   findBestMatchingModel,
+  normalizeModelSelection,
   normalizeModelCatalog,
 } from "../../modelSelection";
 
@@ -457,6 +458,79 @@ suite("Model Selection Catalog Tests", () => {
         ["High", "high"],
       ],
     );
+  });
+
+  test("buildModelPickerGroups does not synthesize preview thinking effort variants for Claude Opus 4.7", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [["Claude Opus 4.7", "default"]],
+    );
+  });
+
+  test("buildModelPickerGroups keeps Claude Opus 4.7 at default when runtime family is coarse", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "copilot-claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [["Claude Opus 4.7", "default"]],
+    );
+  });
+
+  test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.7", () => {
+    const selection = normalizeModelSelection({
+      model: "claude-opus-4.7",
+      modelVendor: "copilot",
+      modelFamily: "claude-opus-4.7",
+      modelReasoningEffort: "high",
+    });
+
+    assert.strictEqual(selection.modelReasoningEffort, undefined);
+  });
+
+  test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.7 even when family is coarse", () => {
+    const selection = normalizeModelSelection({
+      model: "copilot-claude-opus-4.7",
+      modelName: "Claude Opus 4.7",
+      modelVendor: "copilot",
+      modelFamily: "claude-opus",
+      modelReasoningEffort: "medium",
+    });
+
+    assert.strictEqual(selection.modelReasoningEffort, undefined);
   });
 
   test("filterExpandedPickerModelCatalog keeps internal-only context models available to the internal expanded filter", () => {

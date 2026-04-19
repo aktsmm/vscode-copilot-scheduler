@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.44] - 2026-04-20
+
+### Fixed
+
+- **Claude Opus 4.7 default-only thinking effort**: The Scheduler now keeps Claude Opus 4.7 on `Default` only, even when the runtime model catalog reports coarse metadata such as `family: claude-opus` and only the model id or display name carries the `4.7` version.
+- **Reasoning effort cleanup**: Unsupported saved `modelReasoningEffort` values for Claude Opus 4.7 are now normalized away before UI restore and experimental config sync, so stale `Low` / `Medium` / `High` selections no longer leak back into execution.
+
+### Tests
+
+- Added regression coverage for Claude Opus 4.7 with both precise and coarse runtime metadata, and revalidated the full suite with 212 passing tests.
+
 ## [1.0.43] - 2026-04-19
 
 ### Fixed
