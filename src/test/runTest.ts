@@ -6,6 +6,13 @@ import * as path from "path";
 import * as fs from "fs";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 
+const DEFAULT_TEST_VSCODE_VERSION = "1.115.0";
+
+function getTestVSCodeVersion(): string {
+  const configured = process.env.COPILOT_SCHEDULER_VSCODE_TEST_VERSION?.trim();
+  return configured || DEFAULT_TEST_VSCODE_VERSION;
+}
+
 async function disableWin32VersionedUpdateForTests(
   vscodeExecutablePath: string,
 ): Promise<void> {
@@ -72,8 +79,11 @@ async function main(): Promise<void> {
     // The path to the extension test script
     const extensionTestsPath = path.resolve(__dirname, "./suite/index");
 
-    // Download VS Code ourselves so we can patch product.json before launch.
-    const vscodeExecutablePath = await downloadAndUnzipVSCode();
+    // Use a configurable, known-good VS Code build for tests so local stable
+    // editor processes do not conflict with the downloaded test instance.
+    const vscodeExecutablePath = await downloadAndUnzipVSCode(
+      getTestVSCodeVersion(),
+    );
     await disableWin32VersionedUpdateForTests(vscodeExecutablePath);
 
     // Download VS Code, unzip it, and run the integration tests

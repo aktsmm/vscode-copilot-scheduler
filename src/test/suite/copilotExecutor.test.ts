@@ -27,6 +27,80 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     assert.strictEqual(__testOnly.normalizeAgentPrefix("   "), "");
   });
 
+  test("Resolves built-in agents to chat.open modes", () => {
+    assert.strictEqual(__testOnly.resolveChatOpenMode("edit"), "edit");
+    assert.strictEqual(__testOnly.resolveChatOpenMode("/ask"), "ask");
+  });
+
+  test("Resolves custom agents to chat.open custom mode names", () => {
+    assert.strictEqual(
+      __testOnly.resolveChatOpenMode("customReviewer"),
+      "customReviewer",
+    );
+    assert.strictEqual(
+      __testOnly.resolveChatOpenMode("@Code Review"),
+      "Code Review",
+    );
+  });
+
+  test("Does not resolve participant agents to chat.open modes", () => {
+    assert.strictEqual(__testOnly.resolveChatOpenMode("@workspace"), undefined);
+    assert.strictEqual(__testOnly.resolveChatOpenMode("@terminal"), undefined);
+  });
+
+  test("Prompt routing uses chat.open mode for built-in agents", () => {
+    const routing = __testOnly.buildPromptRouting("Implement this", "edit");
+
+    assert.deepStrictEqual(routing, {
+      normalizedAgent: "/edit",
+      chatOpenMode: "edit",
+      chatOpenPrompt: "Implement this",
+      legacyPrompt: "/edit Implement this",
+    });
+  });
+
+  test("Prompt routing uses chat.open mode for custom agents", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "Review recent changes",
+      "customReviewer",
+    );
+
+    assert.deepStrictEqual(routing, {
+      normalizedAgent: "@customReviewer",
+      chatOpenMode: "customReviewer",
+      chatOpenPrompt: "Review recent changes",
+      legacyPrompt: "@customReviewer Review recent changes",
+    });
+  });
+
+  test("Prompt routing preserves participant prefixes in query", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "Search the codebase",
+      "@workspace",
+    );
+
+    assert.deepStrictEqual(routing, {
+      normalizedAgent: "@workspace",
+      chatOpenMode: undefined,
+      chatOpenPrompt: "@workspace Search the codebase",
+      legacyPrompt: "@workspace Search the codebase",
+    });
+  });
+
+  test("Prompt routing strips matching custom prefix from chat.open prompt", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "@planner inspect the architecture",
+      "@planner",
+    );
+
+    assert.deepStrictEqual(routing, {
+      normalizedAgent: "@planner",
+      chatOpenMode: "planner",
+      chatOpenPrompt: "inspect the architecture",
+      legacyPrompt: "@planner inspect the architecture",
+    });
+  });
+
   test("strict variant selector candidates do not fall back to plain id", () => {
     const selectors = __testOnly.buildModelSelectorCandidates({
       model: "copilot-gpt-4o",

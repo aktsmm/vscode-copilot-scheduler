@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.42] - 2026-04-19
+
+### Fixed
+
+- **Agent routing parity**: The Scheduler now opens built-in and custom agents through `chat.open.mode` while keeping participant-style agents such as `@workspace`, `@terminal`, and `@vscode` on the legacy prompt-prefix path.
+- **Local integration test stability**: The extension test runner now defaults to a configurable VS Code 1.115.0 target so `npm test` no longer collides with a running local VS Code 1.116.0 instance during Marketplace release validation.
+
+### Tests
+
+- Added routing coverage for built-in modes, custom agents, participant-style agents, and prompt-prefix stripping, and revalidated the full suite with 202 passing tests.
+
 ## [1.0.41] - 2026-04-15
 
 ### Fixed

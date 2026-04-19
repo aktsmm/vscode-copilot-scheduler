@@ -49,6 +49,13 @@ const SLASH_COMMAND_AGENTS: ReadonlySet<string> = new Set([
   "edit",
 ]);
 
+/** Participant-style agents still require prompt prefixes today. */
+const PARTICIPANT_STYLE_AGENTS: ReadonlySet<string> = new Set([
+  "@workspace",
+  "@terminal",
+  "@vscode",
+]);
+
 type BuiltInChatMode = "agent" | "ask" | "edit";
 
 type AvailableModelsResult = {
@@ -58,7 +65,7 @@ type AvailableModelsResult = {
 
 type PromptRouting = {
   normalizedAgent: string;
-  mode?: BuiltInChatMode;
+  chatOpenMode?: string;
   chatOpenPrompt: string;
   legacyPrompt: string;
 };
@@ -142,13 +149,37 @@ function resolveBuiltInChatMode(
   return undefined;
 }
 
+function resolveChatOpenMode(agent: string | undefined): string | undefined {
+  const normalized =
+    typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
+  if (!normalized) {
+    return undefined;
+  }
+
+  const builtInMode = resolveBuiltInChatMode(normalized);
+  if (builtInMode) {
+    return builtInMode;
+  }
+
+  if (normalized.startsWith("@") && !PARTICIPANT_STYLE_AGENTS.has(normalized)) {
+    return normalized.slice(1).trim() || undefined;
+  }
+
+  return undefined;
+}
+
+function stripLeadingAgentPrefix(prompt: string, prefix: string): string {
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^\\s*${escapedPrefix}(?=\\s|$)\\s*`, "i");
+  const stripped = prompt.replace(pattern, "").trim();
+  return stripped || prompt;
+}
+
 function stripLeadingBuiltInModePrefix(
   prompt: string,
   mode: BuiltInChatMode,
 ): string {
-  const pattern = new RegExp(`^\\s*/${mode}(?=\\s|$)\\s*`, "i");
-  const stripped = prompt.replace(pattern, "").trim();
-  return stripped || prompt;
+  return stripLeadingAgentPrefix(prompt, `/${mode}`);
 }
 
 function buildPromptRouting(
@@ -157,7 +188,7 @@ function buildPromptRouting(
 ): PromptRouting {
   const normalizedAgent =
     typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
-  const mode = resolveBuiltInChatMode(agent);
+  const chatOpenMode = resolveChatOpenMode(agent);
   let legacyPrompt = processedPrompt;
 
   if (normalizedAgent) {
@@ -168,11 +199,12 @@ function buildPromptRouting(
 
   return {
     normalizedAgent,
-    mode,
+    chatOpenMode,
     legacyPrompt,
-    chatOpenPrompt: mode
-      ? stripLeadingBuiltInModePrefix(legacyPrompt, mode)
-      : legacyPrompt,
+    chatOpenPrompt:
+      chatOpenMode && normalizedAgent
+        ? stripLeadingAgentPrefix(legacyPrompt, normalizedAgent)
+        : legacyPrompt,
   };
 }
 
@@ -296,6 +328,8 @@ export const __testOnly = {
   toSafeErrorDetails,
   normalizeAgentPrefix,
   resolveBuiltInChatMode,
+  resolveChatOpenMode,
+  stripLeadingAgentPrefix,
   stripLeadingBuiltInModePrefix,
   buildPromptRouting,
   buildModelSelectorCandidates,
@@ -336,7 +370,7 @@ export class CopilotExecutor {
 
     if (routing.normalizedAgent) {
       logDebug(
-        `[CopilotScheduler] Agent set: ${routing.normalizedAgent}, mode: ${routing.mode || "none"}, prompt length: ${routing.legacyPrompt.length}`,
+        `[CopilotScheduler] Agent set: ${routing.normalizedAgent}, mode: ${routing.chatOpenMode || "none"}, prompt length: ${routing.legacyPrompt.length}`,
       );
     } else {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
@@ -369,7 +403,7 @@ export class CopilotExecutor {
 
       const chatOpenResult = await this.tryOpenChatWithPrompt(
         routing.chatOpenPrompt,
-        routing.mode,
+        routing.chatOpenMode,
         resolved.selection,
         resolved.matched,
       );
@@ -406,7 +440,7 @@ export class CopilotExecutor {
 
   private async tryOpenChatWithPrompt(
     chatOpenPrompt: string,
-    mode: BuiltInChatMode | undefined,
+    mode: string | undefined,
     resolvedSelection: NormalizedModelSelection,
     resolvedModel: ModelInfo | undefined,
   ): Promise<{
