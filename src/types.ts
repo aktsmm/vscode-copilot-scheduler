@@ -216,6 +216,9 @@ export interface AgentInfo {
   /** Whether this is a custom agent */
   isCustom: boolean;
 
+  /** Actual runtime agent name/mode when it differs from the persisted id */
+  invocationName?: string;
+
   /** File path for custom agents */
   filePath?: string;
 }

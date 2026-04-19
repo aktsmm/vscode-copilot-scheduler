@@ -2,6 +2,36 @@ import * as assert from "assert";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("Parses custom agent name from frontmatter", async () => {
+    const parsed = __testOnly.parseAgentFrontmatterName(
+      ["---", "name: Fact Checker", "description: test", "---", "# body"].join(
+        "\n",
+      ),
+    );
+
+    assert.strictEqual(parsed, "Fact Checker");
+  });
+
+  test("Parses quoted custom agent names from frontmatter", () => {
+    const doubleQuoted = __testOnly.parseAgentFrontmatterName(
+      ["---", 'name: "Fact Checker"', "---"].join("\n"),
+    );
+    const singleQuoted = __testOnly.parseAgentFrontmatterName(
+      ["---", "name: 'Fact Checker'", "---"].join("\n"),
+    );
+
+    assert.strictEqual(doubleQuoted, "Fact Checker");
+    assert.strictEqual(singleQuoted, "Fact Checker");
+  });
+
+  test("Returns undefined when agent frontmatter has no name", () => {
+    const parsed = __testOnly.parseAgentFrontmatterName(
+      ["---", "description: test", "---", "# body"].join("\n"),
+    );
+
+    assert.strictEqual(parsed, undefined);
+  });
+
   test("Converts slash-command agents without prefix", () => {
     assert.strictEqual(__testOnly.normalizeAgentPrefix("ask"), "/ask");
     assert.strictEqual(__testOnly.normalizeAgentPrefix("agent"), "/agent");
@@ -52,7 +82,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     const routing = __testOnly.buildPromptRouting("Implement this", "edit");
 
     assert.deepStrictEqual(routing, {
-      normalizedAgent: "/edit",
+      requestedAgent: "/edit",
+      runtimeAgent: "/edit",
       chatOpenMode: "edit",
       chatOpenPrompt: "Implement this",
       legacyPrompt: "/edit Implement this",
@@ -66,7 +97,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     );
 
     assert.deepStrictEqual(routing, {
-      normalizedAgent: "@customReviewer",
+      requestedAgent: "@customReviewer",
+      runtimeAgent: "@customReviewer",
       chatOpenMode: "customReviewer",
       chatOpenPrompt: "Review recent changes",
       legacyPrompt: "@customReviewer Review recent changes",
@@ -80,7 +112,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     );
 
     assert.deepStrictEqual(routing, {
-      normalizedAgent: "@workspace",
+      requestedAgent: "@workspace",
+      runtimeAgent: "@workspace",
       chatOpenMode: undefined,
       chatOpenPrompt: "@workspace Search the codebase",
       legacyPrompt: "@workspace Search the codebase",
@@ -94,10 +127,59 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     );
 
     assert.deepStrictEqual(routing, {
-      normalizedAgent: "@planner",
+      requestedAgent: "@planner",
+      runtimeAgent: "@planner",
       chatOpenMode: "planner",
       chatOpenPrompt: "inspect the architecture",
       legacyPrompt: "@planner inspect the architecture",
+    });
+  });
+
+  test("Prompt routing rewrites saved custom id to runtime agent name", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "Review this claim",
+      "@fact-checker",
+      "@Fact Checker",
+    );
+
+    assert.deepStrictEqual(routing, {
+      requestedAgent: "@fact-checker",
+      runtimeAgent: "@Fact Checker",
+      chatOpenMode: "Fact Checker",
+      chatOpenPrompt: "Review this claim",
+      legacyPrompt: "@Fact Checker Review this claim",
+    });
+  });
+
+  test("Prompt routing rewrites prefixed saved custom id to runtime agent name", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "@fact-checker Review this claim",
+      "@fact-checker",
+      "@Fact Checker",
+    );
+
+    assert.deepStrictEqual(routing, {
+      requestedAgent: "@fact-checker",
+      runtimeAgent: "@Fact Checker",
+      chatOpenMode: "Fact Checker",
+      chatOpenPrompt: "Review this claim",
+      legacyPrompt: "@Fact Checker Review this claim",
+    });
+  });
+
+  test("Prompt routing keeps non-agent prompts when only runtime override exists", () => {
+    const routing = __testOnly.buildPromptRouting(
+      "@workspace Review this claim",
+      undefined,
+      "@Fact Checker",
+    );
+
+    assert.deepStrictEqual(routing, {
+      requestedAgent: "",
+      runtimeAgent: "@Fact Checker",
+      chatOpenMode: "Fact Checker",
+      chatOpenPrompt: "@workspace Review this claim",
+      legacyPrompt: "@workspace Review this claim",
     });
   });
 

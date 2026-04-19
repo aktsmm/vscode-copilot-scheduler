@@ -64,7 +64,8 @@ type AvailableModelsResult = {
 };
 
 type PromptRouting = {
-  normalizedAgent: string;
+  requestedAgent: string;
+  runtimeAgent: string;
   chatOpenMode?: string;
   chatOpenPrompt: string;
   legacyPrompt: string;
@@ -149,6 +150,39 @@ function resolveBuiltInChatMode(
   return undefined;
 }
 
+function parseAgentFrontmatterName(content: string): string | undefined {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) {
+    return undefined;
+  }
+
+  const frontmatter = match[1];
+  const nameMatch = frontmatter.match(
+    /^name:\s*(?:"([^"]+)"|'([^']+)'|(.+))$/m,
+  );
+  const rawName = nameMatch?.[1] || nameMatch?.[2] || nameMatch?.[3];
+  const trimmed = rawName?.trim();
+  return trimmed || undefined;
+}
+
+async function readAgentInvocationName(
+  filePath: string | undefined,
+): Promise<string | undefined> {
+  if (!filePath || path.extname(filePath).toLowerCase() !== ".md") {
+    return undefined;
+  }
+
+  try {
+    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+    return parseAgentFrontmatterName(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    logDebug(
+      `[CopilotScheduler] Failed to read agent frontmatter from ${filePath}: ${toSafeErrorDetails(error)}`,
+    );
+    return undefined;
+  }
+}
+
 function resolveChatOpenMode(agent: string | undefined): string | undefined {
   const normalized =
     typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
@@ -175,6 +209,24 @@ function stripLeadingAgentPrefix(prompt: string, prefix: string): string {
   return stripped || prompt;
 }
 
+function stripLeadingAgentPrefixes(
+  prompt: string,
+  prefixes: readonly string[],
+): string {
+  let current = prompt;
+  for (const prefix of prefixes) {
+    if (!prefix) {
+      continue;
+    }
+    const stripped = stripLeadingAgentPrefix(current, prefix);
+    if (stripped !== current) {
+      current = stripped;
+      break;
+    }
+  }
+  return current;
+}
+
 function stripLeadingBuiltInModePrefix(
   prompt: string,
   mode: BuiltInChatMode,
@@ -184,26 +236,50 @@ function stripLeadingBuiltInModePrefix(
 
 function buildPromptRouting(
   processedPrompt: string,
-  agent: string | undefined,
+  requestedAgent: string | undefined,
+  runtimeAgentOverride?: string,
 ): PromptRouting {
-  const normalizedAgent =
-    typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
-  const chatOpenMode = resolveChatOpenMode(agent);
+  const normalizedRequestedAgent =
+    typeof requestedAgent === "string"
+      ? normalizeAgentPrefix(requestedAgent)
+      : "";
+  const runtimeAgent = runtimeAgentOverride
+    ? normalizeAgentPrefix(runtimeAgentOverride)
+    : normalizedRequestedAgent;
+  const chatOpenMode = resolveChatOpenMode(runtimeAgent);
   let legacyPrompt = processedPrompt;
 
-  if (normalizedAgent) {
-    if (!processedPrompt.startsWith("@") && !processedPrompt.startsWith("/")) {
-      legacyPrompt = `${normalizedAgent} ${processedPrompt}`;
+  if (runtimeAgent) {
+    const strippedPrompt = stripLeadingAgentPrefixes(processedPrompt, [
+      normalizedRequestedAgent,
+      runtimeAgent,
+    ]);
+
+    if (
+      (normalizedRequestedAgent &&
+        processedPrompt.startsWith(normalizedRequestedAgent)) ||
+      processedPrompt.startsWith(runtimeAgent)
+    ) {
+      legacyPrompt = `${runtimeAgent} ${strippedPrompt}`;
+    } else if (
+      !processedPrompt.startsWith("@") &&
+      !processedPrompt.startsWith("/")
+    ) {
+      legacyPrompt = `${runtimeAgent} ${processedPrompt}`;
     }
   }
 
   return {
-    normalizedAgent,
+    requestedAgent: normalizedRequestedAgent,
+    runtimeAgent,
     chatOpenMode,
     legacyPrompt,
     chatOpenPrompt:
-      chatOpenMode && normalizedAgent
-        ? stripLeadingAgentPrefix(legacyPrompt, normalizedAgent)
+      chatOpenMode && runtimeAgent
+        ? stripLeadingAgentPrefixes(legacyPrompt, [
+            normalizedRequestedAgent,
+            runtimeAgent,
+          ])
         : legacyPrompt,
   };
 }
@@ -328,8 +404,11 @@ export const __testOnly = {
   toSafeErrorDetails,
   normalizeAgentPrefix,
   resolveBuiltInChatMode,
+  parseAgentFrontmatterName,
+  readAgentInvocationName,
   resolveChatOpenMode,
   stripLeadingAgentPrefix,
+  stripLeadingAgentPrefixes,
   stripLeadingBuiltInModePrefix,
   buildPromptRouting,
   buildModelSelectorCandidates,
@@ -366,11 +445,18 @@ export class CopilotExecutor {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
 
-    const routing = buildPromptRouting(processedPrompt, options?.agent);
+    const runtimeAgent = await CopilotExecutor.resolveAgentInvocationTarget(
+      options?.agent,
+    );
+    const routing = buildPromptRouting(
+      processedPrompt,
+      options?.agent,
+      runtimeAgent,
+    );
 
-    if (routing.normalizedAgent) {
+    if (routing.requestedAgent || routing.runtimeAgent) {
       logDebug(
-        `[CopilotScheduler] Agent set: ${routing.normalizedAgent}, mode: ${routing.chatOpenMode || "none"}, prompt length: ${routing.legacyPrompt.length}`,
+        `[CopilotScheduler] Agent set: requested=${routing.requestedAgent || "none"}, runtime=${routing.runtimeAgent || "none"}, mode=${routing.chatOpenMode || "none"}, prompt length: ${routing.legacyPrompt.length}`,
       );
     } else {
       logDebug(`[CopilotScheduler] No agent specified, using default`);
@@ -494,6 +580,44 @@ export class CopilotExecutor {
         resolvedSelection,
         resolvedModel,
       };
+    }
+  }
+
+  private static async resolveAgentInvocationTarget(
+    agent: string | undefined,
+  ): Promise<string | undefined> {
+    const normalizedAgent =
+      typeof agent === "string" ? normalizeAgentPrefix(agent) : "";
+    if (!normalizedAgent) {
+      return undefined;
+    }
+
+    if (
+      resolveBuiltInChatMode(normalizedAgent) ||
+      PARTICIPANT_STYLE_AGENTS.has(normalizedAgent)
+    ) {
+      return normalizedAgent;
+    }
+
+    try {
+      const agents = await CopilotExecutor.getAllAgents();
+      const matched = agents.find(
+        (candidate) =>
+          normalizeAgentPrefix(candidate.id) === normalizedAgent ||
+          normalizeAgentPrefix(candidate.name) === normalizedAgent,
+      );
+      if (!matched) {
+        return normalizedAgent;
+      }
+
+      const invocationName =
+        matched.invocationName || matched.name || matched.id;
+      return normalizeAgentPrefix(invocationName);
+    } catch (error) {
+      logDebug(
+        `[CopilotScheduler] Failed to resolve runtime agent target for ${normalizedAgent}: ${toSafeErrorDetails(error)}`,
+      );
+      return normalizedAgent;
     }
   }
 
@@ -760,11 +884,14 @@ export class CopilotExecutor {
 
     for (const file of agentFiles) {
       const fileName = path.basename(file.fsPath).replace(/\.agent\.md$/i, "");
+      const invocationName = await readAgentInvocationName(file.fsPath);
+      const runtimeLabel = normalizeAgentPrefix(invocationName || fileName);
       agents.push({
         id: `@${fileName}`,
-        name: `@${fileName}`,
+        name: runtimeLabel,
         description: messages.agentCustomDesc(),
         isCustom: true,
+        invocationName,
         filePath: file.fsPath,
       });
     }
@@ -799,6 +926,7 @@ export class CopilotExecutor {
               name: normalizedId,
               description: messages.agentAgentsMdDesc(),
               isCustom: true,
+              invocationName: agentName,
               filePath: file.fsPath,
             });
           }
@@ -839,15 +967,22 @@ export class CopilotExecutor {
           if (fileName.toLowerCase().endsWith(".agent.md")) {
             const agentName = fileName.replace(/\.agent\.md$/i, "");
             const agentId = `@${agentName}`;
+            const invocationName = await readAgentInvocationName(
+              path.join(globalPath, fileName),
+            );
+            const runtimeLabel = normalizeAgentPrefix(
+              invocationName || agentName,
+            );
             if (seenAgentIds.has(agentId)) {
               continue;
             }
             seenAgentIds.add(agentId);
             agents.push({
               id: agentId,
-              name: agentId,
+              name: runtimeLabel,
               description: messages.agentGlobalDesc(),
               isCustom: true,
+              invocationName,
               filePath: path.join(globalPath, fileName),
             });
           }

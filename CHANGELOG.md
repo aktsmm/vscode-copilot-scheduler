@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.43] - 2026-04-19
+
+### Fixed
+
+- **Custom agent selection**: The Scheduler now resolves saved custom agent ids such as `@fact-checker` through the agent frontmatter `name:` value at execution time, so custom agents launch with the correct Copilot Chat mode instead of falling back to a generic agent.
+- **Routing edge cases**: Prompt routing now avoids the latent `startsWith("")` branch bug when only a runtime agent override is available.
+
+### Tests
+
+- Added coverage for quoted agent frontmatter names, missing frontmatter names, saved-id to runtime-name rewriting, and runtime-override routing edge cases, and revalidated the suite with 208 passing tests.
+
 ## [1.0.42] - 2026-04-19
 
 ### Fixed
