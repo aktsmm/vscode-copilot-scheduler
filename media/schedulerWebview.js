@@ -390,6 +390,8 @@
   var maxExecutionsPerDayInput = document.getElementById(
     "max-executions-per-day",
   );
+  var allowedTimeEnabledInput = document.getElementById("allowed-time-enabled");
+  var allowedTimeFields = document.getElementById("allowed-time-fields");
   var allowedTimeStartInput = document.getElementById("allowed-time-start");
   var allowedTimeEndInput = document.getElementById("allowed-time-end");
   var friendlyFrequency = document.getElementById("friendly-frequency");
@@ -412,6 +414,28 @@
   function getSelectedBaseModelOption() {
     if (!modelSelect || modelSelect.selectedIndex < 0) return null;
     return modelSelect.options[modelSelect.selectedIndex] || null;
+  }
+
+  function setAllowedTimeWindowEnabled(enabled, clearValues) {
+    var isEnabled = !!enabled;
+    if (allowedTimeEnabledInput) {
+      allowedTimeEnabledInput.checked = isEnabled;
+    }
+    if (allowedTimeFields) {
+      allowedTimeFields.classList.toggle("disabled", !isEnabled);
+    }
+    if (allowedTimeStartInput) {
+      allowedTimeStartInput.disabled = !isEnabled;
+      if (!isEnabled && clearValues) {
+        allowedTimeStartInput.value = "";
+      }
+    }
+    if (allowedTimeEndInput) {
+      allowedTimeEndInput.disabled = !isEnabled;
+      if (!isEnabled && clearValues) {
+        allowedTimeEndInput.value = "";
+      }
+    }
   }
 
   function getSelectedVariantOption() {
@@ -1119,6 +1143,13 @@
         promptPathValue = pendingTemplatePath;
       }
 
+      var isAllowedTimeWindowEnabled = allowedTimeEnabledInput
+        ? allowedTimeEnabledInput.checked
+        : !!(
+            (allowedTimeStartInput && allowedTimeStartInput.value) ||
+            (allowedTimeEndInput && allowedTimeEndInput.value)
+          );
+
       var taskData = {
         name: taskNameEl ? taskNameEl.value : "",
         prompt: promptTextEl ? promptTextEl.value : "",
@@ -1141,12 +1172,14 @@
         maxExecutionsPerDay: maxExecutionsPerDayInput
           ? boundedNumber(maxExecutionsPerDayInput.value || 0, 0, 100, 0)
           : 0,
-        allowedTimeStart: allowedTimeStartInput
-          ? String(allowedTimeStartInput.value || "").trim()
-          : "",
-        allowedTimeEnd: allowedTimeEndInput
-          ? String(allowedTimeEndInput.value || "").trim()
-          : "",
+        allowedTimeStart:
+          isAllowedTimeWindowEnabled && allowedTimeStartInput
+            ? String(allowedTimeStartInput.value || "").trim()
+            : "",
+        allowedTimeEnd:
+          isAllowedTimeWindowEnabled && allowedTimeEndInput
+            ? String(allowedTimeEndInput.value || "").trim()
+            : "",
         enabled: editingTaskId ? editingTaskEnabled : true,
       };
 
@@ -2122,6 +2155,7 @@
     if (allowedTimeEndInput) {
       allowedTimeEndInput.value = "";
     }
+    setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     var defaultScopeInput = document.querySelector(
       'input[name="scope"][value="' + defaultScope + '"]',
@@ -2393,6 +2427,10 @@
     if (allowedTimeEndInput) {
       allowedTimeEndInput.value = task.allowedTimeEnd || "";
     }
+    setAllowedTimeWindowEnabled(
+      !!(task.allowedTimeStart || task.allowedTimeEnd),
+      false,
+    );
 
     // Clear "run first" checkbox in edit mode (not applicable for existing tasks)
     var runFirstEl = document.getElementById("run-first");
@@ -2426,6 +2464,20 @@
       window.deleteTask(editingTaskId);
     });
   }
+
+  if (allowedTimeEnabledInput) {
+    allowedTimeEnabledInput.addEventListener("change", function () {
+      setAllowedTimeWindowEnabled(allowedTimeEnabledInput.checked, true);
+    });
+  }
+
+  setAllowedTimeWindowEnabled(
+    !!(
+      (allowedTimeStartInput && allowedTimeStartInput.value) ||
+      (allowedTimeEndInput && allowedTimeEndInput.value)
+    ),
+    false,
+  );
 
   window.copyPrompt = function (id) {
     // Route through the action callback so that template-based prompts

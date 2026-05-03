@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.45] - 2026-05-04
+
+### Improved
+
+- **Allowed time window clarity**: The Scheduler form now uses an explicit `Limit execution to a time window` checkbox, so leaving the time window off clearly means the task can run all day.
+- **Time window reset behavior**: Turning the time window off disables and clears the start/end time inputs before saving, while editing an existing task restores the checkbox when saved time limits are present.
+
+### Tests
+
+- Added webview contract coverage for the explicit allowed-time-window checkbox and its script wiring.
+
 ## [1.0.44] - 2026-04-20
 
 ### Fixed

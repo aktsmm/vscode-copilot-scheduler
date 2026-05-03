@@ -1038,6 +1038,7 @@ export class SchedulerWebview {
       labelJitterSeconds: messages.labelJitterSeconds(),
       labelMaxExecutionsPerDay: messages.labelMaxExecutionsPerDay(),
       labelAllowedTimeWindow: messages.labelAllowedTimeWindow(),
+      labelAllowedTimeWindowEnabled: messages.labelAllowedTimeWindowEnabled(),
       labelAllowedTimeStart: messages.labelAllowedTimeStart(),
       labelAllowedTimeEnd: messages.labelAllowedTimeEnd(),
       placeholderTaskName: messages.placeholderTaskName(),
@@ -1798,6 +1799,10 @@ export class SchedulerWebview {
       gap: 12px;
     }
 
+    .time-window-grid.disabled {
+      opacity: 0.6;
+    }
+
     @media (max-width: 860px) {
       body {
         padding: 16px;
@@ -2046,7 +2051,11 @@ export class SchedulerWebview {
 
             <div class="form-group col-4">
               <label>${escapeHtml(strings.labelAllowedTimeWindow)}</label>
-              <div class="time-window-grid">
+              <div class="checkbox-group">
+                <input type="checkbox" id="allowed-time-enabled">
+                <label for="allowed-time-enabled">${escapeHtml(strings.labelAllowedTimeWindowEnabled)}</label>
+              </div>
+              <div class="time-window-grid" id="allowed-time-fields">
                 <div class="form-group">
                   <label for="allowed-time-start">${escapeHtml(strings.labelAllowedTimeStart)}</label>
                   <input type="time" id="allowed-time-start" step="60">

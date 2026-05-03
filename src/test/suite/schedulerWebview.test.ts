@@ -1064,6 +1064,49 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("allowed time window UI uses explicit enable checkbox", () => {
+    const htmlSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const expectedHtmlTokens = [
+      "labelAllowedTimeWindowEnabled:",
+      'id="allowed-time-enabled"',
+      'id="allowed-time-fields"',
+      "strings.labelAllowedTimeWindowEnabled",
+    ];
+
+    for (const token of expectedHtmlTokens) {
+      assert.ok(
+        sourceContainsToken(htmlSource, token),
+        `Expected allowed time window HTML token not found: ${token}`,
+      );
+    }
+
+    const expectedScriptTokens = [
+      'document.getElementById("allowed-time-enabled")',
+      "function setAllowedTimeWindowEnabled(enabled, clearValues) {",
+      'allowedTimeFields.classList.toggle("disabled", !isEnabled);',
+      "allowedTimeStartInput.disabled = !isEnabled;",
+      "var isAllowedTimeWindowEnabled = allowedTimeEnabledInput",
+      "setAllowedTimeWindowEnabled(false, false);",
+      "setAllowedTimeWindowEnabled(\n      !!(task.allowedTimeStart || task.allowedTimeEnd),",
+      'allowedTimeEnabledInput.addEventListener("change", function () {',
+    ];
+
+    for (const token of expectedScriptTokens) {
+      assert.ok(
+        sourceContainsToken(scriptSource, token),
+        `Expected allowed time window script token not found: ${token}`,
+      );
+    }
+  });
+
   test("webview script removes stale show-all-models references", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

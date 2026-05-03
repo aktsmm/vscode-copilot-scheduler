@@ -385,6 +385,8 @@ export const messages = {
   labelMaxExecutionsPerDay: () =>
     t("Task Max Runs/Day (0=unlimited)", "タスク上限/日（0=無制限）"),
   labelAllowedTimeWindow: () => t("Allowed Time Window", "実行許可時間帯"),
+  labelAllowedTimeWindowEnabled: () =>
+    t("Limit execution to a time window", "実行時間帯を制限する"),
   labelAllowedTimeStart: () => t("Start (HH:mm)", "開始（HH:mm）"),
   labelAllowedTimeEnd: () => t("End (HH:mm)", "終了（HH:mm）"),
   webviewAutoModeNote: () =>
@@ -404,8 +406,8 @@ export const messages = {
     ),
   webviewAllowedTimeWindowNote: () =>
     t(
-      "Runs only during this local time range. Leave blank to allow all day.",
-      "このローカル時刻範囲内のみ実行します。空欄なら終日実行可能です。",
+      "Off means all day. Turn this on to run only during the selected local time range.",
+      "オフなら終日実行可能です。オンにすると選択したローカル時刻範囲内のみ実行します。",
     ),
 
   // Friendly cron builder / day labels
