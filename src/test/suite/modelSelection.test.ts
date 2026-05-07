@@ -180,6 +180,121 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("filterPickerModelCatalog keeps Internal only Copilot models in the default picker", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      },
+      {
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-1m-internal",
+      },
+      {
+        id: "claude-opus-4.7-high",
+        name: "Claude Opus 4.7 (High reasoning)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-high",
+      },
+      {
+        id: "claude-opus-4.7-xhigh",
+        name: "Claude Opus 4.7 (Extra high reasoning)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-xhigh",
+      },
+    ]);
+
+    const pickerCatalog = filterPickerModelCatalog(catalog);
+    const groups = buildModelPickerGroups(pickerCatalog);
+
+    assert.deepStrictEqual(
+      pickerCatalog.map((model) => model.id),
+      [
+        "claude-opus-4.7",
+        "claude-opus-4.7-1m-internal",
+        "claude-opus-4.7-high",
+        "claude-opus-4.7-xhigh",
+      ],
+    );
+    assert.deepStrictEqual(
+      groups.map((group) => [
+        group.label,
+        group.variants.map((variant) => variant.label),
+      ]),
+      [
+        ["Claude Opus 4.7", ["Claude Opus 4.7"]],
+        [
+          "Claude Opus 4.7 (1M context, Internal only)",
+          ["Claude Opus 4.7 (1M context, Internal only)"],
+        ],
+        [
+          "Claude Opus 4.7 (High reasoning, Internal only)",
+          ["Claude Opus 4.7 (High reasoning, Internal only)"],
+        ],
+        [
+          "Claude Opus 4.7 (Extra high reasoning, Internal only)",
+          ["Claude Opus 4.7 (Extra high reasoning, Internal only)"],
+        ],
+      ],
+    );
+  });
+
+  test("buildModelPickerGroups keeps Claude Opus 4.7 runtime reasoning variants as separate models", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      },
+      {
+        id: "claude-opus-4.7-high",
+        name: "Claude Opus 4.7 (High reasoning)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-high",
+      },
+      {
+        id: "claude-opus-4.7-xhigh",
+        name: "Claude Opus 4.7 (Extra high reasoning)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-xhigh",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.deepStrictEqual(
+      groups.map((group) => [
+        group.label,
+        group.variants.map((variant) => variant.label),
+      ]),
+      [
+        ["Claude Opus 4.7", ["Claude Opus 4.7"]],
+        [
+          "Claude Opus 4.7 (High reasoning, Internal only)",
+          ["Claude Opus 4.7 (High reasoning, Internal only)"],
+        ],
+        [
+          "Claude Opus 4.7 (Extra high reasoning, Internal only)",
+          ["Claude Opus 4.7 (Extra high reasoning, Internal only)"],
+        ],
+      ],
+    );
+  });
+
   test("filterPickerModelCatalog keeps runtime quality variants for Copilot-exposed groups", () => {
     const catalog = normalizeModelCatalog([
       {
@@ -507,6 +622,37 @@ suite("Model Selection Catalog Tests", () => {
         variant.reasoningEffort || "default",
       ]),
       [["Claude Opus 4.7", "default"]],
+    );
+  });
+
+  test("buildModelPickerGroups synthesizes preview thinking effort variants for Claude Opus 4.7 1M internal", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-1m-internal",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+      ],
     );
   });
 

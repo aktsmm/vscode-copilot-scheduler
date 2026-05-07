@@ -9,14 +9,11 @@ import {
 const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^extra[-\s]+high$/iu, label: "Extra High" },
   { pattern: /^high$/iu, label: "High" },
-  { pattern: /^medium$/iu, label: "Medium" },
-  { pattern: /^low$/iu, label: "Low" },
+  { pattern: /^medium(?:[-\s]+reasoning)?$/iu, label: "Medium" },
+  { pattern: /^low(?:[-\s]+reasoning)?$/iu, label: "Low" },
 ];
 
-const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [
-  /claude(?:[\s-]*)code/iu,
-  /internal(?:[\s-]*)only/iu,
-];
+const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [/claude(?:[\s-]*)code/iu];
 const COPILOT_VENDOR_KEYS = new Set([
   "copilot",
   "github-copilot",

@@ -49,6 +49,10 @@ const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] 
       efforts: ["low", "medium", "high", "xhigh"],
     },
     {
+      familyPattern: /^claude-opus-4-7-1m(?:$|-)/u,
+      efforts: ["low", "medium", "high", "xhigh"],
+    },
+    {
       familyPattern: /^claude-opus(?:$|-)/u,
       efforts: ["low", "medium", "high"],
     },
@@ -60,6 +64,10 @@ const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] 
 
 const EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
   /^claude-opus-4-7(?:$|-)/u,
+];
+
+const EXPERIMENTAL_MODEL_QUALITY_INCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
+  /^claude-opus-4-7-1m(?:$|-)/u,
 ];
 
 function trimOptionalText(value: unknown): string | undefined {
@@ -95,7 +103,18 @@ function getExperimentalModelQualityKeys(
 function isExcludedExperimentalModelQualityTarget(
   model: ExperimentalModelQualityTarget,
 ): boolean {
-  return getExperimentalModelQualityKeys(model).some((key) =>
+  const keys = getExperimentalModelQualityKeys(model);
+  if (
+    keys.some((key) =>
+      EXPERIMENTAL_MODEL_QUALITY_INCLUDED_FAMILY_PATTERNS.some((pattern) =>
+        pattern.test(key),
+      ),
+    )
+  ) {
+    return false;
+  }
+
+  return keys.some((key) =>
     EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS.some((pattern) =>
       pattern.test(key),
     ),

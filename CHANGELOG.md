@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.46] - 2026-05-08
+
+### Fixed
+
+- **Claude Opus 4.7 internal model picker parity**: The Scheduler now keeps `Claude Opus 4.7` itself at default-only, preserves the explicit `High reasoning` / `Extra high reasoning` internal models as separate entries, and exposes `Low` / `Medium` / `High` / `Xhigh` thinking effort options on `Claude Opus 4.7 (1M context)(Internal only)` to better mirror the current Copilot Chat picker.
+- **Internal model visibility**: `Internal only` Copilot models now remain visible in the default picker instead of being filtered out entirely.
+
+### Tests
+
+- Added regression coverage for Claude Opus 4.7 internal picker grouping and the 1M internal thinking-effort allowlist.
+
 ## [1.0.45] - 2026-05-04
 
 ### Improved

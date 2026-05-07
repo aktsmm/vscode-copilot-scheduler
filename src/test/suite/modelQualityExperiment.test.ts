@@ -172,5 +172,44 @@ suite("Model Quality Experiment Tests", () => {
       }),
       false,
     );
+
+    assert.strictEqual(
+      supportsExperimentalModelQuality({
+        vendor: "copilot",
+        family: "claude-opus-4.7-1m-internal",
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)(Internal only)",
+      }),
+      true,
+    );
+
+    assert.deepStrictEqual(
+      getSupportedExperimentalReasoningEfforts({
+        vendor: "copilot",
+        family: "claude-opus-4.7-1m-internal",
+        id: "claude-opus-4.7-1m-internal",
+      }),
+      ["low", "medium", "high", "xhigh"],
+    );
+
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)(Internal only)",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.7-1m-internal",
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+      ],
+    );
   });
 });
