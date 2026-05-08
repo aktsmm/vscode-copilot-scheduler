@@ -6,7 +6,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { parseExpression } from "cron-parser";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -26,6 +25,12 @@ import {
   normalizeModelSelection,
   type NormalizedModelSelection,
 } from "./modelSelection";
+import {
+  getFirstDistinctCronRuns,
+  getNextCronRun,
+  splitCronExpressions,
+  validateCronExpressions,
+} from "./cronExpressions";
 import {
   normalizeForCompare,
   resolveGlobalPromptPath,
@@ -168,6 +173,7 @@ export const __testOnly = {
   toSafeErrorDetails,
   normalizeTimeWindowHHMM,
   isNowWithinAllowedTimeWindow,
+  splitCronExpressions,
 };
 
 function applyModelSelectionToTask(
@@ -616,9 +622,14 @@ export class ScheduleManager {
       currentDate: Date;
       tz?: string;
     }): string | undefined => {
-      const interval = parseExpression(cronExpression, options);
-      const first = interval.next().toDate();
-      const second = interval.next().toDate();
+      const [first, second] = getFirstDistinctCronRuns(
+        cronExpression,
+        options,
+        2,
+      );
+      if (!first || !second) {
+        return undefined;
+      }
       const diffMinutes = (second.getTime() - first.getTime()) / (1000 * 60);
 
       if (diffMinutes < 30) {
@@ -1114,8 +1125,7 @@ export class ScheduleManager {
         options.tz = tz;
       }
 
-      const interval = parseExpression(cronExpression, options);
-      return interval.next().toDate();
+      return getNextCronRun(cronExpression, options);
     } catch {
       // If the configured timezone is invalid, fall back to local time (U9).
       if (tz) {
@@ -1123,8 +1133,7 @@ export class ScheduleManager {
           `[CopilotScheduler] Invalid timezone "${tz}", falling back to local time`,
         );
         try {
-          const interval = parseExpression(cronExpression, { currentDate });
-          return interval.next().toDate();
+          return getNextCronRun(cronExpression, { currentDate });
         } catch {
           return undefined;
         }
@@ -1180,13 +1189,13 @@ export class ScheduleManager {
       if (tz) {
         options.tz = tz;
       }
-      parseExpression(expression, options);
+      validateCronExpressions(expression, options);
       return;
     } catch {
       // If timezone is invalid, retry without tz.
       if (tz) {
         try {
-          parseExpression(expression, { currentDate });
+          validateCronExpressions(expression, { currentDate });
           return;
         } catch {
           // Fall through to throw

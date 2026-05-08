@@ -61,7 +61,7 @@ export interface ScheduledTask {
   /** Task name */
   name: string;
 
-  /** Cron expression (e.g., "0 9 * * 1-5") */
+  /** Cron expression, or multiple newline-separated expressions. */
   cronExpression: string;
 
   /** Prompt text to send to Copilot (when promptSource is "inline") */

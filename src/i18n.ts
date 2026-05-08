@@ -424,7 +424,7 @@ export const messages = {
   labelFriendlyFallback: () =>
     t("Preview unavailable for this expression", "このCronの説明はありません"),
   labelFriendlySelect: () => t("Select frequency", "頻度を選択"),
-  labelEveryNMinutes: () => t("Every N minutes", "N分ごと"),
+  labelEveryNMinutes: () => t("Every interval", "指定間隔ごと"),
   labelHourlyAtMinute: () => t("Hourly at minute", "毎時 指定分"),
   labelDailyAtTime: () => t("Daily at time", "毎日 時刻"),
   labelWeeklyAtTime: () => t("Weekly at day/time", "毎週 曜日+時刻"),
@@ -434,9 +434,17 @@ export const messages = {
   labelDayOfMonth: () => t("Day of month", "実行日"),
   labelDayOfWeek: () => t("Day of week", "曜日"),
   labelOpenInGuru: () => t("Open in crontab.guru", "crontab.guruを開く"),
+  labelUnsupportedInterval: () =>
+    t(
+      "This interval cannot be represented exactly with standard cron.",
+      "この間隔は標準Cronでは厳密に表現できません。",
+    ),
 
   // Cron preview templates (used in media/schedulerWebview.js)
   cronPreviewEveryNMinutes: () => t("Every {n} minutes", "{n}分ごと"),
+  cronPreviewEveryNHours: () => t("Every {n} hours", "{n}時間ごと"),
+  cronPreviewMultipleExpressions: () =>
+    t("Multiple cron expressions", "複数のCron式"),
   cronPreviewHourlyAtMinute: () => t("Hourly at minute {m}", "毎時 {m}分"),
   cronPreviewDailyAt: () => t("Daily at {t}", "毎日 {t}"),
   cronPreviewWeekdaysAt: () => t("Weekdays at {t}", "平日 {t}"),
@@ -656,5 +664,8 @@ export function formatCronForDisplay(expression: string): string {
   if (preset) {
     return preset.name;
   }
-  return expression;
+  return String(expression || "")
+    .replace(/[\r\n]+/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

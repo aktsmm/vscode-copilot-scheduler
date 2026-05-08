@@ -364,6 +364,20 @@
     global: true,
     "other-workspaces": false,
   };
+  var friendlyIntervalMinutes = Array.isArray(
+    initialData.friendlyIntervalMinutes,
+  )
+    ? initialData.friendlyIntervalMinutes
+        .map(function (value) {
+          return Number(value);
+        })
+        .filter(function (value) {
+          return Number.isFinite(value) && value > 0 && value <= 1440;
+        })
+    : [
+        1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45,
+        48, 60, 72, 80, 90, 96, 120, 180, 240, 360, 480, 720, 1440,
+      ];
 
   // DOM elements - with null safety
   var taskForm = document.getElementById("task-form");
@@ -1049,6 +1063,10 @@
       if (!expression) {
         expression = "* * * * *";
       }
+      if (splitCronLines(expression).length > 1) {
+        showFormError(strings.cronPreviewMultipleExpressions || "", 5000);
+        return;
+      }
       var targetUrl = "https://crontab.guru/#" + encodeURIComponent(expression);
       window.open(targetUrl, "_blank");
     });
@@ -1551,7 +1569,10 @@
         promptText.length > 180
           ? promptText.substring(0, 180) + "..."
           : promptText;
-      var cronText = escapeHtml(task.cronExpression || "");
+      var cronText = escapeHtml(task.cronExpression || "").replace(
+        /\r?\n/g,
+        "<br>",
+      );
       var taskName = escapeHtml(task.name || "");
       var promptSourceLabel = getPromptSourceLabel(task);
 
@@ -1893,10 +1914,111 @@
     return padNumber(hour) + ":" + padNumber(minute);
   }
 
+  function splitCronLines(expression) {
+    return String(expression || "")
+      .split(/\r?\n/)
+      .map(function (line) {
+        return line.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeCronExpressionForCompare(expression) {
+    return splitCronLines(expression).join("\n");
+  }
+
+  function formatIntervalLabel(totalMinutes) {
+    if (totalMinutes % 60 === 0) {
+      var tplHours = strings.cronPreviewEveryNHours || "";
+      return tplHours ? tplHours.replace("{n}", String(totalMinutes / 60)) : "";
+    }
+    var tplMinutes = strings.cronPreviewEveryNMinutes || "";
+    return tplMinutes ? tplMinutes.replace("{n}", String(totalMinutes)) : "";
+  }
+
+  function buildStrictIntervalCron(totalMinutes) {
+    var minutes = Number(totalMinutes);
+    if (!Number.isFinite(minutes) || Math.floor(minutes) !== minutes) return "";
+    if (minutes <= 0 || minutes > 1440) return "";
+
+    if (minutes < 60 && 60 % minutes === 0) {
+      return "*/" + minutes + " * * * *";
+    }
+    if (minutes === 60) {
+      return "0 * * * *";
+    }
+    if (minutes % 60 === 0) {
+      var hours = minutes / 60;
+      if (24 % hours === 0) {
+        return "0 */" + hours + " * * *";
+      }
+    }
+    if (1440 % minutes !== 0) {
+      return "";
+    }
+
+    var minutesToHours = Object.create(null);
+    for (var minuteOfDay = 0; minuteOfDay < 1440; minuteOfDay += minutes) {
+      var hour = Math.floor(minuteOfDay / 60);
+      var minute = minuteOfDay % 60;
+      if (!minutesToHours[minute]) {
+        minutesToHours[minute] = [];
+      }
+      minutesToHours[minute].push(hour);
+    }
+
+    var groups = [];
+    var groupByHours = Object.create(null);
+    var minuteKeys = Object.keys(minutesToHours).sort(function (a, b) {
+      return Number(a) - Number(b);
+    });
+    for (var keyIndex = 0; keyIndex < minuteKeys.length; keyIndex++) {
+      var minuteKey = minuteKeys[keyIndex];
+      var hoursForMinute = minutesToHours[minuteKey];
+      var key = hoursForMinute.join(",");
+      if (!groupByHours[key]) {
+        groupByHours[key] = { minutes: [], hours: hoursForMinute };
+        groups.push(groupByHours[key]);
+      }
+      var minuteNumber = Number(minuteKey);
+      if (groupByHours[key].minutes.indexOf(minuteNumber) === -1) {
+        groupByHours[key].minutes.push(minuteNumber);
+      }
+    }
+
+    return groups
+      .map(function (group) {
+        return group.minutes.join(",") + " " + group.hours.join(",") + " * * *";
+      })
+      .join("\n");
+  }
+
+  function getStrictIntervalSummary(expression) {
+    var normalized = normalizeCronExpressionForCompare(expression);
+    for (var i = 0; i < friendlyIntervalMinutes.length; i++) {
+      var minutes = friendlyIntervalMinutes[i];
+      if (
+        normalizeCronExpressionForCompare(buildStrictIntervalCron(minutes)) ===
+        normalized
+      ) {
+        return formatIntervalLabel(minutes);
+      }
+    }
+    return "";
+  }
+
   function getCronSummary(expression) {
     var fallback = strings.labelFriendlyFallback || "";
     var expr = (expression || "").trim();
     if (!expr) return fallback;
+
+    var strictIntervalSummary = getStrictIntervalSummary(expr);
+    if (strictIntervalSummary) return strictIntervalSummary;
+
+    var lines = splitCronLines(expr);
+    if (lines.length > 1) {
+      return strings.cronPreviewMultipleExpressions || fallback;
+    }
 
     var parts = expr.split(/\s+/);
     if (parts.length !== 5) {
@@ -1991,7 +2113,15 @@
 
   function updateCronPreview() {
     if (!cronPreviewText || !cronExpression) return;
-    cronPreviewText.textContent = getCronSummary(cronExpression.value || "");
+    var expression = cronExpression.value || "";
+    cronPreviewText.textContent = getCronSummary(expression);
+    if (openGuruBtn) {
+      var hasMultipleLines = splitCronLines(expression).length > 1;
+      openGuruBtn.disabled = hasMultipleLines;
+      openGuruBtn.title = hasMultipleLines
+        ? strings.cronPreviewMultipleExpressions || ""
+        : strings.labelOpenInGuru || "";
+    }
   }
 
   function updateFriendlyVisibility() {
@@ -2042,10 +2172,14 @@
         var interval = boundedNumber(
           friendlyInterval ? friendlyInterval.value : "",
           1,
-          59,
-          5,
+          1440,
+          20,
         );
-        expr = "*/" + interval + " * * * *";
+        expr = buildStrictIntervalCron(interval);
+        if (!expr) {
+          showFormError(strings.labelUnsupportedInterval || "", 5000);
+          return;
+        }
         break;
       }
       case "hourly": {
@@ -2112,7 +2246,7 @@
         var domValue = boundedNumber(
           friendlyDom ? friendlyDom.value : "",
           1,
-          31,
+          28,
           1,
         );
         expr = monthlyMinute + " " + monthlyHour + " " + domValue + " * *";

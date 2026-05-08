@@ -262,6 +262,112 @@ function loadWebviewSanitizeFunction(
   return factory(URL, redactedPlaceholder);
 }
 
+function loadWebviewStrictIntervalCronFunction(): (
+  totalMinutes: number,
+) => string {
+  const scriptPath = path.resolve(
+    __dirname,
+    "../../../media/schedulerWebview.js",
+  );
+  const source = fs.readFileSync(scriptPath, "utf8");
+
+  const snippet = [
+    extractFunctionSource(source, "buildStrictIntervalCron"),
+    "return buildStrictIntervalCron;",
+  ].join("\n");
+
+  const factory = new Function(snippet) as () => (
+    totalMinutes: number,
+  ) => string;
+  return factory();
+}
+
+suite("SchedulerWebview Friendly Cron Builder Tests", () => {
+  test("strict interval builder keeps exact single-cron intervals", () => {
+    const build = loadWebviewStrictIntervalCronFunction();
+
+    assert.strictEqual(build(20), "*/20 * * * *");
+    assert.strictEqual(build(60), "0 * * * *");
+    assert.strictEqual(build(120), "0 */2 * * *");
+    assert.strictEqual(build(180), "0 */3 * * *");
+  });
+
+  test("strict interval builder expands exact multi-line intervals", () => {
+    const build = loadWebviewStrictIntervalCronFunction();
+
+    assert.strictEqual(
+      build(40),
+      [
+        "0,40 0,2,4,6,8,10,12,14,16,18,20,22 * * *",
+        "20 1,3,5,7,9,11,13,15,17,19,21,23 * * *",
+      ].join("\n"),
+    );
+    assert.strictEqual(
+      build(90),
+      ["0 0,3,6,9,12,15,18,21 * * *", "30 1,4,7,10,13,16,19,22 * * *"].join(
+        "\n",
+      ),
+    );
+  });
+
+  test("strict interval builder rejects inexact standard-cron intervals", () => {
+    const build = loadWebviewStrictIntervalCronFunction();
+
+    assert.strictEqual(build(7), "");
+    assert.strictEqual(build(25), "");
+    assert.strictEqual(build(50), "");
+  });
+
+  test("friendly cron form uses select controls for bounded fields", () => {
+    const webviewSourcePath = path.resolve(
+      __dirname,
+      "../../../src/schedulerWebview.ts",
+    );
+    const source = fs.readFileSync(webviewSourcePath, "utf8");
+
+    assert.ok(
+      sourceContainsToken(source, '<select id="friendly-interval">'),
+      "friendly interval should be a select.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '<select id="friendly-minute">'),
+      "friendly minute should be a select.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '<select id="friendly-hour">'),
+      "friendly hour should be a select.",
+    );
+    assert.ok(
+      sourceContainsToken(source, "Array.from({ length: 28 }"),
+      "monthly day options should default to days 1-28.",
+    );
+    assert.ok(
+      sourceContainsToken(
+        source,
+        "friendlyIntervalMinutes: FRIENDLY_INTERVAL_MINUTES",
+      ),
+      "friendly interval options should be passed through initial data.",
+    );
+  });
+
+  test("crontab.guru button is disabled for multi-line expressions", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    assert.ok(
+      sourceContainsToken(source, "splitCronLines(expression).length > 1"),
+      "crontab.guru click handler should reject multi-line cron expressions.",
+    );
+    assert.ok(
+      sourceContainsToken(source, "openGuruBtn.disabled = hasMultipleLines"),
+      "preview update should disable crontab.guru for multi-line cron expressions.",
+    );
+  });
+});
+
 suite("SchedulerWebview Message Queue Tests", () => {
   test("Queues messages until ready and flushes (dedup by type)", () => {
     const wv = SchedulerWebview as unknown as {

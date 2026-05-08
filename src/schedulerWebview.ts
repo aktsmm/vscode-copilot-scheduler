@@ -34,6 +34,11 @@ import {
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 
+const FRIENDLY_INTERVAL_MINUTES = [
+  1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
+  60, 72, 80, 90, 96, 120, 180, 240, 360, 480, 720, 1440,
+];
+
 /**
  * Manages the Webview panel for task management
  */
@@ -1098,8 +1103,11 @@ export class SchedulerWebview {
       labelDayOfMonth: messages.labelDayOfMonth(),
       labelDayOfWeek: messages.labelDayOfWeek(),
       labelOpenInGuru: messages.labelOpenInGuru(),
+      labelUnsupportedInterval: messages.labelUnsupportedInterval(),
 
       cronPreviewEveryNMinutes: messages.cronPreviewEveryNMinutes(),
+      cronPreviewEveryNHours: messages.cronPreviewEveryNHours(),
+      cronPreviewMultipleExpressions: messages.cronPreviewMultipleExpressions(),
       cronPreviewHourlyAtMinute: messages.cronPreviewHourlyAtMinute(),
       cronPreviewDailyAt: messages.cronPreviewDailyAt(),
       cronPreviewWeekdaysAt: messages.cronPreviewWeekdaysAt(),
@@ -1150,6 +1158,27 @@ export class SchedulerWebview {
     const serializeForWebview = this.serializeForWebview;
     const escapeHtmlAttr = this.escapeHtmlAttr;
     const escapeHtml = this.escapeHtml;
+    const friendlyIntervalOptions = FRIENDLY_INTERVAL_MINUTES.map((minutes) => {
+      const label =
+        minutes % 60 === 0
+          ? strings.cronPreviewEveryNHours.replace("{n}", String(minutes / 60))
+          : strings.cronPreviewEveryNMinutes.replace("{n}", String(minutes));
+      return `<option value="${minutes}"${minutes === 20 ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+    const minuteOptions = Array.from(
+      { length: 60 },
+      (_, minute) =>
+        `<option value="${minute}"${minute === 0 ? " selected" : ""}>${String(minute).padStart(2, "0")}</option>`,
+    ).join("");
+    const hourOptions = Array.from(
+      { length: 24 },
+      (_, hour) =>
+        `<option value="${hour}"${hour === 9 ? " selected" : ""}>${String(hour).padStart(2, "0")}</option>`,
+    ).join("");
+    const dayOfMonthOptions = Array.from({ length: 28 }, (_, index) => {
+      const day = index + 1;
+      return `<option value="${day}"${day === 1 ? " selected" : ""}>${day}</option>`;
+    }).join("");
 
     const initialData = {
       tasks: initialTasks,
@@ -1163,6 +1192,7 @@ export class SchedulerWebview {
       promptTemplates: initialTemplates,
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
+      friendlyIntervalMinutes: FRIENDLY_INTERVAL_MINUTES,
       defaultScope,
       defaultAutoMode,
       defaultJitterSeconds,
@@ -1913,7 +1943,7 @@ export class SchedulerWebview {
                   ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtml(p.name)}</option>`).join("")}
                 </select>
               </div>
-              <input type="text" id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required>
+              <textarea id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required rows="2"></textarea>
               <div class="cron-preview">
                 <strong>${escapeHtml(strings.labelFriendlyPreview)}:</strong>
                 <span id="cron-preview-text">${escapeHtml(strings.labelFriendlyFallback)}</span>
@@ -1935,15 +1965,21 @@ export class SchedulerWebview {
                   </div>
                   <div class="form-group friendly-field" data-field="interval">
                     <label for="friendly-interval">${escapeHtml(strings.labelInterval)}</label>
-                    <input type="number" id="friendly-interval" min="1" max="59" value="5">
+                    <select id="friendly-interval">
+                      ${friendlyIntervalOptions}
+                    </select>
                   </div>
                   <div class="form-group friendly-field" data-field="minute">
                     <label for="friendly-minute">${escapeHtml(strings.labelMinute)}</label>
-                    <input type="number" id="friendly-minute" min="0" max="59" value="0">
+                    <select id="friendly-minute">
+                      ${minuteOptions}
+                    </select>
                   </div>
                   <div class="form-group friendly-field" data-field="hour">
                     <label for="friendly-hour">${escapeHtml(strings.labelHour)}</label>
-                    <input type="number" id="friendly-hour" min="0" max="23" value="9">
+                    <select id="friendly-hour">
+                      ${hourOptions}
+                    </select>
                   </div>
                   <div class="form-group friendly-field" data-field="dow">
                     <label for="friendly-dow">${escapeHtml(strings.labelDayOfWeek)}</label>
@@ -1959,7 +1995,9 @@ export class SchedulerWebview {
                   </div>
                   <div class="form-group friendly-field" data-field="dom">
                     <label for="friendly-dom">${escapeHtml(strings.labelDayOfMonth)}</label>
-                    <input type="number" id="friendly-dom" min="1" max="31" value="1">
+                    <select id="friendly-dom">
+                      ${dayOfMonthOptions}
+                    </select>
                   </div>
                 </div>
                 <div class="friendly-actions">

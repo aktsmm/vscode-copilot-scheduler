@@ -378,6 +378,15 @@ suite("i18n Tests", () => {
     assert.ok(typeof messages.taskCreated === "function");
     assert.ok(typeof messages.taskDeleted === "function");
   });
+
+  test("formatCronForDisplay renders multi-line cron on one line", async () => {
+    const { formatCronForDisplay } = await import("../../i18n");
+
+    assert.strictEqual(
+      formatCronForDisplay("0 0,3 * * *\n30 1,4 * * *"),
+      "0 0,3 * * * / 30 1,4 * * *",
+    );
+  });
 });
 
 suite("Webview Test Prompt Wiring Tests", () => {

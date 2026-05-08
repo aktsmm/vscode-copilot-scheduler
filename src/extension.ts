@@ -5,7 +5,6 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import { parseExpression } from "cron-parser";
 import { ScheduleManager } from "./scheduleManager";
 import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
@@ -18,6 +17,7 @@ import {
   filterPickerModelCatalog,
 } from "./modelSelection";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
+import { getNextCronRun } from "./cronExpressions";
 import {
   normalizeForCompare,
   resolveGlobalAgentRoots,
@@ -323,16 +323,14 @@ function getNotificationNextRun(
     if (tz) {
       options.tz = tz;
     }
-    const interval = parseExpression(task.cronExpression, options);
-    return interval.next().toDate();
+    return getNextCronRun(task.cronExpression, options);
   } catch {
     if (tz) {
       try {
-        const interval = parseExpression(task.cronExpression, { currentDate });
         logDebug(
           `[CopilotScheduler] Invalid timezone \"${tz}\" for notification nextRun; falling back to local time.`,
         );
-        return interval.next().toDate();
+        return getNextCronRun(task.cronExpression, { currentDate });
       } catch {
         return undefined;
       }

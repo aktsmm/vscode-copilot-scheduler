@@ -5,6 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
+import { getFirstDistinctCronRuns } from "../../cronExpressions";
 
 function normalizePathForAssertion(p: string): string {
   const resolved = path.normalize(path.resolve(p));
@@ -145,6 +146,99 @@ suite("ScheduleManager Time Window Helper Tests", () => {
 });
 
 suite("ScheduleManager Minimum Interval Tests", () => {
+  test("multi-line cron expressions produce distinct strict 40 minute runs", () => {
+    const expression = [
+      "0,40 0,2,4,6,8,10,12,14,16,18,20,22 * * *",
+      "20 1,3,5,7,9,11,13,15,17,19,21,23 * * *",
+    ].join("\n");
+    const runs = getFirstDistinctCronRuns(
+      expression,
+      { currentDate: new Date("2026-05-09T00:00:00Z"), tz: "UTC" },
+      4,
+    );
+
+    assert.deepStrictEqual(
+      runs.map((date) => date.toISOString()),
+      [
+        "2026-05-09T00:40:00.000Z",
+        "2026-05-09T01:20:00.000Z",
+        "2026-05-09T02:00:00.000Z",
+        "2026-05-09T02:40:00.000Z",
+      ],
+    );
+  });
+
+  test("multi-line cron expressions produce distinct strict 90 minute runs", () => {
+    const expression = [
+      "0 0,3,6,9,12,15,18,21 * * *",
+      "30 1,4,7,10,13,16,19,22 * * *",
+    ].join("\n");
+    const runs = getFirstDistinctCronRuns(
+      expression,
+      { currentDate: new Date("2026-05-09T00:00:00Z"), tz: "UTC" },
+      4,
+    );
+
+    assert.deepStrictEqual(
+      runs.map((date) => date.toISOString()),
+      [
+        "2026-05-09T01:30:00.000Z",
+        "2026-05-09T03:00:00.000Z",
+        "2026-05-09T04:30:00.000Z",
+        "2026-05-09T06:00:00.000Z",
+      ],
+    );
+  });
+
+  test("checkMinimumInterval handles multi-line strict intervals", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const strict40 = [
+        "0,40 0,2,4,6,8,10,12,14,16,18,20,22 * * *",
+        "20 1,3,5,7,9,11,13,15,17,19,21,23 * * *",
+      ].join("\n");
+      assert.strictEqual(manager.checkMinimumInterval(strict40), undefined);
+      assert.strictEqual(
+        manager.checkMinimumInterval("*/20 * * * *"),
+        messages.minimumIntervalWarning(),
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("validateCronExpression rejects multi-line cron with invalid line", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      assert.throws(
+        () => manager.validateCronExpression("*/20 * * * *\ninvalid cron"),
+        /無効なcron式|Invalid cron expression/,
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("checkMinimumInterval falls back to local time when timezone is invalid", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

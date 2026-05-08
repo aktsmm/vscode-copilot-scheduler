@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.47] - 2026-05-09
+
+### Added
+
+- **Exact friendly intervals**: The friendly cron builder now offers exact interval choices, including 40-minute, 90-minute, and multi-hour schedules, and can generate multiple cron lines when a single standard cron expression would be inaccurate.
+
+### Changed
+
+- **Friendly cron fields**: Hourly, daily, weekly, and monthly helper fields now use bounded select controls, with monthly day choices limited to days that exist every month by default.
+
 ## [1.0.46] - 2026-05-08
 
 ### Fixed

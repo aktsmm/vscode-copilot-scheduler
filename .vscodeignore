@@ -11,6 +11,7 @@ vsc-extension-quickstart.md
 !out/**
 node_modules/**
 *.vsix
+test-run-*.txt
 FULL_SPECIFICATION.md
 AGENTS.md
 .github/**
