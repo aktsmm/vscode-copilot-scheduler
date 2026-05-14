@@ -24,7 +24,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 🌐 **Multi-language Support** - English and Japanese UI with auto-detection
 
-📊 **Sidebar TreeView** - Manage all your scheduled tasks from the sidebar
+📊 **Sidebar TreeView** - Manage all scheduled tasks with human-readable schedule summaries
 
 🖥️ **Webview GUI** - Easy-to-use graphical interface for creating and editing tasks
 

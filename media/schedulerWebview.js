@@ -1569,10 +1569,12 @@
         promptText.length > 180
           ? promptText.substring(0, 180) + "..."
           : promptText;
-      var cronText = escapeHtml(task.cronExpression || "").replace(
-        /\r?\n/g,
-        "<br>",
+      var cronSummary =
+        task.scheduleSummary || getCronSummary(task.cronExpression || "");
+      var cronText = escapeHtml(
+        cronSummary || strings.labelFriendlyFallback || "",
       );
+      var cronRaw = escapeAttr(task.cronExpression || "");
       var taskName = escapeHtml(task.name || "");
       var promptSourceLabel = getPromptSourceLabel(task);
 
@@ -1674,7 +1676,9 @@
       }
 
       var metaHtml =
-        "<span>⏰ " +
+        '<span title="' +
+        cronRaw +
+        '">⏰ ' +
         cronText +
         "</span>" +
         "<span>" +
@@ -1929,6 +1933,7 @@
 
   function formatIntervalLabel(totalMinutes) {
     if (totalMinutes % 60 === 0) {
+      if (totalMinutes === 60) return strings.cronPreviewEveryHour || "";
       var tplHours = strings.cronPreviewEveryNHours || "";
       return tplHours ? tplHours.replace("{n}", String(totalMinutes / 60)) : "";
     }

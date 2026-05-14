@@ -5,6 +5,25 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.48] - 2026-05-15
+
+### Added
+
+- **Readable saved schedules**: TreeView and Webview task cards now show human-readable schedule summaries such as `Every 20 minutes`, `Every hour`, and `Weekdays at 09:00` while keeping the raw cron expression available in details.
+
+### Changed
+
+- **Schedule display parity**: Webview task updates now receive the same schedule summary produced by the extension-side cron formatter, reducing drift between the sidebar, task list, and create/edit preview.
+- **Webview maintainability**: Friendly cron select-option generation is split into small helpers without changing the rendered UI.
+
+### Security
+
+- **Dependency audit cleanup**: Updated test tooling and npm overrides for `serialize-javascript` and `diff` so full `npm audit` reports zero vulnerabilities.
+
+### Tests
+
+- Added TreeView schedule-display coverage and Webview/extension cron-summary parity coverage.
+
 ## [1.0.47] - 2026-05-09
 
 ### Added

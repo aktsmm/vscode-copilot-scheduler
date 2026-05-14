@@ -7,14 +7,20 @@ vsc-extension-quickstart.md
 **/tsconfig.json
 **/.eslintrc.json
 **/*.map
+**/*.d.ts
 **/*.ts
-!out/**
+out/**
+!out/extension.js
+out/test/**
 node_modules/**
 *.vsix
 test-run-*.txt
+*-output.txt
 FULL_SPECIFICATION.md
 AGENTS.md
+DASHBOARD.md
 .github/**
+.playwright-mcp/**
 
 # Dev-only artifacts
 output_sessions/**

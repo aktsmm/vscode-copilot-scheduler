@@ -17,7 +17,12 @@ import type {
   PromptExecutionRequest,
 } from "./types";
 import { CopilotExecutor } from "./copilotExecutor";
-import { messages, isJapanese, getCronPresets } from "./i18n";
+import {
+  messages,
+  isJapanese,
+  getCronPresets,
+  formatCronForDisplay,
+} from "./i18n";
 import { logError } from "./logger";
 import { validateTemplateLoadRequest } from "./templateValidation";
 import {
@@ -33,6 +38,7 @@ import {
 } from "./modelSelection";
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
+type WebviewScheduledTask = ScheduledTask & { scheduleSummary: string };
 
 const FRIENDLY_INTERVAL_MINUTES = [
   1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
@@ -357,11 +363,20 @@ export class SchedulerWebview {
       .filter(Boolean);
   }
 
+  private static buildTaskViewModels(
+    tasks: readonly ScheduledTask[],
+  ): WebviewScheduledTask[] {
+    return tasks.map((task) => ({
+      ...task,
+      scheduleSummary: formatCronForDisplay(task.cronExpression),
+    }));
+  }
+
   static updateTasks(tasks: ScheduledTask[]): void {
     this.currentTasks = tasks;
     this.postMessage({
       type: "updateTasks",
-      tasks: tasks,
+      tasks: this.buildTaskViewModels(tasks),
       workspacePaths: this.getCurrentWorkspacePaths(),
     });
   }
@@ -981,6 +996,39 @@ export class SchedulerWebview {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
+
+  private static buildFriendlyIntervalOptions(
+    strings: Record<string, string>,
+    escapeHtml: (value: string) => string,
+  ): string {
+    return FRIENDLY_INTERVAL_MINUTES.map((minutes) => {
+      const label =
+        minutes % 60 === 0
+          ? strings.cronPreviewEveryNHours.replace("{n}", String(minutes / 60))
+          : strings.cronPreviewEveryNMinutes.replace("{n}", String(minutes));
+      return `<option value="${minutes}"${minutes === 20 ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+  }
+
+  private static buildNumberOptions(
+    length: number,
+    selected: number,
+    formatLabel: (value: number) => string,
+  ): string {
+    return Array.from(
+      { length },
+      (_, value) =>
+        `<option value="${value}"${value === selected ? " selected" : ""}>${formatLabel(value)}</option>`,
+    ).join("");
+  }
+
+  private static buildDayOfMonthOptions(): string {
+    return Array.from({ length: 28 }, (_, index) => {
+      const day = index + 1;
+      return `<option value="${day}"${day === 1 ? " selected" : ""}>${day}</option>`;
+    }).join("");
+  }
+
   /**
    * Generate webview HTML content
    */
@@ -1106,6 +1154,7 @@ export class SchedulerWebview {
       labelUnsupportedInterval: messages.labelUnsupportedInterval(),
 
       cronPreviewEveryNMinutes: messages.cronPreviewEveryNMinutes(),
+      cronPreviewEveryHour: messages.cronPreviewEveryHour(),
       cronPreviewEveryNHours: messages.cronPreviewEveryNHours(),
       cronPreviewMultipleExpressions: messages.cronPreviewMultipleExpressions(),
       cronPreviewHourlyAtMinute: messages.cronPreviewHourlyAtMinute(),
@@ -1158,30 +1207,20 @@ export class SchedulerWebview {
     const serializeForWebview = this.serializeForWebview;
     const escapeHtmlAttr = this.escapeHtmlAttr;
     const escapeHtml = this.escapeHtml;
-    const friendlyIntervalOptions = FRIENDLY_INTERVAL_MINUTES.map((minutes) => {
-      const label =
-        minutes % 60 === 0
-          ? strings.cronPreviewEveryNHours.replace("{n}", String(minutes / 60))
-          : strings.cronPreviewEveryNMinutes.replace("{n}", String(minutes));
-      return `<option value="${minutes}"${minutes === 20 ? " selected" : ""}>${escapeHtml(label)}</option>`;
-    }).join("");
-    const minuteOptions = Array.from(
-      { length: 60 },
-      (_, minute) =>
-        `<option value="${minute}"${minute === 0 ? " selected" : ""}>${String(minute).padStart(2, "0")}</option>`,
-    ).join("");
-    const hourOptions = Array.from(
-      { length: 24 },
-      (_, hour) =>
-        `<option value="${hour}"${hour === 9 ? " selected" : ""}>${String(hour).padStart(2, "0")}</option>`,
-    ).join("");
-    const dayOfMonthOptions = Array.from({ length: 28 }, (_, index) => {
-      const day = index + 1;
-      return `<option value="${day}"${day === 1 ? " selected" : ""}>${day}</option>`;
-    }).join("");
+    const friendlyIntervalOptions = this.buildFriendlyIntervalOptions(
+      strings,
+      escapeHtml,
+    );
+    const minuteOptions = this.buildNumberOptions(60, 0, (minute) =>
+      String(minute).padStart(2, "0"),
+    );
+    const hourOptions = this.buildNumberOptions(24, 9, (hour) =>
+      String(hour).padStart(2, "0"),
+    );
+    const dayOfMonthOptions = this.buildDayOfMonthOptions();
 
     const initialData = {
-      tasks: initialTasks,
+      tasks: this.buildTaskViewModels(initialTasks),
       agents: initialAgents,
       models: initialModels,
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,

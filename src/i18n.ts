@@ -442,6 +442,7 @@ export const messages = {
 
   // Cron preview templates (used in media/schedulerWebview.js)
   cronPreviewEveryNMinutes: () => t("Every {n} minutes", "{n}分ごと"),
+  cronPreviewEveryHour: () => t("Every hour", "1時間ごと"),
   cronPreviewEveryNHours: () => t("Every {n} hours", "{n}時間ごと"),
   cronPreviewMultipleExpressions: () =>
     t("Multiple cron expressions", "複数のCron式"),
@@ -451,6 +452,7 @@ export const messages = {
   cronPreviewWeeklyOnAt: () => t("Weekly on {d} at {t}", "毎週 {d} {t}"),
   cronPreviewMonthlyOnAt: () =>
     t("Monthly on day {dom} at {t}", "毎月{dom}日 {t}"),
+  cronPreviewCustom: () => t("Custom cron", "カスタムCron"),
 
   placeholderTaskName: () => t("Enter task name...", "タスク名を入力..."),
   placeholderPrompt: () =>
@@ -659,13 +661,219 @@ export function getCronPresets(): CronPreset[] {
  * Format cron expression for display
  */
 export function formatCronForDisplay(expression: string): string {
-  const presets = getCronPresets();
-  const preset = presets.find((p) => p.expression === expression);
-  if (preset) {
-    return preset.name;
+  const fallback = messages.cronPreviewCustom();
+  const expr = String(expression || "").trim();
+  if (!expr) return fallback;
+
+  const strictIntervalSummary = getStrictIntervalSummary(expr);
+  if (strictIntervalSummary) return strictIntervalSummary;
+
+  const lines = splitCronLines(expr);
+  if (lines.length > 1) {
+    return messages.cronPreviewMultipleExpressions();
   }
+
+  const parts = expr.split(/\s+/);
+  if (parts.length !== 5) return fallback;
+
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+  const isNumber = (value: string): boolean => /^\d+$/.test(value);
+  const dayOfWeekLower = dayOfWeek.toLowerCase();
+  const isWeekdays = dayOfWeekLower === "1-5" || dayOfWeekLower === "mon-fri";
+  const everyNMinutes = /^\*\/(\d+)$/.exec(minute);
+
+  if (
+    everyNMinutes &&
+    hour === "*" &&
+    dayOfMonth === "*" &&
+    month === "*" &&
+    dayOfWeek === "*"
+  ) {
+    return messages.cronPreviewEveryNMinutes().replace("{n}", everyNMinutes[1]);
+  }
+
+  if (
+    isNumber(minute) &&
+    hour === "*" &&
+    dayOfMonth === "*" &&
+    month === "*" &&
+    dayOfWeek === "*"
+  ) {
+    return messages.cronPreviewHourlyAtMinute().replace("{m}", minute);
+  }
+
+  if (
+    isNumber(minute) &&
+    isNumber(hour) &&
+    dayOfMonth === "*" &&
+    month === "*" &&
+    dayOfWeek === "*"
+  ) {
+    return messages
+      .cronPreviewDailyAt()
+      .replace("{t}", formatCronDisplayTime(hour, minute));
+  }
+
+  if (
+    isNumber(minute) &&
+    isNumber(hour) &&
+    dayOfMonth === "*" &&
+    month === "*" &&
+    isWeekdays
+  ) {
+    return messages
+      .cronPreviewWeekdaysAt()
+      .replace("{t}", formatCronDisplayTime(hour, minute));
+  }
+
+  const normalizedDayOfWeek = normalizeDayOfWeek(dayOfWeek);
+  if (
+    isNumber(minute) &&
+    isNumber(hour) &&
+    dayOfMonth === "*" &&
+    month === "*" &&
+    normalizedDayOfWeek !== undefined
+  ) {
+    return messages
+      .cronPreviewWeeklyOnAt()
+      .replace("{d}", getDayOfWeekLabel(normalizedDayOfWeek))
+      .replace("{t}", formatCronDisplayTime(hour, minute));
+  }
+
+  if (
+    isNumber(minute) &&
+    isNumber(hour) &&
+    isNumber(dayOfMonth) &&
+    month === "*" &&
+    dayOfWeek === "*"
+  ) {
+    return messages
+      .cronPreviewMonthlyOnAt()
+      .replace("{dom}", dayOfMonth)
+      .replace("{t}", formatCronDisplayTime(hour, minute));
+  }
+
+  return fallback;
+}
+
+const FRIENDLY_INTERVAL_MINUTES = [
+  1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
+  60, 72, 80, 90, 96, 120, 180, 240, 360, 480, 720, 1440,
+];
+
+function splitCronLines(expression: string): string[] {
   return String(expression || "")
-    .replace(/[\r\n]+/g, " / ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function normalizeCronExpressionForCompare(expression: string): string {
+  return splitCronLines(expression).join("\n");
+}
+
+function getStrictIntervalSummary(expression: string): string {
+  const normalized = normalizeCronExpressionForCompare(expression);
+  for (const minutes of FRIENDLY_INTERVAL_MINUTES) {
+    if (
+      normalizeCronExpressionForCompare(buildStrictIntervalCron(minutes)) ===
+      normalized
+    ) {
+      return formatIntervalLabel(minutes);
+    }
+  }
+  return "";
+}
+
+function formatIntervalLabel(totalMinutes: number): string {
+  if (totalMinutes % 60 === 0) {
+    if (totalMinutes === 60) return messages.cronPreviewEveryHour();
+    return messages
+      .cronPreviewEveryNHours()
+      .replace("{n}", String(totalMinutes / 60));
+  }
+  return messages
+    .cronPreviewEveryNMinutes()
+    .replace("{n}", String(totalMinutes));
+}
+
+function buildStrictIntervalCron(totalMinutes: number): string {
+  const minutes = Number(totalMinutes);
+  if (!Number.isFinite(minutes) || Math.floor(minutes) !== minutes) return "";
+  if (minutes <= 0 || minutes > 1440) return "";
+
+  if (minutes < 60 && 60 % minutes === 0) {
+    return `*/${minutes} * * * *`;
+  }
+  if (minutes === 60) {
+    return "0 * * * *";
+  }
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    if (24 % hours === 0) {
+      return `0 */${hours} * * *`;
+    }
+  }
+  if (1440 % minutes !== 0) {
+    return "";
+  }
+
+  const minutesToHours = new Map<number, number[]>();
+  for (let minuteOfDay = 0; minuteOfDay < 1440; minuteOfDay += minutes) {
+    const hour = Math.floor(minuteOfDay / 60);
+    const minute = minuteOfDay % 60;
+    const hours = minutesToHours.get(minute) ?? [];
+    hours.push(hour);
+    minutesToHours.set(minute, hours);
+  }
+
+  const groups = new Map<string, { minutes: number[]; hours: number[] }>();
+  for (const [minute, hours] of [...minutesToHours.entries()].sort(
+    ([a], [b]) => a - b,
+  )) {
+    const key = hours.join(",");
+    const group = groups.get(key) ?? { minutes: [], hours };
+    group.minutes.push(minute);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .map((group) => `${group.minutes.join(",")} ${group.hours.join(",")} * * *`)
+    .join("\n");
+}
+
+function formatCronDisplayTime(hour: string, minute: string): string {
+  return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+}
+
+function normalizeDayOfWeek(value: string): number | undefined {
+  const lower = value.toLowerCase();
+  const names: Record<string, number> = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+  };
+  if (Object.prototype.hasOwnProperty.call(names, lower)) {
+    return names[lower];
+  }
+  if (!/^\d+$/.test(value)) return undefined;
+  const numeric = Number(value);
+  if (numeric === 7) return 0;
+  return numeric >= 0 && numeric <= 6 ? numeric : undefined;
+}
+
+function getDayOfWeekLabel(value: number): string {
+  return [
+    messages.daySun(),
+    messages.dayMon(),
+    messages.dayTue(),
+    messages.dayWed(),
+    messages.dayThu(),
+    messages.dayFri(),
+    messages.daySat(),
+  ][value];
 }

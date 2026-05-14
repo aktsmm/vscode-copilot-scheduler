@@ -158,17 +158,14 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       : `⏸️ ${messages.labelDisabled()}`;
     md.appendMarkdown(`**${messages.labelStatus()}:** ${statusValue}\n\n`);
 
-    // Schedule
+    md.appendMarkdown(`**${messages.labelSchedule()}:** `);
+    md.appendText(formatCronForDisplay(task.cronExpression));
+    md.appendMarkdown("\n\n");
+
     const cronExpressionForDisplay = toSingleLine(task.cronExpression);
-    if (cronExpressionForDisplay.includes("`")) {
-      md.appendMarkdown(`**${messages.labelSchedule()}:**\n\n`);
-      appendSafeCodeblock(cronExpressionForDisplay);
-      md.appendMarkdown("\n");
-    } else {
-      md.appendMarkdown(`**${messages.labelSchedule()}:** \``);
-      md.appendText(cronExpressionForDisplay);
-      md.appendMarkdown("`\n\n");
-    }
+    md.appendMarkdown(`**${messages.labelCronExpression()}:**\n\n`);
+    appendSafeCodeblock(cronExpressionForDisplay);
+    md.appendMarkdown("\n");
 
     // Scope / workspace
     const scopeValue =

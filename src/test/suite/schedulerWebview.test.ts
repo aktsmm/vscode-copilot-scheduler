@@ -5,6 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
+import type { ScheduledTask } from "../../types";
 import {
   runSanitizerParityCases,
   runSharedSanitizerCases,
@@ -167,7 +168,22 @@ function extractBlockFromStartToken(
   const braceStart = source.indexOf("{", start);
   assert.ok(braceStart >= 0, `Opening brace not found for: ${startToken}`);
 
-  const end = findMatchingBraceEnd(source, braceStart);
+  let end = findMatchingBraceEnd(source, braceStart);
+  if (end <= braceStart) {
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+  }
 
   assert.ok(end > braceStart, `Closing brace not found for: ${startToken}`);
   return source.slice(start, end);
@@ -196,24 +212,45 @@ function extractFunctionSource(source: string, functionName: string): string {
     `Function opening brace not found for: ${functionName}`,
   );
 
-  // Note: simple brace counting that does not skip string literals or block
-  // comments. This is intentional: the target functions (sanitizers, pure
-  // utilities) do not contain bare `{`/`}` inside strings or comments.
   let depth = 0;
   let end = -1;
-  for (let i = braceStart; i < source.length; i++) {
-    const ch = source[i];
+  for (let index = braceStart; index < source.length; index++) {
+    const ch = source[index];
     if (ch === "{") {
       depth++;
     } else if (ch === "}") {
       depth--;
       if (depth === 0) {
-        end = i + 1;
+        end = index + 1;
         break;
       }
     }
   }
 
+  assert.ok(
+    end > braceStart,
+    `Function closing brace not found for: ${functionName}`,
+  );
+  return source.slice(start, end);
+}
+
+function extractStringAwareFunctionSource(
+  source: string,
+  functionName: string,
+): string {
+  const start = source.indexOf(`function ${functionName}(`);
+  assert.ok(
+    start >= 0,
+    `Function not found in webview script: ${functionName}`,
+  );
+
+  const braceStart = source.indexOf("{", start);
+  assert.ok(
+    braceStart >= 0,
+    `Function opening brace not found for: ${functionName}`,
+  );
+
+  const end = findMatchingBraceEnd(source, braceStart);
   assert.ok(
     end > braceStart,
     `Function closing brace not found for: ${functionName}`,
@@ -280,6 +317,64 @@ function loadWebviewStrictIntervalCronFunction(): (
     totalMinutes: number,
   ) => string;
   return factory();
+}
+
+function loadWebviewCronSummaryFunction(): (expression: string) => string {
+  const scriptPath = path.resolve(
+    __dirname,
+    "../../../media/schedulerWebview.js",
+  );
+  const source = fs.readFileSync(scriptPath, "utf8");
+
+  const strings = {
+    daySun: messages.daySun(),
+    dayMon: messages.dayMon(),
+    dayTue: messages.dayTue(),
+    dayWed: messages.dayWed(),
+    dayThu: messages.dayThu(),
+    dayFri: messages.dayFri(),
+    daySat: messages.daySat(),
+    labelFriendlyFallback: messages.labelFriendlyFallback(),
+    cronPreviewEveryNMinutes: messages.cronPreviewEveryNMinutes(),
+    cronPreviewEveryHour: messages.cronPreviewEveryHour(),
+    cronPreviewEveryNHours: messages.cronPreviewEveryNHours(),
+    cronPreviewMultipleExpressions: messages.cronPreviewMultipleExpressions(),
+    cronPreviewHourlyAtMinute: messages.cronPreviewHourlyAtMinute(),
+    cronPreviewDailyAt: messages.cronPreviewDailyAt(),
+    cronPreviewWeekdaysAt: messages.cronPreviewWeekdaysAt(),
+    cronPreviewWeeklyOnAt: messages.cronPreviewWeeklyOnAt(),
+    cronPreviewMonthlyOnAt: messages.cronPreviewMonthlyOnAt(),
+  };
+  const friendlyIntervalMinutes = [
+    1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
+    60, 72, 80, 90, 96, 120, 180, 240, 360, 480, 720, 1440,
+  ];
+
+  const snippet = [
+    "var strings = __strings;",
+    "var friendlyIntervalMinutes = __friendlyIntervalMinutes;",
+    extractVarAssignment(source, "dayNames"),
+    extractFunctionSource(source, "padNumber"),
+    extractFunctionSource(source, "normalizeDow"),
+    extractFunctionSource(source, "formatTime"),
+    extractFunctionSource(source, "splitCronLines"),
+    extractFunctionSource(source, "normalizeCronExpressionForCompare"),
+    extractStringAwareFunctionSource(source, "formatIntervalLabel"),
+    extractStringAwareFunctionSource(source, "buildStrictIntervalCron"),
+    extractStringAwareFunctionSource(source, "getStrictIntervalSummary"),
+    extractStringAwareFunctionSource(source, "getCronSummary"),
+    "return getCronSummary;",
+  ].join("\n");
+
+  const factory = new Function(
+    "__strings",
+    "__friendlyIntervalMinutes",
+    snippet,
+  ) as (
+    webviewStrings: typeof strings,
+    intervals: number[],
+  ) => (expression: string) => string;
+  return factory(strings, friendlyIntervalMinutes);
 }
 
 suite("SchedulerWebview Friendly Cron Builder Tests", () => {
@@ -366,6 +461,31 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
       "preview update should disable crontab.guru for multi-line cron expressions.",
     );
   });
+
+  test("webview cron preview stays aligned with extension display formatter", async () => {
+    const { formatCronForDisplay } = await import("../../i18n");
+    const summarizeInWebview = loadWebviewCronSummaryFunction();
+    const expressions = [
+      "*/20 * * * *",
+      "0 * * * *",
+      "0 */2 * * *",
+      "0 9 * * *",
+      "0 9 * * 1-5",
+      "0 9 * * 1",
+      "0 9 1 * *",
+      ["0 0,3,6,9,12,15,18,21 * * *", "30 1,4,7,10,13,16,19,22 * * *"].join(
+        "\n",
+      ),
+      "0 0,3 * * *\n30 1,4 * * *",
+    ];
+
+    for (const expression of expressions) {
+      assert.strictEqual(
+        summarizeInWebview(expression),
+        formatCronForDisplay(expression),
+      );
+    }
+  });
 });
 
 suite("SchedulerWebview Message Queue Tests", () => {
@@ -445,13 +565,13 @@ suite("SchedulerWebview Message Queue Tests", () => {
     }
   });
 
-  test("updateTasks message includes workspacePaths", () => {
+  test("updateTasks message includes workspacePaths and schedule summaries", () => {
     const wv = SchedulerWebview as unknown as {
       panel?: WebviewPanelLike;
       webviewReady?: boolean;
       pendingMessages?: unknown[];
       currentTasks?: unknown[];
-      updateTasks?: (tasks: unknown[]) => void;
+      updateTasks?: (tasks: ScheduledTask[]) => void;
     };
 
     const originalPanel = wv.panel;
@@ -474,14 +594,34 @@ suite("SchedulerWebview Message Queue Tests", () => {
       wv.pendingMessages = [];
 
       assert.ok(typeof SchedulerWebview.updateTasks === "function");
-      SchedulerWebview.updateTasks([]);
+      SchedulerWebview.updateTasks([
+        {
+          id: "task-webview-summary",
+          name: "Summary task",
+          cronExpression: "*/20 * * * *",
+          prompt: "hello",
+          enabled: true,
+          scope: "workspace",
+          promptSource: "inline",
+          createdAt: new Date("2026-05-15T00:00:00Z"),
+          updatedAt: new Date("2026-05-15T00:00:00Z"),
+        },
+      ]);
 
       assert.strictEqual(sent.length, 1);
-      const m = sent[0] as { type?: unknown; workspacePaths?: unknown };
+      const m = sent[0] as {
+        type?: unknown;
+        workspacePaths?: unknown;
+        tasks?: Array<{ scheduleSummary?: unknown }>;
+      };
       assert.strictEqual(m.type, "updateTasks");
       assert.ok(
         Array.isArray(m.workspacePaths),
         "updateTasks message must carry workspacePaths array",
+      );
+      assert.strictEqual(
+        m.tasks?.[0]?.scheduleSummary,
+        messages.cronPreviewEveryNMinutes().replace("{n}", "20"),
       );
     } finally {
       wv.panel = originalPanel;

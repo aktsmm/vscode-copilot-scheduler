@@ -379,12 +379,59 @@ suite("i18n Tests", () => {
     assert.ok(typeof messages.taskDeleted === "function");
   });
 
-  test("formatCronForDisplay renders multi-line cron on one line", async () => {
-    const { formatCronForDisplay } = await import("../../i18n");
+  test("formatCronForDisplay renders common schedules as human summaries", async () => {
+    const { formatCronForDisplay, messages } = await import("../../i18n");
 
     assert.strictEqual(
+      formatCronForDisplay("*/20 * * * *"),
+      messages.cronPreviewEveryNMinutes().replace("{n}", "20"),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 */2 * * *"),
+      messages.cronPreviewEveryNHours().replace("{n}", "2"),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 * * * *"),
+      messages.cronPreviewEveryHour(),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 9 * * *"),
+      messages.cronPreviewDailyAt().replace("{t}", "09:00"),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 9 * * 1-5"),
+      messages.cronPreviewWeekdaysAt().replace("{t}", "09:00"),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 9 * * 1"),
+      messages
+        .cronPreviewWeeklyOnAt()
+        .replace("{d}", messages.dayMon())
+        .replace("{t}", "09:00"),
+    );
+    assert.strictEqual(
+      formatCronForDisplay("0 9 1 * *"),
+      messages
+        .cronPreviewMonthlyOnAt()
+        .replace("{dom}", "1")
+        .replace("{t}", "09:00"),
+    );
+  });
+
+  test("formatCronForDisplay summarizes multi-line strict intervals", async () => {
+    const { formatCronForDisplay, messages } = await import("../../i18n");
+
+    assert.strictEqual(
+      formatCronForDisplay(
+        ["0 0,3,6,9,12,15,18,21 * * *", "30 1,4,7,10,13,16,19,22 * * *"].join(
+          "\n",
+        ),
+      ),
+      messages.cronPreviewEveryNMinutes().replace("{n}", "90"),
+    );
+    assert.strictEqual(
       formatCronForDisplay("0 0,3 * * *\n30 1,4 * * *"),
-      "0 0,3 * * * / 30 1,4 * * *",
+      messages.cronPreviewMultipleExpressions(),
     );
   });
 });
