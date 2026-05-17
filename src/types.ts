@@ -28,6 +28,13 @@ export type LogLevel = "none" | "error" | "info" | "debug";
 export type ChatSessionBehavior = "new" | "continue";
 
 /**
+ * Task-level chat session mode
+ * - "default": Use the global extension setting
+ * - "new" / "continue": Override per task
+ */
+export type TaskChatSessionMode = "default" | ChatSessionBehavior;
+
+/**
  * Structured model selection fields.
  * `model` remains the primary persisted identifier for backward compatibility.
  */
@@ -105,6 +112,9 @@ export interface ScheduledTask {
 
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
+
+  /** Task-specific chat session override. Undefined means use the global setting. */
+  chatSession?: ChatSessionBehavior;
 
   /** Max random delay in seconds applied before execution (0 = off). */
   jitterSeconds?: number;
@@ -187,6 +197,9 @@ export interface CreateTaskInput {
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
+  /** Per-task chat session override. "default" uses the global setting. */
+  chatSession?: TaskChatSessionMode;
+
   /** Max random delay in seconds applied before execution (0 = off; undefined = use configured default). */
   jitterSeconds?: number;
 
@@ -261,6 +274,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Agent to use */
   agent?: string;
+
+  /** Chat session behavior override */
+  chatSession?: ChatSessionBehavior;
 }
 
 /**
@@ -327,6 +343,9 @@ export interface TaskAction {
 export interface ExecuteOptions extends ModelSelectionFields {
   /** Agent to use */
   agent?: string;
+
+  /** Chat session behavior override */
+  chatSession?: ChatSessionBehavior;
 }
 
 /**

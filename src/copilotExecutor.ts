@@ -400,8 +400,21 @@ function toSafeErrorDetails(error: unknown): string {
   return sanitized.trim() ? sanitized : messages.webviewUnknown();
 }
 
+function resolveChatSessionBehavior(
+  override: ChatSessionBehavior | undefined,
+  config: vscode.WorkspaceConfiguration,
+): ChatSessionBehavior {
+  if (override === "new" || override === "continue") {
+    return override;
+  }
+
+  const configured = config.get<ChatSessionBehavior>("chatSession", "new");
+  return configured === "continue" ? "continue" : "new";
+}
+
 export const __testOnly = {
   toSafeErrorDetails,
+  resolveChatSessionBehavior,
   normalizeAgentPrefix,
   resolveBuiltInChatMode,
   parseAgentFrontmatterName,
@@ -464,7 +477,10 @@ export class CopilotExecutor {
 
     // Get chat session behavior and command delay factor once per execution
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const chatSession = config.get<ChatSessionBehavior>("chatSession", "new");
+    const chatSession = resolveChatSessionBehavior(
+      options?.chatSession,
+      config,
+    );
     const delayFactor = this.getCommandDelayFactor(config);
     const requestedModel = normalizeModelSelection(options);
     const resolved =

@@ -62,6 +62,7 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 | `Copilot Scheduler: Open Settings`                  | Open extension settings    |
 | `Copilot Scheduler: Show Version`                   | Show extension version     |
 | `Copilot Scheduler: Show Execution History`         | View recent run history    |
+| `Copilot Scheduler: Dump Model Catalog Diagnostics` | Dump model diagnostics     |
 
 ## ⚙️ Settings
 
@@ -73,7 +74,7 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 | `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                                                                                                                                                                     |
 | `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                   |
 | `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                    |
-| `copilotScheduler.chatSession`            | `new`       | Chat session (new/continue). `continue` is usually faster.                                                                                                                                                                                                  |
+| `copilotScheduler.chatSession`            | `new`       | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                    |
 | `copilotScheduler.autoModeDefault`        | `false`     | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                           |
 | `copilotScheduler.commandDelayFactor`     | `0.8`       | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                    |
 | `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                                                                                                                                                                                  |
@@ -87,7 +88,7 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
 
-Task-level controls (`Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form.
+Task-level controls (`Chat Session`, `Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form.
 
 The Webview previews Copilot Chat-like thinking effort options for supported model families. If it fails, choose `Default`.
 

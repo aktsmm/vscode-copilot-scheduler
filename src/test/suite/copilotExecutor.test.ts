@@ -1,7 +1,48 @@
 import * as assert from "assert";
+import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("task chatSession override wins over configuration", async () => {
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      value: ((section?: string) => {
+        const config = originalGetConfiguration.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") {
+          return config;
+        }
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            if (key === "chatSession") {
+              return "new" as T;
+            }
+            return config.get<T>(key, defaultValue as T);
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration,
+      configurable: true,
+    });
+
+    try {
+      const config = vscode.workspace.getConfiguration("copilotScheduler");
+      assert.strictEqual(
+        __testOnly.resolveChatSessionBehavior("continue", config),
+        "continue",
+      );
+      assert.strictEqual(
+        __testOnly.resolveChatSessionBehavior(undefined, config),
+        "new",
+      );
+    } finally {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        value: originalGetConfiguration,
+        configurable: true,
+      });
+    }
+  });
+
   test("Parses custom agent name from frontmatter", async () => {
     const parsed = __testOnly.parseAgentFrontmatterName(
       ["---", "name: Fact Checker", "description: test", "---", "# body"].join(

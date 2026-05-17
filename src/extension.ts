@@ -106,6 +106,7 @@ function buildPromptExecutionOptions(
 ): PromptExecutionOptions {
   return {
     agent: request.agent,
+    chatSession: request.chatSession,
     model: request.model,
     modelName: request.modelName,
     modelVendor: request.modelVendor,
@@ -854,6 +855,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (
       e.affectsConfiguration("copilotScheduler.defaultScope") ||
       e.affectsConfiguration("copilotScheduler.autoModeDefault") ||
+      e.affectsConfiguration("copilotScheduler.chatSession") ||
       e.affectsConfiguration("copilotScheduler.jitterSeconds")
     ) {
       SchedulerWebview.refreshFormDefaults();
@@ -1211,6 +1213,7 @@ async function resolvePromptExecution(
   return {
     prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
     agent: resolveExecutionOption(task.agent, parsed.agent),
+    chatSession: task.chatSession,
     model: resolveExecutionOption(task.model, parsed.model),
     modelName: task.modelName,
     modelVendor: task.modelVendor,

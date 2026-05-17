@@ -1056,6 +1056,69 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
 });
 
 suite("ScheduleManager Auto Mode Tests", () => {
+  test("createTask preserves task chatSession override", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "chat-session-override",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        chatSession: "continue",
+      });
+
+      assert.strictEqual(task.chatSession, "continue");
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask can reset task chatSession override to default", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "chat-session-reset",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        chatSession: "continue",
+      });
+
+      const updated = await manager.updateTask(task.id, {
+        chatSession: "default",
+      });
+
+      assert.ok(updated);
+      assert.strictEqual(updated?.chatSession, undefined);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("createTask uses autoModeDefault=false when autoMode is omitted", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

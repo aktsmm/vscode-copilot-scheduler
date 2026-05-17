@@ -4,6 +4,7 @@
 
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 
 const DEFAULT_TEST_VSCODE_VERSION = "1.115.0";
@@ -72,6 +73,9 @@ async function disableWin32VersionedUpdateForTests(
 }
 
 async function main(): Promise<void> {
+  let testUserDataDir: string | undefined;
+  let testExtensionsDir: string | undefined;
+
   try {
     // The folder containing the Extension Manifest package.json
     const extensionDevelopmentPath = path.resolve(__dirname, "../../");
@@ -86,12 +90,23 @@ async function main(): Promise<void> {
     );
     await disableWin32VersionedUpdateForTests(vscodeExecutablePath);
 
+    testUserDataDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "copilot-scheduler-vscode-user-data-"),
+    );
+    testExtensionsDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "copilot-scheduler-vscode-extensions-"),
+    );
+
     // Download VS Code, unzip it, and run the integration tests
     await runTests({
       vscodeExecutablePath,
       extensionDevelopmentPath,
       extensionTestsPath,
       launchArgs: [
+        "--user-data-dir",
+        testUserDataDir,
+        "--extensions-dir",
+        testExtensionsDir,
         "--disable-updates",
         "--skip-welcome",
         "--skip-release-notes",
@@ -100,7 +115,20 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     console.error("Failed to run tests:", err);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    await Promise.allSettled(
+      [testUserDataDir, testExtensionsDir]
+        .filter((dir): dir is string => typeof dir === "string")
+        .map((dir) =>
+          fs.promises.rm(dir, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 50,
+          }),
+        ),
+    );
   }
 }
 

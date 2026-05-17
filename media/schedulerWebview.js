@@ -353,6 +353,12 @@
     return i;
   })();
   var defaultAutoMode = !!initialData.defaultAutoMode;
+  var defaultChatSession =
+    initialData.defaultChatSession === "continue" ? "continue" : "new";
+  var defaultChatSessionNote =
+    typeof initialData.defaultChatSessionNote === "string"
+      ? initialData.defaultChatSessionNote
+      : "";
   var defaultScope =
     initialData.defaultScope === "global" ? "global" : "workspace";
   var locale =
@@ -400,6 +406,8 @@
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
   var promptGroup = document.getElementById("prompt-group");
   var autoModeInput = document.getElementById("auto-mode");
+  var chatSessionSelect = document.getElementById("chat-session");
+  var chatSessionNote = document.getElementById("chat-session-note");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
   var maxExecutionsPerDayInput = document.getElementById(
     "max-executions-per-day",
@@ -450,6 +458,11 @@
         allowedTimeEndInput.value = "";
       }
     }
+  }
+
+  function updateChatSessionDefaultNote() {
+    if (!chatSessionNote) return;
+    chatSessionNote.textContent = String(defaultChatSessionNote || "");
   }
 
   function getSelectedVariantOption() {
@@ -1184,6 +1197,7 @@
         promptPath: promptPathValue,
         runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
+        chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
           : 0,
@@ -1343,6 +1357,12 @@
         type: "testPrompt",
         prompt: prompt,
         agent: agent,
+        chatSession:
+          chatSessionSelect &&
+          (chatSessionSelect.value === "new" ||
+            chatSessionSelect.value === "continue")
+            ? chatSessionSelect.value
+            : undefined,
         model: model,
         modelName: currentModelSelection
           ? currentModelSelection.modelName || ""
@@ -1527,6 +1547,14 @@
       return strings.labelPromptInline || "";
     }
 
+    function getTaskChatSessionLabel(task) {
+      if (!task || !task.chatSession) return "";
+      if (task.chatSession === "continue") {
+        return strings.labelChatSessionContinue || "";
+      }
+      return strings.labelChatSessionNew || "";
+    }
+
     function buildSection(title, count, content) {
       return (
         '<section class="task-section">' +
@@ -1605,6 +1633,7 @@
 
       var taskDailyLimit = Number(task.maxExecutionsPerDay || 0);
       var hasTaskDailyLimit = isFinite(taskDailyLimit) && taskDailyLimit > 0;
+      var taskChatSessionLabel = getTaskChatSessionLabel(task);
       var timeStart = task.allowedTimeStart || "";
       var timeEnd = task.allowedTimeEnd || "";
       var timeWindowInfo =
@@ -1681,6 +1710,13 @@
         '">⏰ ' +
         cronText +
         "</span>" +
+        (taskChatSessionLabel
+          ? "<span>" +
+            escapeHtml(strings.labelChatSession || "") +
+            ": " +
+            escapeHtml(taskChatSessionLabel) +
+            "</span>"
+          : "") +
         "<span>" +
         escapeHtml(strings.labelLastRun) +
         ": " +
@@ -2296,17 +2332,23 @@
     }
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
+    if (chatSessionSelect) {
+      chatSessionSelect.value = "default";
+    }
     var defaultScopeInput = document.querySelector(
       'input[name="scope"][value="' + defaultScope + '"]',
     );
     if (defaultScopeInput) {
       defaultScopeInput.checked = true;
     }
+    updateChatSessionDefaultNote();
     updateFriendlyVisibility();
     updateCronPreview();
   }
 
   function applyUpdatedDefaultsToCreateForm() {
+    updateChatSessionDefaultNote();
+
     if (editingTaskId) {
       return;
     }
@@ -2428,6 +2470,7 @@
   if (initialPromptSource) {
     applyPromptSource(initialPromptSource.value);
   }
+  updateChatSessionDefaultNote();
   updateFriendlyVisibility();
   updateCronPreview();
 
@@ -2578,6 +2621,10 @@
     if (autoModeInput) {
       autoModeInput.checked = task.autoMode === true;
     }
+    if (chatSessionSelect) {
+      chatSessionSelect.value = task.chatSession || "default";
+    }
+    updateChatSessionDefaultNote();
 
     // Switch to edit tab (same form)
     switchTab("create");
@@ -2770,6 +2817,11 @@
           defaultScope =
             message.defaultScope === "global" ? "global" : "workspace";
           defaultAutoMode = !!message.defaultAutoMode;
+          defaultChatSession =
+            message.defaultChatSession === "continue" ? "continue" : "new";
+          if (typeof message.defaultChatSessionNote === "string") {
+            defaultChatSessionNote = message.defaultChatSessionNote;
+          }
           {
             var rawJitter =
               typeof message.defaultJitterSeconds === "number"

@@ -928,6 +928,15 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (
+        task.chatSession !== undefined &&
+        task.chatSession !== "new" &&
+        task.chatSession !== "continue"
+      ) {
+        task.chatSession = undefined;
+        needsSave = true;
+      }
+
       // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),
       // disable it to prevent runaway execution loops.
       try {
@@ -1277,6 +1286,10 @@ export class ScheduleManager {
         input.autoMode !== undefined
           ? Boolean(input.autoMode)
           : defaultAutoMode,
+      chatSession:
+        input.chatSession === "new" || input.chatSession === "continue"
+          ? input.chatSession
+          : undefined,
       jitterSeconds:
         input.jitterSeconds !== undefined
           ? this.clampJitterSeconds(input.jitterSeconds)
@@ -1494,6 +1507,12 @@ export class ScheduleManager {
     if (updates.autoMode !== undefined) {
       task.autoMode = Boolean(updates.autoMode);
     }
+    if (updates.chatSession !== undefined) {
+      task.chatSession =
+        updates.chatSession === "new" || updates.chatSession === "continue"
+          ? updates.chatSession
+          : undefined;
+    }
     if (updates.jitterSeconds !== undefined) {
       task.jitterSeconds = this.clampJitterSeconds(updates.jitterSeconds);
     }
@@ -1637,6 +1656,7 @@ export class ScheduleManager {
       promptSource: original.promptSource,
       promptPath: original.promptPath,
       autoMode: original.autoMode,
+      chatSession: original.chatSession,
       jitterSeconds: original.jitterSeconds,
       maxExecutionsPerDay: original.maxExecutionsPerDay,
       allowedTimeStart: original.allowedTimeStart,

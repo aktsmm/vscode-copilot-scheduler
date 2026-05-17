@@ -50,6 +50,20 @@ suite("ScheduledTaskItem", () => {
     assert.ok(tooltip.includes("*/20 * * * *"));
   });
 
+  test("tooltip includes task-level chat session override", () => {
+    const item = new ScheduledTaskItem(
+      createTask({ chatSession: "continue" }),
+      true,
+    );
+    const tooltip = (item.tooltip as vscode.MarkdownString).value;
+    const expectedChatSession = messages
+      .labelChatSessionContinue()
+      .replace(/ /g, "&nbsp;");
+
+    assert.ok(tooltip.includes(messages.labelChatSession()), tooltip);
+    assert.ok(tooltip.includes(expectedChatSession), tooltip);
+  });
+
   test("other workspace task keeps workspace context in description", () => {
     const item = new ScheduledTaskItem(
       createTask({ workspacePath: "C:\\Workspaces\\other-project" }),

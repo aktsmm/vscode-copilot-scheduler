@@ -879,6 +879,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
             if (section === "autoModeDefault") {
               return true as T;
             }
+            if (section === "chatSession") {
+              return "new" as T;
+            }
             if (section === "jitterSeconds") {
               return 9999 as T;
             }
@@ -895,6 +898,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
         type: "updateDefaults",
         defaultScope: "global",
         defaultAutoMode: true,
+        defaultChatSession: "new",
+        defaultChatSessionNote: messages.webviewChatSessionNote(
+          messages.labelChatSessionNew(),
+        ),
         defaultJitterSeconds: 1800,
       });
     } finally {
@@ -922,6 +929,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
 
     const applyDefaultsTokens = [
+      "updateChatSessionDefaultNote();",
       "if (editingTaskId)",
       "return;",
       "if (autoModeInput) autoModeInput.checked = defaultAutoMode;",
@@ -1044,6 +1052,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const submitSource = extractBlockFromStartToken(source, "if (taskForm) {");
 
     const expectedTokens = [
+      'chatSession: chatSessionSelect ? chatSessionSelect.value : "default"',
       "jitterSeconds: jitterSecondsInput",
       "? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)",
       "maxExecutionsPerDay: maxExecutionsPerDayInput",

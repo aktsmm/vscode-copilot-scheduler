@@ -219,6 +219,16 @@ export class ScheduledTaskItem extends vscode.TreeItem {
       md.appendMarkdown("\n\n");
     }
 
+    if (task.chatSession) {
+      const chatSessionLabel =
+        task.chatSession === "continue"
+          ? messages.labelChatSessionContinue()
+          : messages.labelChatSessionNew();
+      md.appendMarkdown(`**${messages.labelChatSession()}:** `);
+      md.appendText(chatSessionLabel);
+      md.appendMarkdown("\n\n");
+    }
+
     // Prompt preview
     const promptPreview =
       task.prompt.length > 100

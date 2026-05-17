@@ -6,6 +6,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import type {
+  ChatSessionBehavior,
   ScheduledTask,
   CreateTaskInput,
   TaskAction,
@@ -68,11 +69,17 @@ export class SchedulerWebview {
   private static getFormDefaults(): {
     defaultScope: TaskScope;
     defaultAutoMode: boolean;
+    defaultChatSession: ChatSessionBehavior;
+    defaultChatSessionNote: string;
     defaultJitterSeconds: number;
   } {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const defaultScope = config.get<TaskScope>("defaultScope", "workspace");
     const defaultAutoMode = config.get<boolean>("autoModeDefault", false);
+    const defaultChatSession =
+      config.get<ChatSessionBehavior>("chatSession", "new") === "continue"
+        ? "continue"
+        : "new";
     const defaultJitterSecondsRaw = config.get<number>("jitterSeconds", 600);
     const defaultJitterSeconds = (() => {
       const n =
@@ -87,6 +94,12 @@ export class SchedulerWebview {
     return {
       defaultScope,
       defaultAutoMode,
+      defaultChatSession,
+      defaultChatSessionNote: messages.webviewChatSessionNote(
+        defaultChatSession === "continue"
+          ? messages.labelChatSessionContinue()
+          : messages.labelChatSessionNew(),
+      ),
       defaultJitterSeconds,
     };
   }
@@ -1042,8 +1055,13 @@ export class SchedulerWebview {
     const nonce = this.getNonce();
     const isJa = isJapanese();
     const presets = getCronPresets();
-    const { defaultScope, defaultAutoMode, defaultJitterSeconds } =
-      this.getFormDefaults();
+    const {
+      defaultScope,
+      defaultAutoMode,
+      defaultChatSession,
+      defaultChatSessionNote,
+      defaultJitterSeconds,
+    } = this.getFormDefaults();
     const initialTasks = Array.isArray(tasks) ? tasks : [];
     const initialAgents = Array.isArray(agents) ? agents : [];
     const initialModels = Array.isArray(models) ? models : [];
@@ -1088,6 +1106,10 @@ export class SchedulerWebview {
       labelNever: messages.labelNever(),
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
       labelAutoMode: messages.labelAutoMode(),
+      labelChatSession: messages.labelChatSession(),
+      labelChatSessionDefault: messages.labelChatSessionDefault(),
+      labelChatSessionNew: messages.labelChatSessionNew(),
+      labelChatSessionContinue: messages.labelChatSessionContinue(),
       labelJitterSeconds: messages.labelJitterSeconds(),
       labelMaxExecutionsPerDay: messages.labelMaxExecutionsPerDay(),
       labelAllowedTimeWindow: messages.labelAllowedTimeWindow(),
@@ -1185,6 +1207,7 @@ export class SchedulerWebview {
 
       // Webview notes
       webviewAutoModeNote: messages.webviewAutoModeNote(),
+      webviewChatSessionNote: defaultChatSessionNote,
       webviewJitterNote: messages.webviewJitterNote(),
       webviewMaxExecutionsPerDayNote: messages.webviewMaxExecutionsPerDayNote(),
       webviewAllowedTimeWindowNote: messages.webviewAllowedTimeWindowNote(),
@@ -1234,6 +1257,8 @@ export class SchedulerWebview {
       friendlyIntervalMinutes: FRIENDLY_INTERVAL_MINUTES,
       defaultScope,
       defaultAutoMode,
+      defaultChatSession,
+      defaultChatSessionNote,
       defaultJitterSeconds,
       locale: isJa ? "ja-JP" : "en-US",
       strings,
@@ -2097,6 +2122,16 @@ export class SchedulerWebview {
                 <input type="checkbox" id="run-first">
                 <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
               </div>
+            </div>
+
+            <div class="form-group col-6">
+              <label for="chat-session">${escapeHtml(strings.labelChatSession)}</label>
+              <select id="chat-session">
+                <option value="default">${escapeHtml(strings.labelChatSessionDefault)}</option>
+                <option value="new">${escapeHtml(strings.labelChatSessionNew)}</option>
+                <option value="continue">${escapeHtml(strings.labelChatSessionContinue)}</option>
+              </select>
+              <p class="note" id="chat-session-note">${escapeHtml(defaultChatSessionNote)}</p>
             </div>
           </div>
         </section>

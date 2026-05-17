@@ -380,6 +380,10 @@ export const messages = {
   labelRunFirstInOneMinute: () =>
     t("Run first execution in 3 minutes", "3分後に初回実行する"),
   labelAutoMode: () => t("Auto Mode Hint", "オートモードヒント"),
+  labelChatSession: () => t("Chat Session", "チャットセッション"),
+  labelChatSessionDefault: () => t("Use setting default", "設定の既定値を使う"),
+  labelChatSessionNew: () => t("New session", "新しいセッション"),
+  labelChatSessionContinue: () => t("Continue session", "継続セッション"),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
   labelMaxExecutionsPerDay: () =>
@@ -393,6 +397,11 @@ export const messages = {
     t(
       "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present).",
       "有効時、実行時プロンプトの先頭（フロントマターがあればその直後）に自律実行の指示を自動挿入します。",
+    ),
+  webviewChatSessionNote: (modeLabel: string) =>
+    t(
+      `Leave this at default to use the setting value. Current setting: ${modeLabel}.`,
+      `既定のままなら設定値を使います。現在の設定: ${modeLabel}。`,
     ),
   webviewJitterNote: () =>
     t(

@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.49] - 2026-05-17
+
+### Added
+
+- **Task-level chat session overrides**: Webview create/edit forms now let each task use the global chat-session setting, force a new chat session, or continue the existing session.
+
+### Changed
+
+- **Execution routing parity**: Scheduled, manual, and test execution paths now preserve the task chat-session choice alongside structured model metadata.
+- **Test runner isolation**: Extension tests now launch with isolated temporary VS Code user-data and extensions directories so they can run while a normal VS Code window is open.
+
+### Fixed
+
+- **TreeView task details**: Task tooltips now show task-level chat-session overrides so sidebar details match the Webview task card.
+- **Documentation drift**: README command tables and the local full specification were synchronized with the extension manifest, and regression tests now guard command/settings documentation drift.
+
+### Tests
+
+- Added coverage for chat-session persistence, reset-to-default behavior, executor precedence, Webview payloads, TreeView tooltip display, README command-table alignment, and optional full-spec alignment.
+
 ## [1.0.48] - 2026-05-15
 
 ### Added

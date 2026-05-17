@@ -194,6 +194,91 @@ suite("Extension Test Suite", () => {
       `Expected ${expectedCommands.length} copilotScheduler commands but found ${registeredSchedulerCommands.length}. Update expectedCommands when adding new commands.`,
     );
   });
+
+  test("FULL_SPECIFICATION stays aligned with package manifest basics", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const specPath = path.join(root, "FULL_SPECIFICATION.md");
+    if (!fs.existsSync(specPath)) {
+      return;
+    }
+
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      version: string;
+      contributes?: {
+        commands?: Array<{ command?: string }>;
+        configuration?: { properties?: Record<string, unknown> };
+      };
+    };
+    const spec = fs.readFileSync(specPath, "utf8");
+
+    assert.match(
+      spec,
+      new RegExp(`\\|\\s*バージョン\\s*\\|\\s*${packageJson.version}\\s*\\|`),
+      "FULL_SPECIFICATION.md should document the current package version",
+    );
+
+    for (const item of packageJson.contributes?.commands ?? []) {
+      assert.ok(
+        item.command && spec.includes(item.command),
+        `FULL_SPECIFICATION.md should mention contributed command ${item.command}`,
+      );
+    }
+
+    for (const settingKey of Object.keys(
+      packageJson.contributes?.configuration?.properties ?? {},
+    )) {
+      if (settingKey === "copilotScheduler.reportIssue") {
+        continue;
+      }
+      assert.ok(
+        spec.includes(settingKey),
+        `FULL_SPECIFICATION.md should mention contributed setting ${settingKey}`,
+      );
+    }
+
+    for (const staleToken of [
+      "0.1.0",
+      "sidebar-icon.svg",
+      "tsc -watch -p ./",
+      "executePromptViaCLI",
+      "setDefaultScope",
+    ]) {
+      assert.ok(
+        !spec.includes(staleToken),
+        `FULL_SPECIFICATION.md contains stale token: ${staleToken}`,
+      );
+    }
+  });
+
+  test("README command tables stay aligned with contributed commands", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      contributes?: { commands?: Array<{ title?: string }> };
+    };
+    const nls = JSON.parse(
+      fs.readFileSync(path.join(root, "package.nls.json"), "utf8"),
+    ) as Record<string, string>;
+    const readmes = [
+      fs.readFileSync(path.join(root, "README.md"), "utf8"),
+      fs.readFileSync(path.join(root, "README_ja.md"), "utf8"),
+    ];
+
+    for (const item of packageJson.contributes?.commands ?? []) {
+      const titleKey = item.title?.match(/^%(.+)%$/)?.[1];
+      const title = titleKey ? nls[titleKey] : item.title;
+      assert.ok(title, `Command title should resolve: ${item.title}`);
+      for (const readme of readmes) {
+        assert.ok(
+          readme.includes(`Copilot Scheduler: ${title}`),
+          `README command table should mention: ${title}`,
+        );
+      }
+    }
+  });
 });
 
 suite("Execution History Queue Tests", () => {
@@ -528,6 +613,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       prompt: "Body",
       enabled: true,
       agent: "edit",
+      chatSession: "continue",
       model: "gpt-5.4",
       modelName: "GPT-5.4",
       modelVendor: "OpenAI",
@@ -542,6 +628,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
 
     assert.deepStrictEqual(options, {
       agent: "edit",
+      chatSession: "continue",
       model: "gpt-5.4",
       modelName: "GPT-5.4",
       modelVendor: "OpenAI",
@@ -714,6 +801,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const configTokens = [
       'e.affectsConfiguration("copilotScheduler.defaultScope")',
       'e.affectsConfiguration("copilotScheduler.autoModeDefault")',
+      'e.affectsConfiguration("copilotScheduler.chatSession")',
       'e.affectsConfiguration("copilotScheduler.jitterSeconds")',
       "SchedulerWebview.refreshFormDefaults();",
       'e.affectsConfiguration("copilotScheduler.globalPromptsPath")',
