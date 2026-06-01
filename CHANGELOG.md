@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.50] - 2026-06-01
+
+### Fixed
+
+- **Edit-save stability**: Task edits now diff against the values captured when the edit session started, so changing Scheduler defaults while a task form is open no longer saves untouched fields such as jitter as explicit overrides.
+- **Notification setting validation**: Invalid persisted `notificationMode` values are now normalized safely at runtime while preserving the legacy `showNotifications = false` fallback to `silentStatus`.
+
+### Tests
+
+- Added regression coverage for invalid `notificationMode` normalization and for unchanged edit submissions after Scheduler defaults change during an active edit session.
+
 ## [1.0.49] - 2026-05-17
 
 ### Added

@@ -26,6 +26,7 @@ DASHBOARD.md
 output_sessions/**
 session/**
 research/**
+artifacts/**
 
 # Large demo asset (use static PNG in README)
 images/demo-animated.gif

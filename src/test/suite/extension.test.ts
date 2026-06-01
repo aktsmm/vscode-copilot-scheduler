@@ -638,6 +638,26 @@ suite("Webview Test Prompt Wiring Tests", () => {
     });
   });
 
+  test("resolveNotificationMode normalizes invalid values and keeps legacy silentStatus", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolveNotificationMode = __testOnly.resolveNotificationMode as
+      | ((showNotificationsEnabled: boolean, mode: unknown) => string)
+      | undefined;
+
+    assert.ok(typeof resolveNotificationMode === "function");
+    assert.strictEqual(resolveNotificationMode(true, "sound"), "sound");
+    assert.strictEqual(
+      resolveNotificationMode(true, "silentToast"),
+      "silentToast",
+    );
+    assert.strictEqual(resolveNotificationMode(true, "invalid-mode"), "sound");
+    assert.strictEqual(resolveNotificationMode(true, undefined), "sound");
+    assert.strictEqual(
+      resolveNotificationMode(false, "invalid-mode"),
+      "silentStatus",
+    );
+  });
+
   test("ensureCreatedTaskAcceptedAfterDisclaimer rolls back new task when disclaimer is declined", async () => {
     const { __testOnly } = await import("../../extension");
     const ensureCreatedTaskAcceptedAfterDisclaimer =

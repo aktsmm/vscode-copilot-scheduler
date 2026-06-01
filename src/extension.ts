@@ -67,14 +67,33 @@ function shouldNotify(): boolean {
   return config.get<boolean>("showNotifications", true);
 }
 
-function getNotificationMode(): NotificationMode {
-  const config = vscode.workspace.getConfiguration("copilotScheduler");
-  const mode = config.get<NotificationMode>("notificationMode", "sound");
-  // Legacy: if notifications were disabled, honor that as silentStatus
-  if (config.get<boolean>("showNotifications", true) === false) {
+function normalizeNotificationMode(mode: unknown): NotificationMode {
+  switch (mode) {
+    case "sound":
+    case "silentToast":
+    case "silentStatus":
+      return mode;
+    default:
+      return "sound";
+  }
+}
+
+function resolveNotificationMode(
+  showNotificationsEnabled: boolean,
+  mode: unknown,
+): NotificationMode {
+  if (!showNotificationsEnabled) {
     return "silentStatus";
   }
-  return mode || "sound";
+  return normalizeNotificationMode(mode);
+}
+
+function getNotificationMode(): NotificationMode {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  return resolveNotificationMode(
+    config.get<boolean>("showNotifications", true),
+    config.get<NotificationMode>("notificationMode", "sound"),
+  );
 }
 
 function resolveDisplayErrorMessage(message: string): string {
@@ -1224,6 +1243,8 @@ async function resolvePromptExecution(
 }
 
 export const __testOnly = {
+  normalizeNotificationMode,
+  resolveNotificationMode,
   resolvePromptText,
   parsePromptFrontmatter,
   resolveExecutionOption,

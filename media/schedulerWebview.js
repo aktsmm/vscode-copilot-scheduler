@@ -316,6 +316,8 @@
   var pendingModelReasoningEffort = "";
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
+  var editingTaskSnapshot = null;
+  var editingTaskNormalizedSnapshot = null;
   var editingTaskCanDelete = false;
   var pendingSubmit = false;
   var templateLoadingPath = "";
@@ -463,6 +465,69 @@
   function updateChatSessionDefaultNote() {
     if (!chatSessionNote) return;
     chatSessionNote.textContent = String(defaultChatSessionNote || "");
+  }
+
+  function normalizeTaskForEditDiff(task) {
+    var source = task || {};
+    return {
+      name: String(source.name || ""),
+      prompt: typeof source.prompt === "string" ? source.prompt : "",
+      cronExpression: String(source.cronExpression || ""),
+      agent: String(source.agent || ""),
+      model: String(source.model || ""),
+      modelName: String(source.modelName || ""),
+      modelVendor: String(source.modelVendor || ""),
+      modelFamily: String(source.modelFamily || ""),
+      modelVersion: String(source.modelVersion || ""),
+      modelReasoningEffort: String(source.modelReasoningEffort || ""),
+      scope: source.scope || "workspace",
+      promptSource: source.promptSource || "inline",
+      promptPath: String(source.promptPath || ""),
+      enabled: source.enabled !== false,
+      runFirstInOneMinute: !!source.runFirstInOneMinute,
+      autoMode: source.autoMode === true,
+      chatSession:
+        source.chatSession === "new" || source.chatSession === "continue"
+          ? source.chatSession
+          : "default",
+      jitterSeconds: boundedNumber(
+        source.jitterSeconds != null
+          ? source.jitterSeconds
+          : defaultJitterSeconds,
+        0,
+        1800,
+        0,
+      ),
+      maxExecutionsPerDay: boundedNumber(
+        source.maxExecutionsPerDay != null ? source.maxExecutionsPerDay : 0,
+        0,
+        100,
+        0,
+      ),
+      allowedTimeStart: String(source.allowedTimeStart || "").trim(),
+      allowedTimeEnd: String(source.allowedTimeEnd || "").trim(),
+    };
+  }
+
+  function buildTaskUpdateData(taskData) {
+    if (!editingTaskSnapshot) {
+      return taskData;
+    }
+
+    var normalizedCurrent = normalizeTaskForEditDiff(taskData);
+    var normalizedOriginal = editingTaskNormalizedSnapshot;
+    if (!normalizedOriginal) {
+      normalizedOriginal = normalizeTaskForEditDiff(editingTaskSnapshot);
+    }
+    var diff = {};
+
+    Object.keys(normalizedCurrent).forEach(function (key) {
+      if (normalizedCurrent[key] !== normalizedOriginal[key]) {
+        diff[key] = taskData[key];
+      }
+    });
+
+    return diff;
   }
 
   function getSelectedVariantOption() {
@@ -1321,16 +1386,20 @@
       pendingSubmit = true;
       if (submitBtn) submitBtn.disabled = true;
 
+      var submittedTaskData = editingTaskId
+        ? buildTaskUpdateData(taskData)
+        : taskData;
+
       if (editingTaskId) {
         vscode.postMessage({
           type: "updateTask",
           taskId: editingTaskId,
-          data: taskData,
+          data: submittedTaskData,
         });
       } else {
         vscode.postMessage({
           type: "createTask",
-          data: taskData,
+          data: submittedTaskData,
         });
       }
     });
@@ -2313,6 +2382,8 @@
     clearPendingModelSelection();
     pendingTemplatePath = "";
     editingTaskEnabled = true;
+    editingTaskSnapshot = null;
+    editingTaskNormalizedSnapshot = null;
     clearUnavailableModelOptions(modelSelect);
     clearModelVariantOptions();
     updateModelOptions(null);
@@ -2496,6 +2567,8 @@
       return t && t.id === id;
     });
     if (!task) return;
+    editingTaskSnapshot = Object.assign({}, task);
+    editingTaskNormalizedSnapshot = normalizeTaskForEditDiff(task);
 
     var canDeleteInEdit =
       task.scope === "global" || isTaskInCurrentWorkspace(task);

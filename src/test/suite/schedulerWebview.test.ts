@@ -1553,6 +1553,35 @@ suite("SchedulerWebview Script Contract Tests", () => {
       );
     }
   });
+
+  test("edit submit path diffs unchanged fields before posting updateTask", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      "var editingTaskSnapshot = null;",
+      "var editingTaskNormalizedSnapshot = null;",
+      "function normalizeTaskForEditDiff(task) {",
+      "function buildTaskUpdateData(taskData) {",
+      "editingTaskSnapshot = null;",
+      "editingTaskNormalizedSnapshot = null;",
+      "editingTaskSnapshot = Object.assign({}, task);",
+      "editingTaskNormalizedSnapshot = normalizeTaskForEditDiff(task);",
+      "var normalizedOriginal = editingTaskNormalizedSnapshot;",
+      "var submittedTaskData = editingTaskId",
+      "? buildTaskUpdateData(taskData)",
+      "data: submittedTaskData,",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected edit diff token not found: ${token}`,
+      );
+    }
+  });
 });
 
 suite("Sanitizer Contract Sync Tests", () => {
