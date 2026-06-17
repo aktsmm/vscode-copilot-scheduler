@@ -81,6 +81,79 @@ suite("Model Quality Experiment Tests", () => {
     ]);
   });
 
+  test("updateLanguageModelsConfigText preserves contextSize when setting reasoning effort", () => {
+    const existingText = JSON.stringify(
+      [
+        {
+          name: "Copilot",
+          vendor: "copilot",
+          settings: {
+            "claude-opus-4.8": {
+              contextSize: 936000,
+            },
+          },
+        },
+      ],
+      undefined,
+      "\t",
+    );
+
+    const nextText = updateLanguageModelsConfigText(existingText, {
+      vendor: "copilot",
+      modelId: "claude-opus-4.8",
+      reasoningEffort: "high",
+    });
+
+    assert.deepStrictEqual(JSON.parse(nextText), [
+      {
+        name: "Copilot",
+        vendor: "copilot",
+        settings: {
+          "claude-opus-4.8": {
+            contextSize: 936000,
+            reasoningEffort: "high",
+          },
+        },
+      },
+    ]);
+  });
+
+  test("updateLanguageModelsConfigText clears reasoning effort but keeps contextSize", () => {
+    const existingText = JSON.stringify(
+      [
+        {
+          name: "Copilot",
+          vendor: "copilot",
+          settings: {
+            "claude-opus-4.8": {
+              contextSize: 936000,
+              reasoningEffort: "high",
+            },
+          },
+        },
+      ],
+      undefined,
+      "\t",
+    );
+
+    const nextText = updateLanguageModelsConfigText(existingText, {
+      vendor: "copilot",
+      modelId: "claude-opus-4.8",
+    });
+
+    assert.deepStrictEqual(JSON.parse(nextText), [
+      {
+        name: "Copilot",
+        vendor: "copilot",
+        settings: {
+          "claude-opus-4.8": {
+            contextSize: 936000,
+          },
+        },
+      },
+    ]);
+  });
+
   test("normalizeExperimentalReasoningEffort accepts xhigh", () => {
     assert.strictEqual(normalizeExperimentalReasoningEffort("xhigh"), "xhigh");
   });
@@ -113,6 +186,25 @@ suite("Model Quality Experiment Tests", () => {
         description: "",
         vendor: "copilot",
         family: "claude-opus-4.6",
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+      ],
+    );
+
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
+        id: "claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.8",
       }).map((variant) => [
         variant.label,
         variant.reasoningEffort || "default",

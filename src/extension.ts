@@ -16,7 +16,10 @@ import {
   buildModelPickerGroups,
   filterPickerModelCatalog,
 } from "./modelSelection";
-import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
+import {
+  getLanguageModelsConfigUriFromGlobalStorageUri,
+  isExperimentalModelQualityEnabled,
+} from "./modelQualityExperiment";
 import { getNextCronRun } from "./cronExpressions";
 import {
   normalizeForCompare,
@@ -2211,6 +2214,86 @@ function serializeModelInfo(model: {
 }
 
 async function registerModelCatalogDiagnosticDocument(): Promise<void> {
+  const safeModelSettings = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    return {
+      keys: Object.keys(record).sort(),
+      reasoningEffort:
+        typeof record.reasoningEffort === "string"
+          ? record.reasoningEffort
+          : undefined,
+      contextSize:
+        typeof record.contextSize === "number" ? record.contextSize : undefined,
+    };
+  };
+
+  const readSafeLanguageModelSettings = async (modelIds: readonly string[]) => {
+    const context = extensionContextRef;
+    if (!context) {
+      return { available: false };
+    }
+
+    const configUri = getLanguageModelsConfigUriFromGlobalStorageUri(
+      context.globalStorageUri,
+    );
+    let parsed: unknown;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(configUri);
+      parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    } catch (error) {
+      const code = (error as { code?: string } | undefined)?.code;
+      if (code === "FileNotFound") {
+        return { available: false };
+      }
+      return {
+        available: false,
+        error: sanitizeErrorDetailsForLog(
+          error instanceof Error ? error.message : String(error ?? ""),
+        ),
+      };
+    }
+
+    const groups = Array.isArray(parsed) ? parsed : [];
+    const copilotGroup = groups.find(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        (entry as { vendor?: unknown }).vendor === "copilot",
+    ) as { settings?: Record<string, unknown> } | undefined;
+    const settings = copilotGroup?.settings || {};
+    const uniqueModelIds = Array.from(
+      new Set(modelIds.filter((id) => id.trim().length > 0)),
+    );
+    return {
+      available: true,
+      vendor: "copilot",
+      settings: Object.fromEntries(
+        uniqueModelIds.map((id) => [id, safeModelSettings(settings[id])]),
+      ),
+    };
+  };
+
+  const readRelevantReasoningSettings = () => {
+    const config = vscode.workspace.getConfiguration();
+    const keys = [
+      "github.copilot.chat.reasoningEffortOverride",
+      "chat.reasoningEffortOverride",
+      "github.copilot.chat.responsesApiReasoningEffort",
+    ];
+    return Object.fromEntries(
+      keys.map((key) => [
+        key,
+        config.inspect<unknown>(key)?.globalValue ??
+          config.inspect<unknown>(key)?.workspaceValue ??
+          config.inspect<unknown>(key)?.defaultValue,
+      ]),
+    );
+  };
+
   const readSelector = async (
     selector?: vscode.LanguageModelChatSelector,
   ): Promise<
@@ -2260,7 +2343,9 @@ async function registerModelCatalogDiagnosticDocument(): Promise<void> {
         defaultPickerGroups: Array<{
           label: string;
           variants: Array<{
+            key: string;
             label: string;
+            reasoningEffort?: string;
             model: ReturnType<typeof serializeModelInfo>;
           }>;
         }>;
@@ -2276,7 +2361,9 @@ async function registerModelCatalogDiagnosticDocument(): Promise<void> {
     }).map((group) => ({
       label: group.label,
       variants: group.variants.map((variant) => ({
+        key: variant.key,
         label: variant.label,
+        reasoningEffort: variant.reasoningEffort,
         model: serializeModelInfo(variant.model),
       })),
     }));
@@ -2301,11 +2388,18 @@ async function registerModelCatalogDiagnosticDocument(): Promise<void> {
     generatedAt: new Date().toISOString(),
     vscodeVersion: vscode.version,
     vscodeLanguage: vscode.env.language,
+    relatedSettings: readRelevantReasoningSettings(),
     rawSelectors: {
       vendorCopilot,
       allModels,
     },
     normalizedCatalog,
+    languageModelsConfig:
+      "models" in normalizedCatalog
+        ? await readSafeLanguageModelSettings(
+            normalizedCatalog.defaultPickerCatalog.map((model) => model.id),
+          )
+        : { available: false },
   };
 
   const document = await vscode.workspace.openTextDocument({

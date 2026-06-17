@@ -1529,6 +1529,31 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("model catalog diagnostics include reasoning effort metadata", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/extension.ts"),
+      "utf8",
+    );
+
+    const expectedTokens = [
+      "readSafeLanguageModelSettings",
+      "safeModelSettings",
+      "relatedSettings: readRelevantReasoningSettings()",
+      "languageModelsConfig:",
+      "key: variant.key",
+      "reasoningEffort: variant.reasoningEffort",
+      "github.copilot.chat.reasoningEffortOverride",
+      "github.copilot.chat.responsesApiReasoningEffort",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Expected diagnostic reasoning effort token not found: ${token}`,
+      );
+    }
+  });
+
   test("unresolved saved model selections remain visible in the webview", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

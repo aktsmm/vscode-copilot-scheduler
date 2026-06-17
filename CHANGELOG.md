@@ -5,6 +5,20 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.51] - 2026-06-18
+
+### Fixed
+
+- **Thinking effort handoff**: Chat execution now carries the selected reasoning effort in the `chat.open` model configuration payload while preserving the existing per-model `chatLanguageModels.json` sync fallback.
+
+### Changed
+
+- **Model catalog diagnostics**: The diagnostics command now includes picker variant keys, reasoning-effort values, safe per-model Copilot settings, and relevant reasoning-effort settings to make High/Medium drift easier to verify without exposing prompts or secrets.
+
+### Tests
+
+- Added regression coverage for Claude Opus thinking-effort variants, per-model `contextSize` preservation, and `chat.open` reasoning-effort payloads.
+
 ## [1.0.50] - 2026-06-01
 
 ### Fixed

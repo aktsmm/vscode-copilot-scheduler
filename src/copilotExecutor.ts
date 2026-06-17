@@ -366,6 +366,28 @@ function buildModelSelectorCandidates(
   return selectors;
 }
 
+function buildChatOpenArgs(
+  chatOpenPrompt: string,
+  mode: string | undefined,
+  selection: NormalizedModelSelection,
+  modelSelector?: Record<string, string>,
+): Record<string, unknown> {
+  const args: Record<string, unknown> = {
+    query: chatOpenPrompt,
+    isPartialQuery: false,
+    mode,
+  };
+  if (modelSelector && Object.keys(modelSelector).length > 0) {
+    args.modelSelector = modelSelector;
+  }
+  if (selection.modelReasoningEffort) {
+    args.modelConfiguration = {
+      reasoningEffort: selection.modelReasoningEffort,
+    };
+  }
+  return args;
+}
+
 function buildLegacyModelPickerCandidates(
   matchedModel: ModelInfo | undefined,
   selection: NormalizedModelSelection,
@@ -425,6 +447,7 @@ export const __testOnly = {
   stripLeadingBuiltInModePrefix,
   buildPromptRouting,
   buildModelSelectorCandidates,
+  buildChatOpenArgs,
   buildLegacyModelPickerCandidates,
   mergeChatModelLists,
 };
@@ -553,14 +576,12 @@ export class CopilotExecutor {
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
-          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${JSON.stringify(selector)}`,
+          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${JSON.stringify(selector)}, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
         );
-        await vscode.commands.executeCommand("workbench.action.chat.open", {
-          query: chatOpenPrompt,
-          isPartialQuery: false,
-          mode,
-          modelSelector: selector,
-        });
+        await vscode.commands.executeCommand(
+          "workbench.action.chat.open",
+          buildChatOpenArgs(chatOpenPrompt, mode, resolvedSelection, selector),
+        );
         return {
           opened: true,
           resolvedSelection,
@@ -575,13 +596,12 @@ export class CopilotExecutor {
 
     try {
       logDebug(
-        `[CopilotScheduler] Trying workbench.action.chat.open without model selector`,
+        `[CopilotScheduler] Trying workbench.action.chat.open without model selector, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
       );
-      await vscode.commands.executeCommand("workbench.action.chat.open", {
-        query: chatOpenPrompt,
-        isPartialQuery: false,
-        mode,
-      });
+      await vscode.commands.executeCommand(
+        "workbench.action.chat.open",
+        buildChatOpenArgs(chatOpenPrompt, mode, resolvedSelection),
+      );
       return {
         opened: true,
         resolvedSelection,
@@ -669,11 +689,14 @@ export class CopilotExecutor {
     }
 
     try {
-      await applyExperimentalModelQualitySelection({
+      const syncResult = await applyExperimentalModelQualitySelection({
         globalStorageUri,
         selection,
         matchedModel,
       });
+      logDebug(
+        `[CopilotScheduler] Experimental model quality sync: model=${syncResult.modelId || "none"}, vendor=${syncResult.vendor || "none"}, family=${syncResult.family || "none"}, requested=${syncResult.requestedReasoningEffort || "default"}, supported=${syncResult.supportedReasoningEfforts.join("/") || "none"}, effective=${syncResult.effectiveReasoningEffort || "default"}, previous=${syncResult.previousReasoningEffort || "default"}, changed=${syncResult.configChanged}, skipped=${syncResult.skippedReason || "none"}`,
+      );
     } catch (error) {
       logError(
         "[CopilotScheduler] Experimental model quality sync failed:",

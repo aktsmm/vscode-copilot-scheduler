@@ -240,6 +240,63 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     ]);
   });
 
+  test("chat.open args include modelConfiguration for reasoning effort selections", () => {
+    const args = __testOnly.buildChatOpenArgs(
+      "Review this",
+      "agent",
+      {
+        model: "claude-opus-4.8",
+        modelVendor: "copilot",
+        modelFamily: "claude-opus-4.8",
+        modelVersion: "claude-opus-4.8",
+        modelReasoningEffort: "high",
+      },
+      {
+        id: "claude-opus-4.8",
+        vendor: "copilot",
+        family: "claude-opus-4.8",
+        version: "claude-opus-4.8",
+      },
+    );
+
+    assert.deepStrictEqual(args, {
+      query: "Review this",
+      isPartialQuery: false,
+      mode: "agent",
+      modelSelector: {
+        id: "claude-opus-4.8",
+        vendor: "copilot",
+        family: "claude-opus-4.8",
+        version: "claude-opus-4.8",
+      },
+      modelConfiguration: {
+        reasoningEffort: "high",
+      },
+    });
+  });
+
+  test("chat.open args omit modelConfiguration when reasoning effort is default", () => {
+    const args = __testOnly.buildChatOpenArgs(
+      "Ask this",
+      undefined,
+      {},
+      {
+        id: "gpt-5.5",
+        vendor: "copilot",
+      },
+    );
+
+    assert.deepStrictEqual(args, {
+      query: "Ask this",
+      isPartialQuery: false,
+      mode: undefined,
+      modelSelector: {
+        id: "gpt-5.5",
+        vendor: "copilot",
+      },
+    });
+  });
+
   test("fallback models only expose the default option", () => {
     const models = CopilotExecutor.getFallbackModels();
     assert.strictEqual(models.length, 1);

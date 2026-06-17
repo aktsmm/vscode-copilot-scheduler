@@ -37,6 +37,18 @@ type UpdateLanguageModelsConfigParams = {
   reasoningEffort?: ExperimentalReasoningEffort;
 };
 
+export type ExperimentalModelQualitySelectionResult = {
+  modelId?: string;
+  vendor: string;
+  family?: string;
+  requestedReasoningEffort?: ExperimentalReasoningEffort;
+  supportedReasoningEfforts: readonly ExperimentalReasoningEffort[];
+  effectiveReasoningEffort?: ExperimentalReasoningEffort;
+  previousReasoningEffort?: ExperimentalReasoningEffort;
+  configChanged: boolean;
+  skippedReason?: "missingModelId";
+};
+
 type ExperimentalModelQualityRule = {
   familyPattern: RegExp;
   efforts: readonly ExperimentalReasoningEffort[];
@@ -342,7 +354,7 @@ export async function applyExperimentalModelQualitySelection(args: {
   globalStorageUri: vscode.Uri;
   selection: ModelSelectionFields;
   matchedModel?: ModelInfo;
-}): Promise<boolean> {
+}): Promise<ExperimentalModelQualitySelectionResult> {
   const savedReasoningEffort = normalizeExperimentalReasoningEffort(
     args.selection.modelReasoningEffort,
   );
@@ -360,7 +372,14 @@ export async function applyExperimentalModelQualitySelection(args: {
     trimOptionalText(args.selection.modelFamily);
 
   if (!modelId) {
-    return false;
+    return {
+      vendor,
+      family,
+      requestedReasoningEffort: savedReasoningEffort,
+      supportedReasoningEfforts: [],
+      configChanged: false,
+      skippedReason: "missingModelId",
+    };
   }
 
   const supportedEfforts = getSupportedExperimentalReasoningEfforts({
@@ -391,19 +410,42 @@ export async function applyExperimentalModelQualitySelection(args: {
     }
   }
 
+  const existingModelSettings = parseLanguageModelsProviderGroups(rawText).find(
+    (group) => normalizeKey(group.vendor) === normalizeKey(vendor),
+  )?.settings?.[modelId];
+  const previousReasoningEffort = existingModelSettings
+    ? normalizeExperimentalReasoningEffort(
+        existingModelSettings.reasoningEffort,
+      )
+    : undefined;
+
   const nextText = updateLanguageModelsConfigText(rawText, {
     vendor,
     modelId,
     reasoningEffort: effectiveReasoningEffort,
   });
 
+  const configChanged =
+    rawText === undefined ? nextText !== "[]" : nextText !== rawText;
+
+  const result: ExperimentalModelQualitySelectionResult = {
+    modelId,
+    vendor,
+    family,
+    requestedReasoningEffort: savedReasoningEffort,
+    supportedReasoningEfforts: supportedEfforts,
+    effectiveReasoningEffort,
+    previousReasoningEffort,
+    configChanged,
+  };
+
   if (rawText === undefined && nextText === "[]") {
-    return true;
+    return result;
   }
   if (rawText !== undefined && nextText === rawText) {
-    return true;
+    return result;
   }
 
   await vscode.workspace.fs.writeFile(configUri, Buffer.from(nextText, "utf8"));
-  return true;
+  return result;
 }

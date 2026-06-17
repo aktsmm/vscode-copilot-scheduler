@@ -575,6 +575,46 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("buildModelPickerGroups exposes keyed thinking effort variants for Claude Opus 4.8", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        description: "",
+        vendor: "copilot",
+        family: "claude-opus-4.8",
+        version: "claude-opus-4.8",
+      },
+    ]);
+
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+
+    assert.strictEqual(groups.length, 1);
+    assert.deepStrictEqual(
+      groups[0]?.variants.map((variant) => ({
+        label: variant.label,
+        reasoningEffort: variant.reasoningEffort || "default",
+        hasReasoningKey: variant.key.includes("::reasoning-effort:"),
+      })),
+      [
+        {
+          label: "Default",
+          reasoningEffort: "default",
+          hasReasoningKey: true,
+        },
+        { label: "Low", reasoningEffort: "low", hasReasoningKey: true },
+        {
+          label: "Medium",
+          reasoningEffort: "medium",
+          hasReasoningKey: true,
+        },
+        { label: "High", reasoningEffort: "high", hasReasoningKey: true },
+      ],
+    );
+  });
+
   test("buildModelPickerGroups does not synthesize preview thinking effort variants for Claude Opus 4.7", () => {
     const catalog = normalizeModelCatalog([
       {
