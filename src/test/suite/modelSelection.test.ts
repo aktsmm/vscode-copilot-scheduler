@@ -282,7 +282,10 @@ suite("Model Selection Catalog Tests", () => {
         group.variants.map((variant) => variant.label),
       ]),
       [
-        ["Claude Opus 4.7", ["Claude Opus 4.7"]],
+        [
+          "Claude Opus 4.7",
+          ["Default", "Low", "Medium", "High", "Xhigh", "Max"],
+        ],
         [
           "Claude Opus 4.7 (High reasoning, Internal only)",
           ["Claude Opus 4.7 (High reasoning, Internal only)"],
@@ -571,6 +574,7 @@ suite("Model Selection Catalog Tests", () => {
         ["Low", "low"],
         ["Medium", "medium"],
         ["High", "high"],
+        ["Max", "max"],
       ],
     );
   });
@@ -611,11 +615,13 @@ suite("Model Selection Catalog Tests", () => {
           hasReasoningKey: true,
         },
         { label: "High", reasoningEffort: "high", hasReasoningKey: true },
+        { label: "Xhigh", reasoningEffort: "xhigh", hasReasoningKey: true },
+        { label: "Max", reasoningEffort: "max", hasReasoningKey: true },
       ],
     );
   });
 
-  test("buildModelPickerGroups does not synthesize preview thinking effort variants for Claude Opus 4.7", () => {
+  test("buildModelPickerGroups synthesizes preview thinking effort variants for Claude Opus 4.7", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-opus-4.7",
@@ -636,7 +642,14 @@ suite("Model Selection Catalog Tests", () => {
         variant.label,
         variant.reasoningEffort || "default",
       ]),
-      [["Claude Opus 4.7", "default"]],
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+        ["Max", "max"],
+      ],
     );
   });
 
@@ -661,7 +674,12 @@ suite("Model Selection Catalog Tests", () => {
         variant.label,
         variant.reasoningEffort || "default",
       ]),
-      [["Claude Opus 4.7", "default"]],
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+      ],
     );
   });
 
@@ -692,11 +710,12 @@ suite("Model Selection Catalog Tests", () => {
         ["Medium", "medium"],
         ["High", "high"],
         ["Xhigh", "xhigh"],
+        ["Max", "max"],
       ],
     );
   });
 
-  test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.7", () => {
+  test("normalizeModelSelection keeps supported reasoning effort for Claude Opus 4.7", () => {
     const selection = normalizeModelSelection({
       model: "claude-opus-4.7",
       modelVendor: "copilot",
@@ -704,10 +723,21 @@ suite("Model Selection Catalog Tests", () => {
       modelReasoningEffort: "high",
     });
 
+    assert.strictEqual(selection.modelReasoningEffort, "high");
+  });
+
+  test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.6", () => {
+    const selection = normalizeModelSelection({
+      model: "claude-opus-4.6",
+      modelVendor: "copilot",
+      modelFamily: "claude-opus-4.6",
+      modelReasoningEffort: "xhigh",
+    });
+
     assert.strictEqual(selection.modelReasoningEffort, undefined);
   });
 
-  test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.7 even when family is coarse", () => {
+  test("normalizeModelSelection keeps supported reasoning effort for Claude Opus 4.7 even when family is coarse", () => {
     const selection = normalizeModelSelection({
       model: "copilot-claude-opus-4.7",
       modelName: "Claude Opus 4.7",
@@ -716,7 +746,7 @@ suite("Model Selection Catalog Tests", () => {
       modelReasoningEffort: "medium",
     });
 
-    assert.strictEqual(selection.modelReasoningEffort, undefined);
+    assert.strictEqual(selection.modelReasoningEffort, "medium");
   });
 
   test("filterExpandedPickerModelCatalog keeps internal-only context models available to the internal expanded filter", () => {

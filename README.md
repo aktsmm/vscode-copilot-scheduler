@@ -92,6 +92,8 @@ Task-level controls (`Chat Session`, `Max Runs/Day`, `Allowed Time Window`) are 
 
 The Webview previews Copilot Chat-like thinking effort options for supported model families. If it fails, choose `Default`.
 
+> Claude Opus/Sonnet are adaptive-thinking models. The extension writes the selected effort to the same per-model setting Copilot itself uses, but Copilot Chat governs Claude's effective thinking through adaptive thinking and may still apply `Medium`. GPT-5 family models honor the selected effort directly.
+
 If execution feels sluggish when a task is triggered, try:
 
 - `copilotScheduler.chatSession = continue`

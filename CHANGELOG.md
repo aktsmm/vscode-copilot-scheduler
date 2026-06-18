@@ -5,6 +5,20 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.52] - 2026-06-18
+
+### Changed
+
+- **Thinking effort picker parity**: Selectable thinking-effort options now mirror Copilot Chat's real per-model support. `Claude Opus 4.7` and `4.8` expose `Low` / `Medium` / `High` / `Xhigh` / `Max`, `Claude Opus 4.6` and `Claude Sonnet 4.6` expose `Low` / `Medium` / `High` / `Max`, `Claude Opus 4.7` is no longer treated as default-only, `MAI-Code-1-Flash` now offers `Low` / `Medium` / `High`, and `GPT-5 mini` drops the unsupported `Xhigh`. The explicit `High reasoning` / `Extra high reasoning` internal Opus 4.7 models stay as separate default-only entries.
+
+### Known limitations
+
+- **Claude upper-model thinking depth**: Claude Opus/Sonnet are adaptive-thinking models. Copilot Chat governs their effective thinking through adaptive thinking, and the only lever the extension can set is the per-model `reasoningEffort` in `chatLanguageModels.json` (the same key Copilot itself writes; no adaptive-thinking key exists). As a result Copilot Chat may still show/apply `Medium` for Claude even when a higher effort is selected. GPT-5 family models honor the selected effort directly.
+
+### Tests
+
+- Updated reasoning-effort variant coverage to the verified Copilot Chat capability matrix (Opus 4.6/4.7/4.8, Sonnet 4.6, MAI-Code-1-Flash, GPT-5 mini) and added supported/unsupported `modelReasoningEffort` normalization cases.
+
 ## [1.0.51] - 2026-06-18
 
 ### Fixed

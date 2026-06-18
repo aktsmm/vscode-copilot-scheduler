@@ -7,6 +7,7 @@ export const EXPERIMENTAL_REASONING_EFFORT_LEVELS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 
 export type ExperimentalReasoningEffort =
@@ -54,33 +55,74 @@ type ExperimentalModelQualityRule = {
   efforts: readonly ExperimentalReasoningEffort[];
 };
 
+// Reasoning-effort options mirror the levels Copilot Chat actually exposes per
+// model. The public `vscode.lm` API does not surface reasoning capabilities, so
+// this table is verified against Copilot Chat's model catalog (VS Code 1.125,
+// 2026-06-18) and must be revisited when Copilot updates its model lineup.
+// Order matters: specific families must precede the generic fallbacks because
+// the first matching rule wins.
 const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] =
   [
+    // GPT-5 mini exposes low/medium/high only (no xhigh); keep it before gpt-5.
+    {
+      familyPattern: /^gpt-5-mini(?:$|-)/u,
+      efforts: ["low", "medium", "high"],
+    },
     {
       familyPattern: /^gpt-5(?:$|-)/u,
       efforts: ["low", "medium", "high", "xhigh"],
     },
+    // Claude Opus — specific versions precede the generic fallback.
+    {
+      familyPattern: /^claude-opus-4-8(?:$|-)/u,
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    },
     {
       familyPattern: /^claude-opus-4-7-1m(?:$|-)/u,
-      efforts: ["low", "medium", "high", "xhigh"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      familyPattern: /^claude-opus-4-7(?:$|-)/u,
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      familyPattern: /^claude-opus-4-6(?:$|-)/u,
+      efforts: ["low", "medium", "high", "max"],
     },
     {
       familyPattern: /^claude-opus(?:$|-)/u,
       efforts: ["low", "medium", "high"],
     },
+    // Claude Sonnet
+    {
+      familyPattern: /^claude-sonnet-4-6(?:$|-)/u,
+      efforts: ["low", "medium", "high", "max"],
+    },
     {
       familyPattern: /^claude-sonnet(?:$|-)/u,
+      efforts: ["low", "medium", "high"],
+    },
+    // MAI-Code-1-Flash (family `oswe-vscode-modelD`, id `mai-code-1-flash-internal`).
+    {
+      familyPattern: /^mai-code-1-flash(?:$|-)/u,
+      efforts: ["low", "medium", "high"],
+    },
+    {
+      familyPattern: /^oswe-vscode-modeld(?:$|-)/u,
       efforts: ["low", "medium", "high"],
     },
   ];
 
 const EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
-  /^claude-opus-4-7(?:$|-)/u,
+  // Legacy Internal-only models bake the reasoning level into a distinct model
+  // id (e.g. claude-opus-4.7-high / -xhigh). They must stay as single picker
+  // entries rather than gaining synthesized reasoning-effort sub-variants.
+  /^claude-opus-4-7-high(?:$|-)/u,
+  /^claude-opus-4-7-xhigh(?:$|-)/u,
 ];
 
-const EXPERIMENTAL_MODEL_QUALITY_INCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
-  /^claude-opus-4-7-1m(?:$|-)/u,
-];
+const EXPERIMENTAL_MODEL_QUALITY_INCLUDED_FAMILY_PATTERNS: readonly RegExp[] =
+  [];
 
 function trimOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string") {

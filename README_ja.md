@@ -101,6 +101,8 @@ AI が適用した編集を遅延後に自動で保持するには、VS Code 設
 
 Webview では、対応 family に対して Copilot Chat に近い思考の負荷候補をプレビュー表示します。失敗するときは「既定」を選んでください。
 
+> Claude Opus / Sonnet は adaptive thinking 型モデルです。本拡張は選択した思考の負荷を Copilot 自身と同じ per-model 設定へ書き込みますが、Claude の実効的な思考量は Copilot Chat 側の adaptive thinking が制御するため、`Medium` のまま適用されることがあります。GPT-5 系モデルは選択した思考の負荷をそのまま反映します。
+
 実行トリガー時に重く感じる場合は、次を先に試してください:
 
 - `copilotScheduler.chatSession = continue`

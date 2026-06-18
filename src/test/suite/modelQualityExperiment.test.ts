@@ -161,6 +161,26 @@ suite("Model Quality Experiment Tests", () => {
   test("getExperimentalModelQualityVariants uses the family rules", () => {
     assert.deepStrictEqual(
       getExperimentalModelQualityVariants({
+        id: "copilot-gpt-5.5",
+        name: "GPT-5.5",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-5.5",
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+      ],
+    );
+
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
         id: "copilot-gpt-5-mini",
         name: "GPT-5 mini",
         description: "",
@@ -175,7 +195,6 @@ suite("Model Quality Experiment Tests", () => {
         ["Low", "low"],
         ["Medium", "medium"],
         ["High", "high"],
-        ["Xhigh", "xhigh"],
       ],
     );
 
@@ -195,6 +214,7 @@ suite("Model Quality Experiment Tests", () => {
         ["Low", "low"],
         ["Medium", "medium"],
         ["High", "high"],
+        ["Max", "max"],
       ],
     );
 
@@ -214,6 +234,8 @@ suite("Model Quality Experiment Tests", () => {
         ["Low", "low"],
         ["Medium", "medium"],
         ["High", "high"],
+        ["Xhigh", "xhigh"],
+        ["Max", "max"],
       ],
     );
 
@@ -233,7 +255,7 @@ suite("Model Quality Experiment Tests", () => {
         vendor: "copilot",
         family: "claude-opus-4.7",
       }),
-      false,
+      true,
     );
 
     assert.deepStrictEqual(
@@ -241,7 +263,7 @@ suite("Model Quality Experiment Tests", () => {
         vendor: "copilot",
         family: "claude-opus-4.7",
       }),
-      [],
+      ["low", "medium", "high", "xhigh", "max"],
     );
 
     assert.deepStrictEqual(
@@ -251,18 +273,18 @@ suite("Model Quality Experiment Tests", () => {
         description: "",
         vendor: "copilot",
         family: "claude-opus-4.7",
-      }),
-      [],
-    );
-
-    assert.strictEqual(
-      supportsExperimentalModelQuality({
-        vendor: "copilot",
-        family: "claude-opus",
-        id: "copilot-claude-opus-4.7",
-        name: "Claude Opus 4.7",
-      }),
-      false,
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+        ["Max", "max"],
+      ],
     );
 
     assert.strictEqual(
@@ -281,7 +303,7 @@ suite("Model Quality Experiment Tests", () => {
         family: "claude-opus-4.7-1m-internal",
         id: "claude-opus-4.7-1m-internal",
       }),
-      ["low", "medium", "high", "xhigh"],
+      ["low", "medium", "high", "xhigh", "max"],
     );
 
     assert.deepStrictEqual(
@@ -301,6 +323,26 @@ suite("Model Quality Experiment Tests", () => {
         ["Medium", "medium"],
         ["High", "high"],
         ["Xhigh", "xhigh"],
+        ["Max", "max"],
+      ],
+    );
+
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
+        id: "mai-code-1-flash-internal",
+        name: "MAI-Code-1-Flash",
+        description: "",
+        vendor: "copilot",
+        family: "oswe-vscode-modelD",
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
       ],
     );
   });
