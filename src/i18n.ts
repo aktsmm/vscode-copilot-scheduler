@@ -181,6 +181,12 @@ export const messages = {
   actionCreate: () => t("Create", "作成"),
   actionNewTask: () => t("New Task", "新規タスク"),
   actionRefresh: () => t("Refresh", "再読込"),
+  actionRefreshAgents: () =>
+    t("Reload agent definitions", "エージェント定義を再読込"),
+  actionRefreshTemplates: () =>
+    t("Reload prompt templates", "プロンプトテンプレートを再読込"),
+  actionRefreshAll: () =>
+    t("Reload agents and prompts", "エージェントとプロンプトを再読込"),
 
   // Webview-only runtime strings (used in media/schedulerWebview.js)
   webviewScriptErrorPrefix: () => t("Script error: ", "スクリプトエラー: "),
@@ -332,6 +338,11 @@ export const messages = {
   labelSelectDay: () => t("Day of month", "日"),
   labelInterval: () => t("Interval", "間隔"),
   labelAgent: () => t("Agent", "Agent"),
+  labelAgentNote: () =>
+    t(
+      "Only user-invocable agents are listed. Agents with `user-invocable: false` in their frontmatter are subagent-only and are hidden.",
+      "直接呼び出せるエージェントのみ表示します。フロントマターで `user-invocable: false` のエージェントはサブエージェント専用のため非表示です。",
+    ),
   labelModel: () => t("Model", "モデル"),
   labelModelVariant: () => t("Thinking Effort", "思考の負荷"),
   labelModelVariantDefault: () => t("Default", "既定"),
@@ -352,8 +363,8 @@ export const messages = {
     ),
   labelModelVariantNote: () =>
     t(
-      "Available choices vary by model.",
-      "選べる負荷はモデルごとに異なります。",
+      "Available choices vary by model. The effort is written to Copilot Chat's settings, but Copilot Chat decides how it applies — Claude models may keep their own adaptive thinking.",
+      "選べる負荷はモデルごとに異なります。設定は Copilot Chat に書き込まれますが、実際の適用は Copilot Chat 側が決めます。Claude 系モデルは独自の adaptive thinking を優先することがあります。",
     ),
   labelModelDefaultOnlyNote: () =>
     t(

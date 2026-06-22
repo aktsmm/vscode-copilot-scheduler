@@ -394,6 +394,7 @@
   var submitBtn = document.getElementById("submit-btn");
   var testBtn = document.getElementById("test-btn");
   var refreshBtn = document.getElementById("refresh-btn");
+  var agentRefreshBtn = document.getElementById("agent-refresh-btn");
   var cronPreset = document.getElementById("cron-preset");
   var cronExpression = document.getElementById("cron-expression");
   var agentSelect = document.getElementById("agent-select");
@@ -1457,6 +1458,13 @@
     refreshBtn.addEventListener("click", function () {
       vscode.postMessage({ type: "refreshAgents" });
       vscode.postMessage({ type: "refreshPrompts" });
+    });
+  }
+
+  // Dedicated agent definitions reload button (next to the agent picker)
+  if (agentRefreshBtn) {
+    agentRefreshBtn.addEventListener("click", function () {
+      vscode.postMessage({ type: "refreshAgents" });
     });
   }
 

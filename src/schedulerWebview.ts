@@ -707,7 +707,10 @@ export class SchedulerWebview {
     }
 
     try {
-      this.cachedAgents = await CopilotExecutor.getAllAgents();
+      // When the user (or a file watcher) forces a refresh, bypass the
+      // executor-level agent cache so freshly edited *.agent.md / AGENTS.md
+      // files are picked up.
+      this.cachedAgents = await CopilotExecutor.getAllAgents(force);
     } catch {
       this.cachedAgents = CopilotExecutor.getBuiltInAgents();
     }
@@ -1088,6 +1091,7 @@ export class SchedulerWebview {
       labelPreset: messages.labelPreset(),
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
+      labelAgentNote: messages.labelAgentNote(),
       labelModel: messages.labelModel(),
       labelModelVariant: messages.labelModelVariant(),
       labelModelVariantDefault: messages.labelModelVariantDefault(),
@@ -1134,6 +1138,9 @@ export class SchedulerWebview {
       actionEdit: messages.actionEdit(),
       actionDelete: messages.actionDelete(),
       actionRefresh: messages.actionRefresh(),
+      actionRefreshAgents: messages.actionRefreshAgents(),
+      actionRefreshTemplates: messages.actionRefreshTemplates(),
+      actionRefreshAll: messages.actionRefreshAll(),
       actionCopyPrompt: messages.actionCopyPrompt(),
       actionDuplicate: messages.actionDuplicate(),
       actionMoveToCurrentWorkspace: messages.actionMoveToCurrentWorkspace(),
@@ -1983,7 +1990,7 @@ export class SchedulerWebview {
                 <select id="template-select">
                   <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
                 </select>
-                <button type="button" class="btn-secondary" id="template-refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
+                <button type="button" class="btn-secondary" id="template-refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshTemplates)}">${escapeHtml(strings.actionRefresh)}</button>
               </div>
             </div>
 
@@ -2079,9 +2086,13 @@ export class SchedulerWebview {
           <div class="form-grid">
             <div class="form-group col-6">
               <label for="agent-select">${escapeHtml(strings.labelAgent)}</label>
-              <select id="agent-select">
-                ${initialAgents.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtml(a.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoAgents)}</option>`}
-              </select>
+              <div class="template-row">
+                <select id="agent-select">
+                  ${initialAgents.length > 0 ? `<option value="">${escapeHtml(strings.placeholderSelectAgent)}</option>` + initialAgents.map((a) => `<option value="${escapeHtmlAttr(a.id || "")}">${escapeHtml(a.name || "")}</option>`).join("") : `<option value="">${escapeHtml(strings.placeholderNoAgents)}</option>`}
+                </select>
+                <button type="button" class="btn-secondary" id="agent-refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshAgents)}">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+              <p class="note">${escapeHtml(strings.labelAgentNote)}</p>
             </div>
 
             <div class="form-group col-6">
@@ -2202,7 +2213,7 @@ export class SchedulerWebview {
         </div>
         <div class="list-toolbar">
           <button type="button" class="btn-primary" id="open-create-btn">${escapeHtml(strings.actionNewTask)}</button>
-          <button type="button" class="btn-secondary" id="refresh-btn">${escapeHtml(strings.actionRefresh)}</button>
+          <button type="button" class="btn-secondary" id="refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshAll)}">${escapeHtml(strings.actionRefresh)}</button>
         </div>
       </div>
       <div class="summary-grid">

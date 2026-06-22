@@ -232,6 +232,13 @@ export interface AgentInfo {
   /** Actual runtime agent name/mode when it differs from the persisted id */
   invocationName?: string;
 
+  /**
+   * Whether the agent can be invoked directly by the user. Agents with
+   * `user-invocable: false` in their frontmatter are subagent-only and cannot
+   * be selected as a chat mode, so they are excluded from the picker.
+   */
+  userInvocable?: boolean;
+
   /** File path for custom agents */
   filePath?: string;
 }

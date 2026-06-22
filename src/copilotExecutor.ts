@@ -151,9 +151,22 @@ function resolveBuiltInChatMode(
 }
 
 function parseAgentFrontmatterName(content: string): string | undefined {
+  return parseAgentFrontmatter(content).name;
+}
+
+/**
+ * Parse the relevant fields from a `.agent.md` (or `AGENTS.md`) frontmatter
+ * block. Returns the declared `name` and whether the agent is user-invocable.
+ * Agents with `user-invocable: false` are subagent-only and cannot be selected
+ * as a chat mode, so callers exclude them from the picker.
+ */
+function parseAgentFrontmatter(content: string): {
+  name?: string;
+  userInvocable: boolean;
+} {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) {
-    return undefined;
+    return { name: undefined, userInvocable: true };
   }
 
   const frontmatter = match[1];
@@ -161,25 +174,48 @@ function parseAgentFrontmatterName(content: string): string | undefined {
     /^name:\s*(?:"([^"]+)"|'([^']+)'|(.+))$/m,
   );
   const rawName = nameMatch?.[1] || nameMatch?.[2] || nameMatch?.[3];
-  const trimmed = rawName?.trim();
-  return trimmed || undefined;
+  const name = rawName?.trim() || undefined;
+
+  const invocableMatch = frontmatter.match(
+    /^user-invocable:\s*(?:"([^"]+)"|'([^']+)'|(.+))$/m,
+  );
+  const rawInvocable = (
+    invocableMatch?.[1] ||
+    invocableMatch?.[2] ||
+    invocableMatch?.[3] ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  // Default to true; only an explicit falsy value hides the agent.
+  const userInvocable = !(
+    rawInvocable === "false" ||
+    rawInvocable === "no" ||
+    rawInvocable === "0"
+  );
+
+  return { name, userInvocable };
 }
 
-async function readAgentInvocationName(
+async function readAgentMetadata(
   filePath: string | undefined,
-): Promise<string | undefined> {
+): Promise<{ invocationName?: string; userInvocable: boolean }> {
   if (!filePath || path.extname(filePath).toLowerCase() !== ".md") {
-    return undefined;
+    return { invocationName: undefined, userInvocable: true };
   }
 
   try {
     const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
-    return parseAgentFrontmatterName(Buffer.from(bytes).toString("utf8"));
+    const parsed = parseAgentFrontmatter(Buffer.from(bytes).toString("utf8"));
+    return {
+      invocationName: parsed.name,
+      userInvocable: parsed.userInvocable,
+    };
   } catch (error) {
     logDebug(
       `[CopilotScheduler] Failed to read agent frontmatter from ${filePath}: ${toSafeErrorDetails(error)}`,
     );
-    return undefined;
+    return { invocationName: undefined, userInvocable: true };
   }
 }
 
@@ -371,6 +407,7 @@ function buildChatOpenArgs(
   mode: string | undefined,
   selection: NormalizedModelSelection,
   modelSelector?: Record<string, string>,
+  omitModelConfiguration = false,
 ): Record<string, unknown> {
   const args: Record<string, unknown> = {
     query: chatOpenPrompt,
@@ -380,7 +417,14 @@ function buildChatOpenArgs(
   if (modelSelector && Object.keys(modelSelector).length > 0) {
     args.modelSelector = modelSelector;
   }
-  if (selection.modelReasoningEffort) {
+  // NOTE: The actual reasoning-effort knob is applied out-of-band by
+  // applyExperimentalModelQualitySelection(), which writes the Copilot Chat
+  // `chatLanguageModels.json` settings file. VS Code's documented
+  // IChatViewOpenOptions for `workbench.action.chat.open` has no
+  // `modelConfiguration` field, so this inline value is best-effort only:
+  // harmless if the running VS Code build ignores it, and a no-op forward-compat
+  // hint otherwise. Do not rely on it as the sole reasoning-effort mechanism.
+  if (!omitModelConfiguration && selection.modelReasoningEffort) {
     args.modelConfiguration = {
       reasoningEffort: selection.modelReasoningEffort,
     };
@@ -440,7 +484,8 @@ export const __testOnly = {
   normalizeAgentPrefix,
   resolveBuiltInChatMode,
   parseAgentFrontmatterName,
-  readAgentInvocationName,
+  parseAgentFrontmatter,
+  readAgentMetadata,
   resolveChatOpenMode,
   stripLeadingAgentPrefix,
   stripLeadingAgentPrefixes,
@@ -576,7 +621,7 @@ export class CopilotExecutor {
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
-          `[CopilotScheduler] Trying workbench.action.chat.open with model selector: ${JSON.stringify(selector)}, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
+          `[CopilotScheduler] Trying workbench.action.chat.open mode=${mode ?? "(none)"} with model selector: ${JSON.stringify(selector)}, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
         );
         await vscode.commands.executeCommand(
           "workbench.action.chat.open",
@@ -596,7 +641,7 @@ export class CopilotExecutor {
 
     try {
       logDebug(
-        `[CopilotScheduler] Trying workbench.action.chat.open without model selector, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
+        `[CopilotScheduler] Trying workbench.action.chat.open mode=${mode ?? "(none)"} without model selector, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
       );
       await vscode.commands.executeCommand(
         "workbench.action.chat.open",
@@ -611,12 +656,78 @@ export class CopilotExecutor {
       logDebug(
         `[CopilotScheduler] chat.open without model selector failed: ${toSafeErrorDetails(error)}`,
       );
-      return {
-        opened: false,
-        resolvedSelection,
-        resolvedModel,
-      };
     }
+
+    // Some models reject the reasoning-effort modelConfiguration knob and make
+    // every chat.open attempt above throw. Before giving up to the legacy text
+    // fallback (which cannot apply a custom agent at all), retry with the
+    // reasoning effort dropped so at least the agent mode still applies. First
+    // keep the model selector so the user's chosen model is preserved, then
+    // fall back to dropping the selector as a last resort.
+    if (mode && resolvedSelection.modelReasoningEffort) {
+      for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
+        try {
+          logDebug(
+            `[CopilotScheduler] Retrying workbench.action.chat.open mode=${mode} with model selector ${JSON.stringify(selector)} but without reasoning effort (dropping reasoningEffort=${resolvedSelection.modelReasoningEffort})`,
+          );
+          await vscode.commands.executeCommand(
+            "workbench.action.chat.open",
+            buildChatOpenArgs(
+              chatOpenPrompt,
+              mode,
+              resolvedSelection,
+              selector,
+              true,
+            ),
+          );
+          return {
+            opened: true,
+            resolvedSelection,
+            resolvedModel,
+          };
+        } catch (error) {
+          logDebug(
+            `[CopilotScheduler] chat.open retry (selector kept, reasoning dropped) failed: ${toSafeErrorDetails(error)}`,
+          );
+        }
+      }
+
+      try {
+        logDebug(
+          `[CopilotScheduler] Retrying workbench.action.chat.open mode=${mode} without model selector and without reasoning effort (last resort to keep the agent mode applied)`,
+        );
+        await vscode.commands.executeCommand(
+          "workbench.action.chat.open",
+          buildChatOpenArgs(
+            chatOpenPrompt,
+            mode,
+            resolvedSelection,
+            undefined,
+            true,
+          ),
+        );
+        return {
+          opened: true,
+          resolvedSelection,
+          resolvedModel,
+        };
+      } catch (error) {
+        logDebug(
+          `[CopilotScheduler] chat.open mode-only retry failed: ${toSafeErrorDetails(error)}`,
+        );
+      }
+    }
+
+    if (mode) {
+      logDebug(
+        `[CopilotScheduler] chat.open failed for all attempts; falling back to legacy chat commands. The custom agent mode=${mode}${resolvedSelection.modelReasoningEffort ? ` and reasoningEffort=${resolvedSelection.modelReasoningEffort}` : ""} cannot be applied via the legacy fallback.`,
+      );
+    }
+    return {
+      opened: false,
+      resolvedSelection,
+      resolvedModel,
+    };
   }
 
   private static async resolveAgentInvocationTarget(
@@ -914,16 +1025,31 @@ export class CopilotExecutor {
   static async getCustomAgents(): Promise<AgentInfo[]> {
     const agents: AgentInfo[] = [];
 
-    // Search for *.agent.md files
+    // Search for *.agent.md files. The previous hard limit of 100 could
+    // silently truncate the agent list (and any cache built from it) in large
+    // workspaces, so raise the cap and surface a warning when it is reached.
+    const agentFileScanLimit = 1000;
     const agentFiles = await vscode.workspace.findFiles(
       "**/*.agent.md",
       "**/node_modules/**",
-      100,
+      agentFileScanLimit,
     );
+    if (agentFiles.length >= agentFileScanLimit) {
+      logDebug(
+        `[CopilotScheduler] Custom agent scan hit the ${agentFileScanLimit}-file limit; some *.agent.md files may be omitted.`,
+      );
+    }
 
     for (const file of agentFiles) {
       const fileName = path.basename(file.fsPath).replace(/\.agent\.md$/i, "");
-      const invocationName = await readAgentInvocationName(file.fsPath);
+      const { invocationName, userInvocable } = await readAgentMetadata(
+        file.fsPath,
+      );
+      // Subagent-only agents (`user-invocable: false`) are never offered as a
+      // chat mode by VS Code, so excluding them keeps the picker actionable.
+      if (!userInvocable) {
+        continue;
+      }
       const runtimeLabel = normalizeAgentPrefix(invocationName || fileName);
       agents.push({
         id: `@${fileName}`,
@@ -931,6 +1057,7 @@ export class CopilotExecutor {
         description: messages.agentCustomDesc(),
         isCustom: true,
         invocationName,
+        userInvocable,
         filePath: file.fsPath,
       });
     }
@@ -1006,9 +1133,14 @@ export class CopilotExecutor {
           if (fileName.toLowerCase().endsWith(".agent.md")) {
             const agentName = fileName.replace(/\.agent\.md$/i, "");
             const agentId = `@${agentName}`;
-            const invocationName = await readAgentInvocationName(
+            const { invocationName, userInvocable } = await readAgentMetadata(
               path.join(globalPath, fileName),
             );
+            // Skip subagent-only agents (`user-invocable: false`); they cannot
+            // be selected as a chat mode.
+            if (!userInvocable) {
+              continue;
+            }
             const runtimeLabel = normalizeAgentPrefix(
               invocationName || agentName,
             );
@@ -1022,6 +1154,7 @@ export class CopilotExecutor {
               description: messages.agentGlobalDesc(),
               isCustom: true,
               invocationName,
+              userInvocable,
               filePath: path.join(globalPath, fileName),
             });
           }
@@ -1037,21 +1170,61 @@ export class CopilotExecutor {
     return agents;
   }
 
-  /**
-   * Get all agents (built-in + custom + global), deduplicated by id
-   */
-  static async getAllAgents(): Promise<AgentInfo[]> {
-    const builtIn = CopilotExecutor.getBuiltInAgents();
-    const custom = await CopilotExecutor.getCustomAgents();
-    const global = await CopilotExecutor.getGlobalAgents();
+  /** Cached result of {@link getAllAgents}; cleared by {@link invalidateAgentCache}. */
+  private static cachedAgents: AgentInfo[] | undefined;
+  /** In-flight scan shared by concurrent {@link getAllAgents} callers. */
+  private static cachedAgentsPromise: Promise<AgentInfo[]> | undefined;
 
-    const seen = new Set<string>();
-    const result: AgentInfo[] = [];
-    for (const agent of [...builtIn, ...custom, ...global]) {
-      const key = agent.id || agent.name;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(agent);
+  /**
+   * Drop the cached agent list so the next {@link getAllAgents} call rescans.
+   * Called when agent files change, relevant settings change, or the set of
+   * workspace folders changes.
+   */
+  static invalidateAgentCache(): void {
+    CopilotExecutor.cachedAgents = undefined;
+    CopilotExecutor.cachedAgentsPromise = undefined;
+  }
+
+  /**
+   * Get all agents (built-in + custom + global), deduplicated by id.
+   *
+   * Results are cached so the execution path (and the webview) do not rescan
+   * the workspace on every call. Pass `forceRefresh` to bypass the cache, and
+   * use {@link invalidateAgentCache} to drop it when sources change.
+   */
+  static async getAllAgents(forceRefresh = false): Promise<AgentInfo[]> {
+    if (forceRefresh) {
+      CopilotExecutor.invalidateAgentCache();
+    }
+    if (CopilotExecutor.cachedAgents) {
+      return CopilotExecutor.cachedAgents;
+    }
+    if (!CopilotExecutor.cachedAgentsPromise) {
+      CopilotExecutor.cachedAgentsPromise = (async () => {
+        const builtIn = CopilotExecutor.getBuiltInAgents();
+        const custom = await CopilotExecutor.getCustomAgents();
+        const global = await CopilotExecutor.getGlobalAgents();
+
+        const seen = new Set<string>();
+        const result: AgentInfo[] = [];
+        for (const agent of [...builtIn, ...custom, ...global]) {
+          const key = agent.id || agent.name;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          result.push(agent);
+        }
+        return result;
+      })();
+    }
+    const pending = CopilotExecutor.cachedAgentsPromise;
+    const result = await pending;
+    // Only publish to the shared cache if this scan is still the current one.
+    // If invalidateAgentCache() (e.g. a forced refresh, file change, or setting
+    // change) ran while this scan was in flight, cachedAgentsPromise was reset,
+    // so a stale older scan must not overwrite the newer result.
+    if (CopilotExecutor.cachedAgentsPromise === pending) {
+      CopilotExecutor.cachedAgents = result;
+      CopilotExecutor.cachedAgentsPromise = undefined;
     }
     return result;
   }

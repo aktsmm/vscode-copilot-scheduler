@@ -10,7 +10,7 @@ import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
-import { logDebug, logError } from "./logger";
+import { initLogger, logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
   buildModelPickerGroups,
@@ -621,6 +621,10 @@ function registerPromptResourceWatchers(): void {
   disposePromptResourceWatchers();
 
   const refreshCaches = () => {
+    // Agent definitions are scanned and cached in the executor; drop that cache
+    // so edits to *.agent.md / AGENTS.md are reflected on the next run and in
+    // the panel.
+    CopilotExecutor.invalidateAgentCache();
     void SchedulerWebview.refreshCachesAndNotifyPanel(true);
   };
 
@@ -635,6 +639,10 @@ function registerPromptResourceWatchers(): void {
   };
 
   watchPattern("**/.github/prompts/**/*.md");
+  // Workspace agent definitions can live outside .github/prompts (e.g.
+  // .github/agents, AGENTS.md, or repository root), so watch them explicitly.
+  watchPattern("**/*.agent.md");
+  watchPattern("**/AGENTS.md");
 
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   const watchedRoots = new Set<string>();
@@ -736,6 +744,10 @@ function buildTaskQuickPickItem(task: ScheduledTask): {
  */
 export function activate(context: vscode.ExtensionContext): void {
   extensionContextRef = context;
+
+  // Create the dedicated output channel early so diagnostic logs are visible
+  // in the Output panel under "Copilot Scheduler".
+  initLogger(context);
 
   // Prompt reload when the extension has been updated
   {
@@ -850,6 +862,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   registerPromptResourceWatchers();
+
+  // Warm the agent/model/template caches at startup so the first panel open and
+  // the first scheduled run do not pay the full workspace-scan cost. Runs in the
+  // background; failures are non-fatal and handled inside the refresh routine.
+  void SchedulerWebview.refreshCachesAndNotifyPanel(false).catch(() => {});
 
   context.subscriptions.push({
     dispose: () => {

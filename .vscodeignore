@@ -16,6 +16,7 @@ node_modules/**
 *.vsix
 test-run-*.txt
 *-output.txt
+tmp_*
 FULL_SPECIFICATION.md
 AGENTS.md
 DASHBOARD.md

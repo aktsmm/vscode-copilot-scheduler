@@ -73,6 +73,37 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     assert.strictEqual(parsed, undefined);
   });
 
+  test("Treats agents as user-invocable unless explicitly disabled", () => {
+    const noFlag = __testOnly.parseAgentFrontmatter(
+      ["---", "name: Orchestrator", "---", "# body"].join("\n"),
+    );
+    const noFrontmatter = __testOnly.parseAgentFrontmatter("# just a body");
+
+    assert.strictEqual(noFlag.userInvocable, true);
+    assert.strictEqual(noFrontmatter.userInvocable, true);
+  });
+
+  test("Parses user-invocable: false as not user-invocable", () => {
+    for (const raw of ["false", "no", "0", '"false"', "'false'", "FALSE"]) {
+      const parsed = __testOnly.parseAgentFrontmatter(
+        ["---", "name: Subagent", `user-invocable: ${raw}`, "---"].join("\n"),
+      );
+      assert.strictEqual(
+        parsed.userInvocable,
+        false,
+        `expected user-invocable ${raw} to be false`,
+      );
+      assert.strictEqual(parsed.name, "Subagent");
+    }
+  });
+
+  test("Parses user-invocable: true as user-invocable", () => {
+    const parsed = __testOnly.parseAgentFrontmatter(
+      ["---", "name: Helper", "user-invocable: true", "---"].join("\n"),
+    );
+    assert.strictEqual(parsed.userInvocable, true);
+  });
+
   test("Converts slash-command agents without prefix", () => {
     assert.strictEqual(__testOnly.normalizeAgentPrefix("ask"), "/ask");
     assert.strictEqual(__testOnly.normalizeAgentPrefix("agent"), "/agent");
@@ -275,6 +306,62 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     });
   });
 
+  test("chat.open args keep the agent mode but drop reasoning effort when modelConfiguration is omitted", () => {
+    const args = __testOnly.buildChatOpenArgs(
+      "Review this",
+      "agent",
+      {
+        model: "claude-opus-4.8",
+        modelVendor: "copilot",
+        modelFamily: "claude-opus-4.8",
+        modelVersion: "claude-opus-4.8",
+        modelReasoningEffort: "high",
+      },
+      undefined,
+      true,
+    );
+
+    // The custom agent mode survives so it can still be applied, but the
+    // reasoning-effort knob that some models reject is dropped.
+    assert.deepStrictEqual(args, {
+      query: "Review this",
+      isPartialQuery: false,
+      mode: "agent",
+    });
+  });
+
+  test("chat.open args keep the model selector but drop reasoning effort on the first reasoning-free retry", () => {
+    const selector = {
+      id: "claude-opus-4.8",
+      vendor: "copilot",
+      family: "claude-opus-4.8",
+      version: "claude-opus-4.8",
+    };
+    const args = __testOnly.buildChatOpenArgs(
+      "Review this",
+      "agent",
+      {
+        model: "claude-opus-4.8",
+        modelVendor: "copilot",
+        modelFamily: "claude-opus-4.8",
+        modelVersion: "claude-opus-4.8",
+        modelReasoningEffort: "high",
+      },
+      selector,
+      true,
+    );
+
+    // First retry tier: the user's selected model (modelSelector) is preserved
+    // so we do not silently fall back to the default chat model; only the
+    // reasoning-effort knob that some models reject is dropped.
+    assert.deepStrictEqual(args, {
+      query: "Review this",
+      isPartialQuery: false,
+      mode: "agent",
+      modelSelector: selector,
+    });
+  });
+
   test("chat.open args omit modelConfiguration when reasoning effort is default", () => {
     const args = __testOnly.buildChatOpenArgs(
       "Ask this",
@@ -389,5 +476,43 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       merged.map((model) => model.maxInputTokens),
       [32000, 128000],
     );
+  });
+
+  test("getAllAgents caches results until invalidated", async () => {
+    CopilotExecutor.invalidateAgentCache();
+
+    const first = await CopilotExecutor.getAllAgents();
+    const second = await CopilotExecutor.getAllAgents();
+    // A cache hit returns the very same array instance (no rescan).
+    assert.strictEqual(second, first);
+
+    CopilotExecutor.invalidateAgentCache();
+    const third = await CopilotExecutor.getAllAgents();
+    // After invalidation the list is rebuilt (new instance, equal content).
+    assert.notStrictEqual(third, first);
+    assert.deepStrictEqual(third, first);
+  });
+
+  test("getAllAgents force refresh bypasses the cache", async () => {
+    const cached = await CopilotExecutor.getAllAgents();
+    const forced = await CopilotExecutor.getAllAgents(true);
+    // Forcing a refresh rescans and returns a fresh instance.
+    assert.notStrictEqual(forced, cached);
+    assert.deepStrictEqual(forced, cached);
+  });
+
+  test("getAllAgents does not let an in-flight scan poison a forced refresh", async () => {
+    CopilotExecutor.invalidateAgentCache();
+
+    // Start a non-forced scan, then immediately force a refresh while the first
+    // scan may still be in flight. The forced scan's result must win the cache;
+    // the older scan must not write a stale snapshot back afterwards.
+    const stalePromise = CopilotExecutor.getAllAgents();
+    const forced = await CopilotExecutor.getAllAgents(true);
+    await stalePromise;
+
+    const afterwards = await CopilotExecutor.getAllAgents();
+    // The cache reflects the forced refresh, not the earlier in-flight scan.
+    assert.strictEqual(afterwards, forced);
   });
 });

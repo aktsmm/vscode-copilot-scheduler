@@ -5,6 +5,32 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.53] - 2026-06-22
+
+### Added
+
+- **Agent definitions reload**: A dedicated reload button next to the agent picker re-scans agent definitions on demand, and file watchers now also cover workspace `*.agent.md` and `AGENTS.md` files so edits outside `.github/prompts` are picked up automatically.
+- **Dedicated output channel**: Diagnostic logs are now written to a "Copilot Scheduler" output channel (in addition to the Debug Console), so the `chat.open` mode / model-selector / reasoning-effort trace is visible in the Output panel when `copilotScheduler.logLevel` is set to `debug`.
+- **Picker guidance notes**: The agent picker and the thinking-effort field now show a short note explaining how the choices behave (subagent-only agents are hidden; reasoning effort is written to Copilot Chat's settings but applied at Copilot Chat's discretion).
+
+### Changed
+
+- **Only user-invocable agents are listed**: Agents with `user-invocable: false` in their frontmatter are subagent-only and cannot be selected as a chat mode, so they are now excluded from the agent picker. Agents without the field (the default) remain listed.
+- **Agent list caching**: Agent discovery is now cached and shared between the execution path and the panel, with cache invalidation wired to the file watchers, relevant setting changes, and workspace-folder changes, plus a non-blocking warm-up at startup. The `*.agent.md` scan limit was raised from 100 to 1000 with a warning when the cap is reached.
+
+### Fixed
+
+- **Custom agent preserved when reasoning effort is rejected**: When `chat.open` fails for every attempt (for example a model that rejects the `reasoningEffort` model configuration), the Scheduler now retries with the reasoning effort dropped — first keeping the selected model, then as a last resort keeping only the agent mode — before falling back to the legacy text path. When one of these reasoning-free retries succeeds, the custom agent stays applied instead of losing both the agent and the reasoning effort; if every attempt still fails, it falls back to the legacy text path, which cannot apply a custom agent. Diagnostic logging now records the `mode` sent on each `chat.open` attempt.
+
+### Tests
+
+- Added coverage for the agent-list cache (hit/invalidate/force-refresh), for the `user-invocable` frontmatter parsing (default/true/false variants), and for the `chat.open` argument shape when the reasoning-effort model configuration is omitted.
+
+### Notes
+
+- **How reasoning effort and custom agents are applied**: The scheduler selects the custom agent via the `mode` field of `workbench.action.chat.open` and applies reasoning effort primarily by writing Copilot Chat's `chatLanguageModels.json` settings (the experimental model-quality sync). An inline `modelConfiguration` value is still sent as a best-effort hint, but VS Code's `IChatViewOpenOptions` has no `modelConfiguration` field, so the settings write is the only durable scheduler-controlled path. These are sent identically for every model. Whether the selected agent instructions and reasoning depth are actually honored in the response is decided by VS Code / GitHub Copilot Chat, which can treat Claude (Opus/Sonnet) models differently from GPT models (see the existing thinking-effort known limitation for 1.0.52). When an agent or reasoning depth does not appear to take effect for a Claude model, enable `copilotScheduler.logLevel: debug` and confirm the `Agent set:` / `Experimental model quality sync:` / `Trying workbench.action.chat.open` lines show the expected `mode` and `effective` values — if they do, the gap is on the Copilot Chat side rather than the scheduler.
+- **Reasoning effort is best-effort (verified)**: The scheduler's reasoning-effort value is confirmed to be written correctly to `chatLanguageModels.json` (same file, model id, and format Copilot itself uses). In local testing the selected effort was still not reflected in Copilot Chat's response even after a window reload, so reaching the chosen depth ultimately depends on Copilot Chat (for Claude models, adaptive thinking can override it). The scheduler cannot force this beyond writing the setting.
+
 ## [1.0.52] - 2026-06-18
 
 ### Changed
