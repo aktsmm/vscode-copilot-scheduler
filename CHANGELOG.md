@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.55] - 2026-07-07
+
+### Fixed
+
+- **Release workflow reliability**: Marketplace packaging and publishing now run `vsce` through non-interactive `npx --yes`, preventing GitHub Actions from waiting for an install confirmation prompt when `@vscode/vsce` is not already installed.
+
 ## [1.0.54] - 2026-07-07
 
 ### Changed
