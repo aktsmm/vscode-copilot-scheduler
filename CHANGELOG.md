@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.56] - 2026-07-07
+
+### Fixed
+
+- **Release workflow determinism**: `@vscode/vsce` is now installed as a dev dependency and the release workflow uses the local `vsce` binary, avoiding remote `npx` install prompts or long-running package-install steps during Marketplace publishing.
+
 ## [1.0.55] - 2026-07-07
 
 ### Fixed
