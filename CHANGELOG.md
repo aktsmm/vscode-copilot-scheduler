@@ -5,6 +5,16 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.54] - 2026-07-07
+
+### Changed
+
+- **Friendly cron auto-apply**: The Webview friendly cron builder now applies selected helper values to the cron expression immediately, so saving a task no longer depends on pressing **Generate** after changing the friendly controls.
+
+### Tests
+
+- Added regression coverage for friendly cron expression building, auto-apply event wiring, and edit-mode stale selection handling.
+
 ## [1.0.53] - 2026-06-22
 
 ### Added

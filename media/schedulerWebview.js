@@ -1109,9 +1109,15 @@
     });
   }
 
+  function syncFriendlyFrequencySelection() {
+    updateFriendlyVisibility();
+    applyFriendlyCronSelection(false);
+  }
+
   if (friendlyFrequency) {
-    friendlyFrequency.addEventListener("change", function () {
-      updateFriendlyVisibility();
+    friendlyFrequency.addEventListener("change", function (e) {
+      syncFriendlyFrequencySelection();
+      if (e) e.__friendlyFrequencyHandled = true;
     });
   }
 
@@ -1119,7 +1125,22 @@
   document.addEventListener("change", function (e) {
     var target = e && e.target;
     if (target && target.id === "friendly-frequency") {
-      updateFriendlyVisibility();
+      if (!e.__friendlyFrequencyHandled) {
+        syncFriendlyFrequencySelection();
+      }
+      return;
+    }
+    if (
+      target &&
+      [
+        "friendly-interval",
+        "friendly-minute",
+        "friendly-hour",
+        "friendly-dow",
+        "friendly-dom",
+      ].indexOf(target.id) !== -1
+    ) {
+      applyFriendlyCronSelection(false);
     }
   });
 
@@ -1132,7 +1153,7 @@
 
   if (friendlyGenerate) {
     friendlyGenerate.addEventListener("click", function () {
-      generateCronFromFriendly();
+      applyFriendlyCronSelection(true);
     });
   }
 
@@ -2280,105 +2301,77 @@
     }
   }
 
-  function generateCronFromFriendly() {
-    if (!friendlyFrequency || !cronExpression) return;
-    var selection = friendlyFrequency.value;
+  function buildFriendlyCronExpression(values) {
+    var source = values || {};
+    var selection = source.selection || "";
     var expr = "";
 
     switch (selection) {
       case "every-n": {
-        var interval = boundedNumber(
-          friendlyInterval ? friendlyInterval.value : "",
-          1,
-          1440,
-          20,
-        );
+        var interval = boundedNumber(source.interval, 1, 1440, 20);
         expr = buildStrictIntervalCron(interval);
         if (!expr) {
-          showFormError(strings.labelUnsupportedInterval || "", 5000);
-          return;
+          return null;
         }
         break;
       }
       case "hourly": {
-        var minuteValue = boundedNumber(
-          friendlyMinute ? friendlyMinute.value : "",
-          0,
-          59,
-          0,
-        );
+        var minuteValue = boundedNumber(source.minute, 0, 59, 0);
         expr = minuteValue + " * * * *";
         break;
       }
       case "daily": {
-        var dailyMinute = boundedNumber(
-          friendlyMinute ? friendlyMinute.value : "",
-          0,
-          59,
-          0,
-        );
-        var dailyHour = boundedNumber(
-          friendlyHour ? friendlyHour.value : "",
-          0,
-          23,
-          9,
-        );
+        var dailyMinute = boundedNumber(source.minute, 0, 59, 0);
+        var dailyHour = boundedNumber(source.hour, 0, 23, 9);
         expr = dailyMinute + " " + dailyHour + " * * *";
         break;
       }
       case "weekly": {
-        var weeklyMinute = boundedNumber(
-          friendlyMinute ? friendlyMinute.value : "",
-          0,
-          59,
-          0,
-        );
-        var weeklyHour = boundedNumber(
-          friendlyHour ? friendlyHour.value : "",
-          0,
-          23,
-          9,
-        );
-        var dowValue = boundedNumber(
-          friendlyDow ? friendlyDow.value : "",
-          0,
-          6,
-          1,
-        );
+        var weeklyMinute = boundedNumber(source.minute, 0, 59, 0);
+        var weeklyHour = boundedNumber(source.hour, 0, 23, 9);
+        var dowValue = boundedNumber(source.dow, 0, 6, 1);
         expr = weeklyMinute + " " + weeklyHour + " * * " + dowValue;
         break;
       }
       case "monthly": {
-        var monthlyMinute = boundedNumber(
-          friendlyMinute ? friendlyMinute.value : "",
-          0,
-          59,
-          0,
-        );
-        var monthlyHour = boundedNumber(
-          friendlyHour ? friendlyHour.value : "",
-          0,
-          23,
-          9,
-        );
-        var domValue = boundedNumber(
-          friendlyDom ? friendlyDom.value : "",
-          1,
-          28,
-          1,
-        );
+        var monthlyMinute = boundedNumber(source.minute, 0, 59, 0);
+        var monthlyHour = boundedNumber(source.hour, 0, 23, 9);
+        var domValue = boundedNumber(source.dom, 1, 28, 1);
         expr = monthlyMinute + " " + monthlyHour + " " + domValue + " * *";
         break;
       }
       default:
-        expr = "";
+        return null;
     }
 
-    if (expr) {
-      cronExpression.value = expr;
-      if (cronPreset) cronPreset.value = "";
-      updateCronPreview();
+    return expr;
+  }
+
+  function getFriendlyCronValues() {
+    return {
+      selection: friendlyFrequency ? friendlyFrequency.value : "",
+      interval: friendlyInterval ? friendlyInterval.value : "",
+      minute: friendlyMinute ? friendlyMinute.value : "",
+      hour: friendlyHour ? friendlyHour.value : "",
+      dow: friendlyDow ? friendlyDow.value : "",
+      dom: friendlyDom ? friendlyDom.value : "",
+    };
+  }
+
+  function applyFriendlyCronSelection(showErrors) {
+    if (!friendlyFrequency || !cronExpression) return false;
+    var values = getFriendlyCronValues();
+    var expr = buildFriendlyCronExpression(values);
+    if (!expr) {
+      if (showErrors && values.selection === "every-n") {
+        showFormError(strings.labelUnsupportedInterval || "", 5000);
+      }
+      return false;
     }
+    cronExpression.value = expr;
+    if (cronPreset) cronPreset.value = "";
+    updateCronPreview();
+    return true;
   }
 
   function resetForm() {
@@ -2588,6 +2581,8 @@
       promptTextEl.value = typeof task.prompt === "string" ? task.prompt : "";
     if (cronExpression) cronExpression.value = task.cronExpression || "";
     if (cronPreset) cronPreset.value = "";
+    if (friendlyFrequency) friendlyFrequency.value = "";
+    updateFriendlyVisibility();
     updateCronPreview();
 
     // Restore agent/model — if options not loaded yet, store as pending

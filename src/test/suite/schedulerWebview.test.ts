@@ -319,6 +319,38 @@ function loadWebviewStrictIntervalCronFunction(): (
   return factory();
 }
 
+function loadWebviewFriendlyCronExpressionFunction(): (values: {
+  selection?: string;
+  interval?: string | number;
+  minute?: string | number;
+  hour?: string | number;
+  dow?: string | number;
+  dom?: string | number;
+}) => string | null {
+  const scriptPath = path.resolve(
+    __dirname,
+    "../../../media/schedulerWebview.js",
+  );
+  const source = fs.readFileSync(scriptPath, "utf8");
+
+  const snippet = [
+    extractFunctionSource(source, "boundedNumber"),
+    extractStringAwareFunctionSource(source, "buildStrictIntervalCron"),
+    extractStringAwareFunctionSource(source, "buildFriendlyCronExpression"),
+    "return buildFriendlyCronExpression;",
+  ].join("\n");
+
+  const factory = new Function(snippet) as () => (values: {
+    selection?: string;
+    interval?: string | number;
+    minute?: string | number;
+    hour?: string | number;
+    dow?: string | number;
+    dom?: string | number;
+  }) => string | null;
+  return factory();
+}
+
 function loadWebviewCronSummaryFunction(): (expression: string) => string {
   const scriptPath = path.resolve(
     __dirname,
@@ -413,6 +445,42 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
     assert.strictEqual(build(50), "");
   });
 
+  test("friendly cron expression builder maps selections to cron", () => {
+    const build = loadWebviewFriendlyCronExpressionFunction();
+
+    assert.strictEqual(
+      build({ selection: "every-n", interval: 20 }),
+      "*/20 * * * *",
+    );
+    assert.strictEqual(
+      build({ selection: "hourly", minute: 15 }),
+      "15 * * * *",
+    );
+    assert.strictEqual(
+      build({ selection: "daily", hour: 9, minute: 30 }),
+      "30 9 * * *",
+    );
+    assert.strictEqual(
+      build({ selection: "weekly", dow: 1, hour: 10, minute: 5 }),
+      "5 10 * * 1",
+    );
+    assert.strictEqual(
+      build({ selection: "monthly", dom: 3, hour: 8, minute: 45 }),
+      "45 8 3 * *",
+    );
+  });
+
+  test("friendly cron expression builder preserves cron on unsupported selections", () => {
+    const build = loadWebviewFriendlyCronExpressionFunction();
+
+    assert.strictEqual(build({ selection: "" }), null);
+    assert.strictEqual(build({ selection: "every-n", interval: 7 }), null);
+    assert.strictEqual(
+      build({ selection: "every-n", interval: "" }),
+      "*/20 * * * *",
+    );
+  });
+
   test("friendly cron form uses select controls for bounded fields", () => {
     const webviewSourcePath = path.resolve(
       __dirname,
@@ -459,6 +527,82 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
     assert.ok(
       sourceContainsToken(source, "openGuruBtn.disabled = hasMultipleLines"),
       "preview update should disable crontab.guru for multi-line cron expressions.",
+    );
+  });
+
+  test("friendly cron controls auto-apply without requiring generate", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    assert.ok(
+      sourceContainsToken(source, "applyFriendlyCronSelection(true)"),
+      "generate button should use the shared friendly cron apply helper.",
+    );
+    assertTokensInOrder(
+      source,
+      [
+        'friendlyFrequency.addEventListener("change", function (e)',
+        "syncFriendlyFrequencySelection();",
+        "e.__friendlyFrequencyHandled = true;",
+      ],
+      "friendly frequency direct handler should auto-apply once and mark the event handled",
+    );
+    assertTokensInOrder(
+      source,
+      [
+        'target.id === "friendly-frequency"',
+        "if (!e.__friendlyFrequencyHandled)",
+        "syncFriendlyFrequencySelection();",
+      ],
+      "delegated frequency fallback should skip events already handled directly",
+    );
+    assert.ok(
+      sourceContainsToken(source, 'target.id === "friendly-frequency"'),
+      "delegated frequency fallback should still recognize friendly-frequency.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '"friendly-interval"'),
+      "friendly interval changes should auto-apply.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '"friendly-minute"'),
+      "friendly minute changes should auto-apply.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '"friendly-hour"'),
+      "friendly hour changes should auto-apply.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '"friendly-dow"'),
+      "friendly day-of-week changes should auto-apply.",
+    );
+    assert.ok(
+      sourceContainsToken(source, '"friendly-dom"'),
+      "friendly day-of-month changes should auto-apply.",
+    );
+  });
+
+  test("edit mode clears friendly cron selection before loading task cron", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    assertTokensInOrder(
+      source,
+      [
+        "window.editTask = function (id)",
+        'if (cronExpression) cronExpression.value = task.cronExpression || "";',
+        'if (cronPreset) cronPreset.value = "";',
+        'if (friendlyFrequency) friendlyFrequency.value = "";',
+        "updateFriendlyVisibility();",
+        "updateCronPreview();",
+      ],
+      "edit mode should clear stale friendly cron selection before showing task cron",
     );
   });
 
