@@ -29,6 +29,8 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 🖥️ **Webview GUI** - Easy-to-use graphical interface for creating and editing tasks
 
+🛠️ **Copilot Chat Tools** - Query, create, update, delete, and enable/disable scheduled tasks from agent mode using Language Model Tools
+
 ## ⏰ Cron Expression Examples
 
 | Expression     | Description             |
@@ -67,27 +69,42 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 | `Copilot Scheduler: Show Execution History`         | View recent run history    |
 | `Copilot Scheduler: Dump Model Catalog Diagnostics` | Dump model diagnostics     |
 
+## 🛠️ Copilot Chat Tools
+
+In Copilot Chat agent mode, use the scheduler tools with `#` references:
+
+| Tool                          | Description                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `#scheduler_query`            | Read-only task query. Use `kind=list`, `kind=get`, `kind=history`, or `kind=preview_cron`.           |
+| `#scheduler_create_task`      | Create a scheduled task after confirmation.                                                          |
+| `#scheduler_update_task`      | Update task fields after confirmation. Use `#scheduler_set_task_enabled` for enable/disable changes. |
+| `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                 |
+| `#scheduler_set_task_enabled` | Enable or disable a task after confirmation.                                                         |
+
+Write tools are enabled by default and still require a trusted workspace plus a Copilot Chat confirmation. Set `copilotScheduler.lmTools.enableWriteTools` to `false` to keep read-only tools available while disabling create/update/delete/enable-disable operations.
+
 ## ⚙️ Settings
 
-| Setting                                   | Default     | Description                                                                                                                                                                                                                                                 |
-| ----------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copilotScheduler.enabled`                | `true`      | Enable/disable scheduled execution                                                                                                                                                                                                                          |
-| `copilotScheduler.defaultScope`           | `workspace` | Default scope                                                                                                                                                                                                                                               |
-| `copilotScheduler.language`               | `auto`      | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.                                                                                                                                     |
-| `copilotScheduler.timezone`               | `""`        | Timezone for scheduling                                                                                                                                                                                                                                     |
-| `copilotScheduler.jitterSeconds`          | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                   |
-| `copilotScheduler.manualRunNextRunPolicy` | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                    |
-| `copilotScheduler.chatSession`            | `new`       | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                    |
-| `copilotScheduler.autoModeDefault`        | `false`     | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                           |
-| `copilotScheduler.commandDelayFactor`     | `0.8`       | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                    |
-| `copilotScheduler.showNotifications`      | `true`      | Show notifications when tasks are executed                                                                                                                                                                                                                  |
-| `copilotScheduler.notificationMode`       | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                                                                                                                                                                          |
-| `copilotScheduler.maxDailyExecutions`     | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.                                                                                                                                                     |
-| `copilotScheduler.minimumIntervalWarning` | `true`      | Warn when cron interval is shorter than 30 minutes                                                                                                                                                                                                          |
-| `copilotScheduler.globalPromptsPath`      | `""`        | Custom global prompts folder path (default: VS Code's User/prompts folder — Windows: `%APPDATA%/Code/User/prompts`, macOS: `~/Library/Application Support/Code/User/prompts`, Linux: `$XDG_CONFIG_HOME/Code/User/prompts` or `~/.config/Code/User/prompts`) |
-| `copilotScheduler.globalAgentsPath`       | `""`        | Custom global agents folder path (`*.agent.md`) (default: auto-detect VS Code's User/prompts folder and `~/.copilot/agents`; setting this overrides the default discovery roots)                                                                            |
-| `copilotScheduler.logLevel`               | `info`      | Log level (none/error/info/debug)                                                                                                                                                                                                                           |
-| `copilotScheduler.executionHistoryLimit`  | `50`        | Max number of execution history entries kept for the history view (10–500)                                                                                                                                                                                  |
+| Setting                                     | Default     | Description                                                                                                                                                                                                                                                 |
+| ------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copilotScheduler.enabled`                  | `true`      | Enable/disable scheduled execution                                                                                                                                                                                                                          |
+| `copilotScheduler.defaultScope`             | `workspace` | Default scope                                                                                                                                                                                                                                               |
+| `copilotScheduler.language`                 | `auto`      | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.                                                                                                                                     |
+| `copilotScheduler.timezone`                 | `""`        | Timezone for scheduling                                                                                                                                                                                                                                     |
+| `copilotScheduler.jitterSeconds`            | `600`       | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                   |
+| `copilotScheduler.manualRunNextRunPolicy`   | `advance`   | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                    |
+| `copilotScheduler.chatSession`              | `new`       | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                    |
+| `copilotScheduler.autoModeDefault`          | `false`     | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                           |
+| `copilotScheduler.commandDelayFactor`       | `0.8`       | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                    |
+| `copilotScheduler.showNotifications`        | `true`      | Show notifications when tasks are executed                                                                                                                                                                                                                  |
+| `copilotScheduler.notificationMode`         | `sound`     | Notification mode (sound/silentToast/silentStatus)                                                                                                                                                                                                          |
+| `copilotScheduler.maxDailyExecutions`       | `24`        | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.                                                                                                                                                     |
+| `copilotScheduler.minimumIntervalWarning`   | `true`      | Warn when cron interval is shorter than 30 minutes                                                                                                                                                                                                          |
+| `copilotScheduler.globalPromptsPath`        | `""`        | Custom global prompts folder path (default: VS Code's User/prompts folder — Windows: `%APPDATA%/Code/User/prompts`, macOS: `~/Library/Application Support/Code/User/prompts`, Linux: `$XDG_CONFIG_HOME/Code/User/prompts` or `~/.config/Code/User/prompts`) |
+| `copilotScheduler.globalAgentsPath`         | `""`        | Custom global agents folder path (`*.agent.md`) (default: auto-detect VS Code's User/prompts folder and `~/.copilot/agents`; setting this overrides the default discovery roots)                                                                            |
+| `copilotScheduler.logLevel`                 | `info`      | Log level (none/error/info/debug)                                                                                                                                                                                                                           |
+| `copilotScheduler.executionHistoryLimit`    | `50`        | Max number of execution history entries kept for the history view (10–500)                                                                                                                                                                                  |
+| `copilotScheduler.lmTools.enableWriteTools` | `true`      | Allow Copilot Chat tools to create, update, delete, and enable/disable scheduler tasks. Set to `false` to keep only read-only tools available.                                                                                                              |
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
 
@@ -142,7 +159,7 @@ Only user-invocable agents appear in the picker. Agents with `user-invocable: fa
 
 ## 📋 Requirements
 
-- VS Code 1.80.0 or higher
+- VS Code 1.95.0 or higher
 - GitHub Copilot extension
 
 ## 🛠️ Release Automation

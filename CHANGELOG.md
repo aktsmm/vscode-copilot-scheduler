@@ -5,6 +5,28 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-08
+
+### Added
+
+- **Copilot Chat integration via Language Model Tools** (5 new tools). Ask Copilot Chat / agent mode to inspect and manage scheduled tasks directly:
+  - `#scheduler_query` — read-only query (kinds: `list`, `get`, `history`, `preview_cron`). Always available.
+  - `#scheduler_create_task` — create a new scheduled task (confirmation required).
+  - `#scheduler_update_task` — update an existing task (confirmation required; refuses `enabled` — use `#scheduler_set_task_enabled`).
+  - `#scheduler_delete_task` — permanently delete a task (strong confirmation showing name / scope / workspace; re-fetches the task at invocation time to catch races).
+  - `#scheduler_set_task_enabled` — toggle a task on / off.
+- **`copilotScheduler.lmTools.enableWriteTools`** setting (default `true`). Set to `false` to disable the four write tools while keeping read access.
+- Internal `taskMutationService` (LM Tool client) and `executionHistoryStore` modules to route LM Tool mutations through a single, non-interactive path with disclaimer / cron-warning / race-guard checks.
+
+### Changed
+
+- **Minimum required VS Code version raised to 1.95.0** (previously 1.80.0). This is required for the stable Language Model Tools API. Users on older VS Code versions will remain on 1.0.56 via Marketplace’s version compatibility handling.
+- Execution history persistence is now provided by `src/executionHistoryStore.ts`. Behaviour, storage key, and entry shape are preserved.
+
+### Security
+
+- LM Tool write operations enforce three gates in order: (1) the `enableWriteTools` setting, (2) `workspace.isTrusted`, (3) VS Code Chat's built-in `prepareInvocation` confirmation. Each gate returns an actionable error to the LLM so users can see why an operation was rejected.
+
 ## [1.0.56] - 2026-07-07
 
 ### Fixed

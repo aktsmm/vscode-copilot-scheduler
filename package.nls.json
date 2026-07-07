@@ -50,5 +50,16 @@
   "config.globalPromptsPath": "Custom path for global prompt templates. Default: VS Code's User/prompts folder (Windows: %APPDATA%/Code/User/prompts, macOS: ~/Library/Application Support/Code/User/prompts, Linux: $XDG_CONFIG_HOME/Code/User/prompts or ~/.config/Code/User/prompts)",
   "config.globalAgentsPath": "Custom path for global agent files (*.agent.md). Default: auto-detect VS Code's User/prompts folder plus ~/.copilot/agents (Windows: %USERPROFILE%/.copilot/agents). Setting this overrides the default discovery roots.",
   "config.reportIssue": "🐛 Found a bug? [Report an issue on GitHub](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
+  "config.lmTools.enableWriteTools": "Allow Copilot Chat / agent mode to create, update, delete and toggle scheduler tasks via language-model tools. Read tools are always available. When disabled, only read tools are exposed.",
+  "tool.scheduler_query.displayName": "Scheduler: Query Tasks",
+  "tool.scheduler_query.modelDescription": "Query Copilot Scheduler for task information without side effects. Set 'kind' to one of: 'list' (all tasks, optionally filtered by scope and enabled state), 'get' (single task by id), 'history' (recent execution history, optionally filtered by taskId), or 'preview_cron' (next occurrences of a cron expression; returns times in the configured timezone). Always use this before making changes to confirm which task the user means.",
+  "tool.scheduler_create_task.displayName": "Scheduler: Create Task",
+  "tool.scheduler_create_task.modelDescription": "Create a new scheduled Copilot task. Requires: name, cronExpression, prompt, and scope ('global' or 'workspace'). Optional fields include promptSource ('inline' | 'local' | 'global') and promptPath when promptSource is local or global. New tasks can be created disabled and enabled later via scheduler_set_task_enabled. Enabling a task requires the user to have accepted the first-time execution disclaimer.",
+  "tool.scheduler_update_task.displayName": "Scheduler: Update Task",
+  "tool.scheduler_update_task.modelDescription": "Update fields of an existing task. Do NOT pass 'enabled' here – use scheduler_set_task_enabled instead (the tool will refuse the update otherwise). Missing fields keep their current value.",
+  "tool.scheduler_delete_task.displayName": "Scheduler: Delete Task",
+  "tool.scheduler_delete_task.modelDescription": "Delete a task by id. This is permanent and cannot be undone. The user will be shown the task name, scope and workspace in the confirmation dialog before the tool actually runs.",
+  "tool.scheduler_set_task_enabled.displayName": "Scheduler: Enable/Disable Task",
+  "tool.scheduler_set_task_enabled.modelDescription": "Enable or disable a task by id. Enabling requires the user to have accepted the first-time execution disclaimer in the Copilot Scheduler view.",
   "view.tasks": "Scheduled Tasks"
 }

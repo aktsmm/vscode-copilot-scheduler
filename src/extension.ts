@@ -28,6 +28,18 @@ import {
   resolveLocalPromptPath,
   resolveGlobalPromptsRoot,
 } from "./promptResolver";
+import {
+  enqueueExecutionHistoryEntry as enqueueExecutionHistory,
+  getExecutionHistoryEntries,
+  initExecutionHistoryStore,
+  recordExecutionHistoryBestEffort,
+  resetExecutionHistoryQueueForTests,
+  setExecutionHistoryContextForTests,
+  type ExecutionHistoryEntry,
+  type ExecutionHistoryStatus,
+  type ExecutionTrigger,
+} from "./executionHistoryStore";
+import { registerLmTools } from "./lmTools/registry";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -37,24 +49,10 @@ import type {
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
-type ExecutionTrigger = "auto" | "manual";
-type ExecutionHistoryStatus = "success" | "failed";
 type PromptExecutionOptions = Omit<PromptExecutionRequest, "prompt">;
-
-type ExecutionHistoryEntry = {
-  taskId: string;
-  taskName: string;
-  trigger: ExecutionTrigger;
-  status: ExecutionHistoryStatus;
-  executedAt: string;
-  nextRunAt?: string;
-  detail?: string;
-};
 
 const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
-const EXECUTION_HISTORY_KEY = "executionHistory";
-const EXECUTION_HISTORY_DEFAULT_LIMIT = 50;
 const EMPTY_PROMPT_TEMPLATE_ERROR_NAME = "PromptTemplateEmptyError";
 
 function sanitizeErrorDetailsForLog(message: string): string {
@@ -321,18 +319,6 @@ export function notifyError(message: string, timeoutMs = 6000): void {
   void vscode.window.showErrorMessage(displayMessage);
 }
 
-function getExecutionHistoryLimit(): number {
-  const config = vscode.workspace.getConfiguration("copilotScheduler");
-  const raw = config.get<number>(
-    "executionHistoryLimit",
-    EXECUTION_HISTORY_DEFAULT_LIMIT,
-  );
-  const n = Number.isFinite(raw)
-    ? Math.floor(raw)
-    : EXECUTION_HISTORY_DEFAULT_LIMIT;
-  return Math.min(Math.max(n, 10), 500);
-}
-
 function getNotificationNextRun(
   task: ScheduledTask,
   baseTime = new Date(),
@@ -385,87 +371,11 @@ function buildExecutionSummary(
   );
 }
 
-function isExecutionHistoryEntry(item: unknown): item is ExecutionHistoryEntry {
-  if (!item || typeof item !== "object") {
-    return false;
-  }
-
-  const entry = item as ExecutionHistoryEntry;
-  return (
-    typeof entry.taskId === "string" &&
-    typeof entry.taskName === "string" &&
-    (entry.trigger === "auto" || entry.trigger === "manual") &&
-    (entry.status === "success" || entry.status === "failed") &&
-    typeof entry.executedAt === "string"
-  );
-}
-
-async function appendExecutionHistory(
-  entry: ExecutionHistoryEntry,
-): Promise<void> {
-  if (!extensionContextRef) {
-    return;
-  }
-  const limit = getExecutionHistoryLimit();
-  const current = extensionContextRef.globalState.get<unknown[]>(
-    EXECUTION_HISTORY_KEY,
-    [],
-  );
-  const safeCurrent = Array.isArray(current)
-    ? current.filter(isExecutionHistoryEntry)
-    : [];
-
-  const next = [entry, ...safeCurrent].slice(0, limit);
-  await extensionContextRef.globalState.update(EXECUTION_HISTORY_KEY, next);
-}
-
-function enqueueExecutionHistory(entry: ExecutionHistoryEntry): Promise<void> {
-  const op = executionHistorySaveQueue.then(() =>
-    appendExecutionHistory(entry),
-  );
-  executionHistorySaveQueue = op.catch((error) => {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error ?? "");
-    logError(
-      "[CopilotScheduler] Failed to persist execution history:",
-      sanitizeErrorDetailsForLog(errorMessage),
-    );
-  });
-  return op;
-}
-
-async function recordExecutionHistoryBestEffort(
-  entry: ExecutionHistoryEntry,
-): Promise<void> {
-  try {
-    await enqueueExecutionHistory(entry);
-  } catch {
-    // enqueueExecutionHistory already logs and recovers the queue.
-  }
-}
-
 function setExtensionContextForTests(
   context: Pick<vscode.ExtensionContext, "globalState"> | undefined,
 ): void {
   extensionContextRef = context as vscode.ExtensionContext | undefined;
-}
-
-function resetExecutionHistoryQueueForTests(): void {
-  executionHistorySaveQueue = Promise.resolve();
-}
-
-function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
-  if (!extensionContextRef) {
-    return [];
-  }
-  const current = extensionContextRef.globalState.get<unknown[]>(
-    EXECUTION_HISTORY_KEY,
-    [],
-  );
-  if (!Array.isArray(current)) {
-    return [];
-  }
-  return current.filter(isExecutionHistoryEntry);
+  setExecutionHistoryContextForTests(context);
 }
 
 async function showExecutionHistoryView(): Promise<void> {
@@ -510,7 +420,6 @@ let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
-let executionHistorySaveQueue: Promise<void> = Promise.resolve();
 
 type PromptExecutionPayload = PromptExecutionRequest;
 
@@ -744,6 +653,7 @@ function buildTaskQuickPickItem(task: ScheduledTask): {
  */
 export function activate(context: vscode.ExtensionContext): void {
   extensionContextRef = context;
+  initExecutionHistoryStore(context);
 
   // Create the dedicated output channel early so diagnostic logs are visible
   // in the Output panel under "Copilot Scheduler".
@@ -777,6 +687,7 @@ export function activate(context: vscode.ExtensionContext): void {
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
+  registerLmTools(context, scheduleManager);
   void CopilotExecutor.getAvailableModelsWithSource()
     .then(async ({ models, source }) => {
       const healed = await scheduleManager.healTaskModelSelections(
@@ -976,7 +887,8 @@ export function deactivate(): void {
   SchedulerWebview.dispose();
   extensionContextRef = undefined;
   manualRunInFlightTaskIds.clear();
-  executionHistorySaveQueue = Promise.resolve();
+  resetExecutionHistoryQueueForTests();
+  setExecutionHistoryContextForTests(undefined);
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
 }
 

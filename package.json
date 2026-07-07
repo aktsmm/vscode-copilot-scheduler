@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.0.56",
+  "version": "1.1.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -15,7 +15,7 @@
   },
   "homepage": "https://github.com/aktsmm/vscode-copilot-scheduler#readme",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.95.0"
   },
   "categories": [
     "Other"
@@ -278,12 +278,273 @@
           "maximum": 500,
           "description": "%config.executionHistoryLimit%"
         },
+        "copilotScheduler.lmTools.enableWriteTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.lmTools.enableWriteTools%"
+        },
         "copilotScheduler.reportIssue": {
           "type": "null",
           "markdownDescription": "%config.reportIssue%"
         }
       }
     },
+    "languageModelTools": [
+      {
+        "name": "scheduler_query",
+        "displayName": "%tool.scheduler_query.displayName%",
+        "modelDescription": "%tool.scheduler_query.modelDescription%",
+        "toolReferenceName": "scheduler_query",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-tree)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "list",
+                "get",
+                "history",
+                "preview_cron"
+              ],
+              "description": "Which kind of read to perform."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "global",
+                "workspace",
+                "all"
+              ],
+              "description": "For kind=list. Filter by task scope."
+            },
+            "enabledOnly": {
+              "type": "boolean",
+              "description": "For kind=list. Return only enabled tasks when true."
+            },
+            "id": {
+              "type": "string",
+              "description": "For kind=get. Task id to fetch."
+            },
+            "taskId": {
+              "type": "string",
+              "description": "For kind=history. Filter history entries to this task id."
+            },
+            "limit": {
+              "type": "number",
+              "description": "For kind=history. Max entries to return (1-500).",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "cronExpression": {
+              "type": "string",
+              "description": "For kind=preview_cron. Cron expression to evaluate (multi-schedule supported when separated by newlines)."
+            },
+            "count": {
+              "type": "number",
+              "description": "For kind=preview_cron. Number of next occurrences (1-20).",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "timezone": {
+              "type": "string",
+              "description": "For kind=preview_cron. IANA timezone (e.g. Asia/Tokyo)."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      },
+      {
+        "name": "scheduler_create_task",
+        "displayName": "%tool.scheduler_create_task.displayName%",
+        "modelDescription": "%tool.scheduler_create_task.modelDescription%",
+        "toolReferenceName": "scheduler_create_task",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(add)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Human-readable task name."
+            },
+            "cronExpression": {
+              "type": "string",
+              "description": "Cron expression. Supports multiple lines separated by newlines."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "global",
+                "workspace"
+              ],
+              "description": "Where the task lives. workspace requires an open folder."
+            },
+            "promptSource": {
+              "type": "string",
+              "enum": [
+                "inline",
+                "local",
+                "global"
+              ],
+              "description": "Where the prompt comes from. Defaults to 'inline'."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Prompt text sent to Copilot. Always required, even when promptSource is 'local' or 'global' (use the file content)."
+            },
+            "promptPath": {
+              "type": "string",
+              "description": "Required when promptSource is 'local' or 'global'. Path relative to the resolved prompts root."
+            },
+            "agent": {
+              "type": "string",
+              "description": "Agent to use (e.g. '@workspace', 'agent', 'ask', 'edit')."
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether the task is enabled after creation. Defaults to true. Enabling requires the disclaimer to be accepted."
+            },
+            "chatSession": {
+              "type": "string",
+              "enum": [
+                "default",
+                "new",
+                "continue"
+              ],
+              "description": "Per-task chat session override. 'default' uses the global setting."
+            }
+          },
+          "required": [
+            "name",
+            "cronExpression",
+            "prompt",
+            "scope"
+          ]
+        }
+      },
+      {
+        "name": "scheduler_update_task",
+        "displayName": "%tool.scheduler_update_task.displayName%",
+        "modelDescription": "%tool.scheduler_update_task.modelDescription%",
+        "toolReferenceName": "scheduler_update_task",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Task id to update."
+            },
+            "updates": {
+              "type": "object",
+              "description": "Fields to change. Use scheduler_set_task_enabled to toggle enabled; passing enabled here returns an error.",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "cronExpression": {
+                  "type": "string"
+                },
+                "promptSource": {
+                  "type": "string",
+                  "enum": [
+                    "inline",
+                    "local",
+                    "global"
+                  ]
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "promptPath": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "chatSession": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "new",
+                    "continue"
+                  ]
+                }
+              }
+            }
+          },
+          "required": [
+            "id",
+            "updates"
+          ]
+        }
+      },
+      {
+        "name": "scheduler_delete_task",
+        "displayName": "%tool.scheduler_delete_task.displayName%",
+        "modelDescription": "%tool.scheduler_delete_task.modelDescription%",
+        "toolReferenceName": "scheduler_delete_task",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(trash)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Task id to delete. This is not recoverable."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "scheduler_set_task_enabled",
+        "displayName": "%tool.scheduler_set_task_enabled.displayName%",
+        "modelDescription": "%tool.scheduler_set_task_enabled.modelDescription%",
+        "toolReferenceName": "scheduler_set_task_enabled",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(check)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Task id."
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "True to enable, false to disable."
+            }
+          },
+          "required": [
+            "id",
+            "enabled"
+          ]
+        }
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -410,7 +671,7 @@
     "@types/glob": "^8.1.0",
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.80.0",
+    "@types/vscode": "^1.95.0",
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",
     "@vscode/test-electron": "^2.3.0",
