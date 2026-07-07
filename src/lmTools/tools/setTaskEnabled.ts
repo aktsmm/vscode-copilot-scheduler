@@ -6,6 +6,7 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
+  shouldUseCustomConfirmation,
 } from "../shared";
 
 interface SetEnabledToolInput {
@@ -22,15 +23,18 @@ export function createSchedulerSetTaskEnabledTool(
     ): Promise<vscode.PreparedToolInvocation> {
       const input = options.input ?? {};
       const verb = input.enabled === false ? "disable" : "enable";
-      return {
+      const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `${verb === "enable" ? "Enabling" : "Disabling"} scheduler task: ${input.id ?? "(missing id)"}`,
-        confirmationMessages: {
+      };
+      if (shouldUseCustomConfirmation("setEnabled")) {
+        prepared.confirmationMessages = {
           title: `${verb === "enable" ? "Enable" : "Disable"} scheduler task`,
           message: new vscode.MarkdownString(
             `Copilot Chat wants to **${verb}** task \`${input.id ?? "(missing)"}\`.`,
           ),
-        },
-      };
+        };
+      }
+      return prepared;
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<SetEnabledToolInput>,

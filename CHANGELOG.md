@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-08
+
+### Added
+
+- **Configurable LM Tool confirmation mode**: added `copilotScheduler.lmTools.confirmationMode` with `always`, `destructiveOnly` (default), and `minimal` to control extension-provided custom confirmation messages for write tools while preserving VS Code / Copilot Chat approval behavior.
+- **Natural-language Copilot Chat guidance**: README and README_ja now include agent-mode examples for creating, updating, pausing, and querying scheduled tasks, plus a query-first note for ambiguous task names across scopes.
+
+### Changed
+
+- LM Tool write descriptions now include natural-language intent triggers so Copilot Chat can better select scheduler tools for requests such as scheduling, changing, deleting, pausing, or resuming tasks.
+
+### Tests
+
+- Added regression coverage for confirmation-mode behavior, LM Tool intent wording, and README natural-language examples in English and Japanese.
+
 ## [1.1.0] - 2026-07-08
 
 ### Added

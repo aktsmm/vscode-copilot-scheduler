@@ -279,6 +279,73 @@ suite("Extension Test Suite", () => {
       }
     }
   });
+
+  test("README documents natural-language Copilot Chat examples", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+    const readmeJa = fs.readFileSync(path.join(root, "README_ja.md"), "utf8");
+
+    assert.match(readme, /natural-language requests/i);
+    assert.match(readme, /Schedule a workspace task/i);
+    assert.match(readme, /Change the daily summary task/i);
+    assert.match(readme, /Pause the release reminder task/i);
+    assert.match(readme, /Show my scheduled Copilot tasks/i);
+    assert.match(readme, /multiple tasks could match/i);
+    assert.match(readmeJa, /自然文の依頼/);
+    assert.match(readmeJa, /スケジュール設定して/);
+    assert.match(readmeJa, /変更して/);
+    assert.match(readmeJa, /一時停止して/);
+    assert.match(readmeJa, /見せて/);
+    assert.match(readmeJa, /同じ名前のタスク/);
+  });
+
+  test("LM write tool descriptions keep natural-language intent", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const nls = JSON.parse(
+      fs.readFileSync(path.join(root, "package.nls.json"), "utf8"),
+    ) as Record<string, string>;
+    const nlsJa = JSON.parse(
+      fs.readFileSync(path.join(root, "package.nls.ja.json"), "utf8"),
+    ) as Record<string, string>;
+    const createDescription =
+      nls["tool.scheduler_create_task.modelDescription"] ?? "";
+    const createDescriptionJa =
+      nlsJa["tool.scheduler_create_task.modelDescription"] ?? "";
+    const updateDescription =
+      nls["tool.scheduler_update_task.modelDescription"] ?? "";
+    const updateDescriptionJa =
+      nlsJa["tool.scheduler_update_task.modelDescription"] ?? "";
+    const deleteDescription =
+      nls["tool.scheduler_delete_task.modelDescription"] ?? "";
+    const deleteDescriptionJa =
+      nlsJa["tool.scheduler_delete_task.modelDescription"] ?? "";
+    const setEnabledDescription =
+      nls["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
+    const setEnabledDescriptionJa =
+      nlsJa["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
+
+    assert.match(createDescription, /Use when the user asks/i);
+    assert.match(createDescription, /schedule|set up|register|automate/i);
+    assert.match(
+      createDescriptionJa,
+      /スケジュール設定|定期実行|タスク登録|自動化/,
+    );
+    assert.match(updateDescription, /Use when the user asks/i);
+    assert.match(updateDescription, /change|edit|reschedule|revise/i);
+    assert.match(updateDescriptionJa, /変更|編集|リスケジュール|見直し/);
+    assert.match(deleteDescription, /Use when the user asks/i);
+    assert.match(deleteDescription, /delete|remove|cancel/i);
+    assert.match(deleteDescriptionJa, /削除|除去|キャンセル/);
+    assert.match(setEnabledDescription, /Use when the user asks/i);
+    assert.match(
+      setEnabledDescription,
+      /enable|disable|pause|resume|turn on|turn off/i,
+    );
+    assert.match(
+      setEnabledDescriptionJa,
+      /有効化|無効化|一時停止|再開|オン|オフ/,
+    );
+  });
 });
 
 suite("Execution History Queue Tests", () => {

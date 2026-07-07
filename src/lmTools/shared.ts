@@ -7,10 +7,49 @@ import type {
 import type { ScheduledTask } from "../types";
 
 const ENABLE_WRITE_TOOLS_CONFIG_KEY = "lmTools.enableWriteTools";
+const CONFIRMATION_MODE_CONFIG_KEY = "lmTools.confirmationMode";
+
+export type LmToolsConfirmationMode = "always" | "destructiveOnly" | "minimal";
+
+export type ConfirmableLmToolAction =
+  | "create"
+  | "update"
+  | "delete"
+  | "setEnabled";
 
 export function isWriteToolsEnabled(): boolean {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   return config.get<boolean>(ENABLE_WRITE_TOOLS_CONFIG_KEY, true);
+}
+
+export function getLmToolsConfirmationMode(): LmToolsConfirmationMode {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const value = config.get<unknown>(
+    CONFIRMATION_MODE_CONFIG_KEY,
+    "destructiveOnly",
+  );
+  switch (value) {
+    case "always":
+    case "destructiveOnly":
+    case "minimal":
+      return value;
+    default:
+      return "destructiveOnly";
+  }
+}
+
+export function shouldUseCustomConfirmation(
+  action: ConfirmableLmToolAction,
+): boolean {
+  const mode = getLmToolsConfirmationMode();
+  switch (mode) {
+    case "always":
+      return true;
+    case "destructiveOnly":
+      return action === "delete";
+    case "minimal":
+      return false;
+  }
 }
 
 export function writeGateBlockedResult(): vscode.LanguageModelToolResult {

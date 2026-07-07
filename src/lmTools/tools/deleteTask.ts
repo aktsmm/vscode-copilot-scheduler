@@ -6,6 +6,7 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
+  shouldUseCustomConfirmation,
 } from "../shared";
 
 interface DeleteTaskToolInput {
@@ -35,15 +36,18 @@ export function createSchedulerDeleteTaskTool(
             `- cron: \`${task.cronExpression}\``,
           ].join("\n")
         : `- id: \`${id}\` (task not found; it may have been deleted already)`;
-      return {
+      const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `Deleting scheduler task: ${task?.name ?? id}`,
-        confirmationMessages: {
+      };
+      if (shouldUseCustomConfirmation("delete")) {
+        prepared.confirmationMessages = {
           title: "⚠️ Delete scheduler task",
           message: new vscode.MarkdownString(
             `Copilot Chat wants to **permanently delete** a scheduler task. This cannot be undone.\n\n${detail}`,
           ),
-        },
-      };
+        };
+      }
+      return prepared;
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<DeleteTaskToolInput>,

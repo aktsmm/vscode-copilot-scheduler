@@ -6,6 +6,7 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
+  shouldUseCustomConfirmation,
 } from "../shared";
 
 interface UpdateTaskToolInput {
@@ -22,9 +23,11 @@ export function createSchedulerUpdateTaskTool(
     ): Promise<vscode.PreparedToolInvocation> {
       const input = options.input ?? {};
       const updateKeys = input.updates ? Object.keys(input.updates) : [];
-      return {
+      const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `Updating scheduler task: ${input.id ?? "(missing id)"}`,
-        confirmationMessages: {
+      };
+      if (shouldUseCustomConfirmation("update")) {
+        prepared.confirmationMessages = {
           title: "Update scheduler task",
           message: new vscode.MarkdownString(
             `Copilot Chat wants to update task \`${input.id ?? "(missing)"}\`.\n\nFields to change: ${
@@ -33,8 +36,9 @@ export function createSchedulerUpdateTaskTool(
                 : "(none)"
             }`,
           ),
-        },
-      };
+        };
+      }
+      return prepared;
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<UpdateTaskToolInput>,

@@ -6,6 +6,7 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
+  shouldUseCustomConfirmation,
 } from "../shared";
 
 interface CreateTaskToolInput {
@@ -55,15 +56,18 @@ export function createSchedulerCreateTaskTool(
       ]
         .filter(Boolean)
         .join("\n");
-      return {
+      const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `Creating scheduler task: ${input.name || "(unnamed)"}`,
-        confirmationMessages: {
+      };
+      if (shouldUseCustomConfirmation("create")) {
+        prepared.confirmationMessages = {
           title: "Create scheduler task",
           message: new vscode.MarkdownString(
             `Copilot Chat wants to create a new scheduled task:\n\n${detail}`,
           ),
-        },
-      };
+        };
+      }
+      return prepared;
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<CreateTaskToolInput>,

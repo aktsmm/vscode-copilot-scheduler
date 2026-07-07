@@ -160,6 +160,39 @@ async function withWriteToolsDisabled<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+async function withConfirmationMode<T>(
+  mode: unknown,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const originalGetConfiguration = vscode.workspace.getConfiguration;
+  Object.defineProperty(vscode.workspace, "getConfiguration", {
+    value: ((section?: string) => {
+      const config = originalGetConfiguration.call(vscode.workspace, section);
+      if (section !== "copilotScheduler") {
+        return config;
+      }
+      return {
+        ...config,
+        get<U>(key: string, defaultValue?: U): U {
+          if (key === "lmTools.confirmationMode") {
+            return mode as U;
+          }
+          return config.get<U>(key, defaultValue as U);
+        },
+      } as vscode.WorkspaceConfiguration;
+    }) as typeof vscode.workspace.getConfiguration,
+    configurable: true,
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      value: originalGetConfiguration,
+      configurable: true,
+    });
+  }
+}
+
 async function withWorkspaceTrust<T>(
   trusted: boolean,
   fn: () => Promise<T>,
@@ -191,16 +224,53 @@ function confirmationMessageText(
 suite("lmTools write wrappers", () => {
   test("create task prepareInvocation includes explicit missing scope", async () => {
     const tool = createSchedulerCreateTaskTool(new FakeClient());
-    const prepared = await prepare(tool, {
-      name: "Daily review",
-      cronExpression: "0 9 * * *",
-      prompt: "Review the workspace",
-    });
+    const prepared = await withConfirmationMode("always", () =>
+      prepare(tool, {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review the workspace",
+      }),
+    );
     assert.strictEqual(
       prepared.confirmationMessages?.title,
       "Create scheduler task",
     );
     assert.match(confirmationMessageText(prepared), /scope: \(missing\)/);
+  });
+
+  test("default confirmation mode suppresses non-destructive custom confirmations", async () => {
+    const createTool = createSchedulerCreateTaskTool(new FakeClient());
+    const updateTool = createSchedulerUpdateTaskTool(new FakeClient());
+    const setEnabledTool = createSchedulerSetTaskEnabledTool(new FakeClient());
+    const createPrepared = await prepare(createTool, {
+      name: "Daily review",
+      cronExpression: "0 9 * * *",
+      prompt: "Review the workspace",
+      scope: "workspace",
+    });
+    const updatePrepared = await prepare(updateTool, {
+      id: "task-1",
+      updates: { name: "Renamed" },
+    });
+    const setEnabledPrepared = await prepare(setEnabledTool, {
+      id: "task-1",
+      enabled: false,
+    });
+    assert.strictEqual(createPrepared.confirmationMessages, undefined);
+    assert.strictEqual(updatePrepared.confirmationMessages, undefined);
+    assert.strictEqual(setEnabledPrepared.confirmationMessages, undefined);
+  });
+
+  test("always confirmation mode includes enable-disable custom confirmation", async () => {
+    const tool = createSchedulerSetTaskEnabledTool(new FakeClient());
+    const prepared = await withConfirmationMode("always", () =>
+      prepare(tool, { id: "task-1", enabled: false }),
+    );
+    assert.strictEqual(
+      prepared.confirmationMessages?.title,
+      "Disable scheduler task",
+    );
+    assert.match(confirmationMessageText(prepared), /\*\*disable\*\*/);
   });
 
   test("create task rejects missing scope before calling client", async () => {
@@ -281,10 +351,12 @@ suite("lmTools write wrappers", () => {
 
   test("update task prepareInvocation lists changed fields", async () => {
     const tool = createSchedulerUpdateTaskTool(new FakeClient());
-    const prepared = await prepare(tool, {
-      id: "task-1",
-      updates: { name: "Renamed", cronExpression: "0 10 * * *" },
-    });
+    const prepared = await withConfirmationMode("always", () =>
+      prepare(tool, {
+        id: "task-1",
+        updates: { name: "Renamed", cronExpression: "0 10 * * *" },
+      }),
+    );
     const message = confirmationMessageText(prepared);
     assert.match(message, /`name`/);
     assert.match(message, /`cronExpression`/);
@@ -332,6 +404,43 @@ suite("lmTools write wrappers", () => {
     assert.match(message, /Morning summary/);
     assert.match(message, /scope: workspace/);
     assert.match(message, /workspace: workspace-a/);
+  });
+
+  test("minimal confirmation mode suppresses delete custom confirmation", async () => {
+    const task = fakeTask();
+    const tool = createSchedulerDeleteTaskTool(
+      fakeScheduleManager(task),
+      new FakeClient(task),
+    );
+    const prepared = await withConfirmationMode("minimal", () =>
+      prepare(tool, { id: task.id }),
+    );
+    assert.strictEqual(prepared.confirmationMessages, undefined);
+  });
+
+  test("invalid confirmation mode falls back to destructive-only", async () => {
+    const createTool = createSchedulerCreateTaskTool(new FakeClient());
+    const task = fakeTask();
+    const deleteTool = createSchedulerDeleteTaskTool(
+      fakeScheduleManager(task),
+      new FakeClient(task),
+    );
+    const createPrepared = await withConfirmationMode("bogus", () =>
+      prepare(createTool, {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review the workspace",
+        scope: "workspace",
+      }),
+    );
+    const deletePrepared = await withConfirmationMode("bogus", () =>
+      prepare(deleteTool, { id: task.id }),
+    );
+    assert.strictEqual(createPrepared.confirmationMessages, undefined);
+    assert.strictEqual(
+      deletePrepared.confirmationMessages?.title,
+      "⚠️ Delete scheduler task",
+    );
   });
 
   test("delete task forwards confirmed id to mutation client", async () => {
