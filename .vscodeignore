@@ -28,6 +28,7 @@ output_sessions/**
 session/**
 research/**
 artifacts/**
+scripts/**
 
 # Large demo asset (use static PNG in README)
 images/demo-animated.gif

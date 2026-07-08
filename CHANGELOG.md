@@ -5,6 +5,22 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-07-09
+
+### Added
+
+- **VSIX content verification**: added `npm run verify:vsix` and wired it into the Marketplace publish workflow so release artifacts are checked for dev-only content before upload and publish.
+- **LM Tool surface guards**: added regression coverage to keep scheduler tools prompt-referenceable and avoid unreviewed `languageModelToolSets` or tag changes while the VS Code tools picker duplicate-display investigation is pending.
+
+### Changed
+
+- Marketplace publishing now publishes the already packaged and verified VSIX via `--packagePath`, avoiding a second unverified package operation during publish.
+- Local research, repro, script, and VSIX artifact folders are explicitly excluded from the shipped extension package.
+
+### Tests
+
+- Added package hygiene coverage for `.vscodeignore` exclusions and validated VSIX content verification against both expected and forbidden package entries.
+
 ## [1.1.1] - 2026-07-08
 
 ### Added

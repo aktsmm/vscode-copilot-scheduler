@@ -74,6 +74,9 @@ jobs:
         run: |
           npx vsce package --out "${{ steps.meta.outputs.artifact }}"
 
+      - name: Verify VSIX contents
+        run: npm run verify:vsix -- "${{ steps.meta.outputs.artifact }}"
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v6
         with:
@@ -97,7 +100,7 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          npx vsce publish -p "$env:VSCE_PAT"
+          npx vsce publish --packagePath "${{ steps.meta.outputs.artifact }}" -p "$env:VSCE_PAT"
 
       - name: Create GitHub release with VSIX
         if: startsWith(github.ref, 'refs/tags/')

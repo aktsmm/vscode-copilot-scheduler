@@ -346,6 +346,80 @@ suite("Extension Test Suite", () => {
       /有効化|無効化|一時停止|再開|オン|オフ/,
     );
   });
+
+  test("LM tools manifest keeps prompt references and avoids proposed toolsets", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      contributes?: {
+        languageModelTools?: Array<{
+          name?: string;
+          toolReferenceName?: string;
+          canBeReferencedInPrompt?: boolean;
+          tags?: string[];
+        }>;
+        languageModelToolSets?: unknown;
+      };
+    };
+    const tools = manifest.contributes?.languageModelTools ?? [];
+    const expectedToolNames = [
+      "scheduler_query",
+      "scheduler_create_task",
+      "scheduler_update_task",
+      "scheduler_delete_task",
+      "scheduler_set_task_enabled",
+    ];
+
+    assert.deepStrictEqual(
+      tools.map((tool) => tool.name),
+      expectedToolNames,
+      "Update the expected LM tool surface only after reviewing picker, prompt-reference, and docs impact.",
+    );
+    assert.strictEqual(
+      manifest.contributes?.languageModelToolSets,
+      undefined,
+      "Do not add proposed languageModelToolSets as a picker workaround without a dedicated compatibility review.",
+    );
+
+    for (const tool of tools) {
+      assert.strictEqual(
+        tool.canBeReferencedInPrompt,
+        true,
+        `${tool.name} must remain prompt-referenceable for #scheduler_* usage.`,
+      );
+      assert.strictEqual(tool.toolReferenceName, tool.name);
+      assert.deepStrictEqual(
+        tool.tags,
+        ["copilot-scheduler"],
+        `${tool.name} tags should not be removed as an unverified picker workaround; update this guard only after the A/B picker evidence is reviewed.`,
+      );
+    }
+  });
+
+  test("VSIX package ignore keeps local research and repro artifacts out", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const ignoreLines = fs
+      .readFileSync(path.join(root, ".vscodeignore"), "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+    for (const pattern of [
+      "*.vsix",
+      "research/**",
+      "artifacts/**",
+      "output_sessions/**",
+      "session/**",
+      ".github/**",
+      "scripts/**",
+    ]) {
+      assert.ok(
+        ignoreLines.includes(pattern),
+        `.vscodeignore must exclude ${pattern} from published VSIX packages.`,
+      );
+    }
+  });
 });
 
 suite("Execution History Queue Tests", () => {
