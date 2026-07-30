@@ -41,6 +41,15 @@ export function selectTaskStore<T>(
   const fileRevision = toRevision(file.revision);
   const effectiveGlobalRevision = globalState.ok ? globalRevision : -1;
   const effectiveFileRevision = file.ok ? fileRevision : -1;
+  const legacyZeroRevisionConflict =
+    globalState.exists &&
+    globalState.ok &&
+    file.exists &&
+    file.ok &&
+    globalRevision === 0 &&
+    fileRevision === 0 &&
+    globalState.tasks.length > 0 &&
+    file.tasks.length === 0;
 
   let chosenKind: TaskStoreKind | "none" = "none";
   let chosenRevision = 0;
@@ -57,7 +66,11 @@ export function selectTaskStore<T>(
       chosenTasks = file.tasks;
     } else {
       // Same effective revision (or both invalid): prefer file, then globalState when valid.
-      if (file.ok) {
+      if (legacyZeroRevisionConflict) {
+        chosenKind = "globalState";
+        chosenRevision = globalRevision;
+        chosenTasks = globalState.tasks;
+      } else if (file.ok) {
         chosenKind = "file";
         chosenRevision = fileRevision;
         chosenTasks = file.tasks;
@@ -72,13 +85,17 @@ export function selectTaskStore<T>(
       }
     }
   } else if (file.exists) {
-    chosenKind = "file";
-    chosenRevision = fileRevision;
-    chosenTasks = file.tasks;
+    if (file.ok) {
+      chosenKind = "file";
+      chosenRevision = fileRevision;
+      chosenTasks = file.tasks;
+    }
   } else if (globalState.exists) {
-    chosenKind = "globalState";
-    chosenRevision = globalRevision;
-    chosenTasks = globalState.tasks;
+    if (globalState.ok) {
+      chosenKind = "globalState";
+      chosenRevision = globalRevision;
+      chosenTasks = globalState.tasks;
+    }
   }
 
   const shouldHealFile =
@@ -88,7 +105,8 @@ export function selectTaskStore<T>(
     // Heal if file is missing, older, or invalid.
     (file.exists === false ||
       file.ok === false ||
-      globalRevision !== fileRevision);
+      globalRevision !== fileRevision ||
+      legacyZeroRevisionConflict);
 
   const shouldHealGlobalState =
     chosenKind === "file" &&

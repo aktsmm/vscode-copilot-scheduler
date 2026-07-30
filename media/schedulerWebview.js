@@ -191,6 +191,161 @@
 
   function setTemplatePromptBaseline(value) {
     templatePromptBaseline = typeof value === "string" ? value : null;
+    updatePromptFileNotice();
+  }
+
+  function getTaskById(taskId) {
+    var taskItems = Array.isArray(tasks) ? tasks : [];
+    for (var i = 0; i < taskItems.length; i++) {
+      if (taskItems[i] && taskItems[i].id === taskId) return taskItems[i];
+    }
+    return null;
+  }
+
+  function prunePromptFilePreviews() {
+    Object.keys(promptFilePreviews).forEach(function (taskId) {
+      var task = getTaskById(taskId);
+      var preview = promptFilePreviews[taskId];
+      if (
+        !task ||
+        !preview ||
+        String(preview.promptPath || "") !==
+          String(task.promptPath || "").trim()
+      ) {
+        delete promptFilePreviews[taskId];
+      }
+    });
+  }
+
+  function getPromptFilePreview(task) {
+    if (!task || !task.id) return null;
+    var sourceValue = task.promptSource || "inline";
+    if (sourceValue !== "local" && sourceValue !== "global") return null;
+    var preview = promptFilePreviews[task.id] || null;
+    if (!preview) return null;
+    return String(preview.promptPath || "") ===
+      String(task.promptPath || "").trim()
+      ? preview
+      : null;
+  }
+
+  function buildPromptFileMeta(preview) {
+    if (!preview) return "";
+
+    var parts = [];
+    if (preview.promptPathDisplay) {
+      parts.push(
+        (strings.labelPromptFileSource || "") +
+          ": " +
+          basenameFromPathLike(preview.promptPathDisplay),
+      );
+    }
+    var resolvedAtDate = preview.resolvedAt
+      ? new Date(preview.resolvedAt)
+      : null;
+    if (resolvedAtDate && !isNaN(resolvedAtDate.getTime())) {
+      parts.push(
+        (strings.labelPromptFileSynced || "") +
+          ": " +
+          resolvedAtDate.toLocaleString(locale),
+      );
+    }
+    if (preview.source !== "file") {
+      parts.push(strings.promptFileStaleHint || "");
+    } else if (preview.hasSnapshotDiff) {
+      parts.push(strings.labelPromptFileDiff || "");
+    }
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  function updatePromptFileNotice() {
+    var notice = document.getElementById("prompt-file-notice");
+    var messageElement = document.getElementById("prompt-file-notice-message");
+    var metaElement = document.getElementById("prompt-file-notice-meta");
+    var promptText = document.getElementById("prompt-text");
+    var sourceInput = document.querySelector(
+      'input[name="prompt-source"]:checked',
+    );
+    if (
+      !notice ||
+      !messageElement ||
+      !metaElement ||
+      !promptText ||
+      !sourceInput
+    ) {
+      return;
+    }
+
+    var source = String(sourceInput.value || "inline");
+    if (source === "inline") {
+      messageElement.textContent = "";
+      metaElement.textContent = "";
+      notice.className = "prompt-file-notice";
+      notice.style.display = "none";
+      if (loadLatestPromptBtn) loadLatestPromptBtn.style.display = "none";
+      if (openPromptFileBtn) openPromptFileBtn.style.display = "none";
+      return;
+    }
+
+    var selectedPath = templateSelect ? String(templateSelect.value || "") : "";
+    var loadingCurrentTemplate =
+      !!templateLoadingPath && templateLoadingPath === selectedPath;
+    var message = "";
+    var isWarning = false;
+
+    if (loadingCurrentTemplate) {
+      message = strings.templateLoadingInProgress || "";
+    } else if (templatePromptBaseline === null) {
+      message = strings.promptFileNotLoadedNote || "";
+      isWarning = true;
+    } else if (String(promptText.value || "") === templatePromptBaseline) {
+      message = strings.promptFileExecutionNote || "";
+    } else {
+      message = strings.promptFileWillBecomeInline || "";
+      isWarning = true;
+    }
+
+    var editingTask = editingTaskId ? getTaskById(editingTaskId) : null;
+    var preview = getPromptFilePreview(editingTask);
+    var meta = buildPromptFileMeta(preview);
+    var canLoadLatest =
+      !!preview &&
+      preview.source === "file" &&
+      typeof preview.prompt === "string" &&
+      String(promptText.value || "") !== preview.prompt;
+
+    messageElement.textContent = message;
+    metaElement.textContent = meta;
+    metaElement.style.display = meta ? "block" : "none";
+    notice.className =
+      "prompt-file-notice" +
+      (isWarning || (preview && preview.hasSnapshotDiff) ? " warning" : "");
+    notice.style.display = message ? "block" : "none";
+    if (loadLatestPromptBtn) {
+      if (
+        !canLoadLatest &&
+        document.activeElement === loadLatestPromptBtn &&
+        promptTextInput
+      ) {
+        promptTextInput.focus();
+      }
+      loadLatestPromptBtn.style.display = canLoadLatest
+        ? "inline-flex"
+        : "none";
+    }
+    if (openPromptFileBtn) {
+      var canOpenPromptFile = !!(preview && preview.canOpenPromptFile);
+      if (
+        !canOpenPromptFile &&
+        document.activeElement === openPromptFileBtn &&
+        promptTextInput
+      ) {
+        promptTextInput.focus();
+      }
+      openPromptFileBtn.style.display = canOpenPromptFile
+        ? "inline-flex"
+        : "none";
+    }
   }
 
   function setTemplateLoading(pathValue) {
@@ -201,6 +356,7 @@
     if (testBtn) {
       testBtn.disabled = !!templateLoadingPath;
     }
+    updatePromptFileNotice();
   }
 
   function clearTemplateLoading(pathValue) {
@@ -218,6 +374,7 @@
     if (testBtn) {
       testBtn.disabled = false;
     }
+    updatePromptFileNotice();
   }
 
   function requestTemplateLoad(selectedPath, source) {
@@ -323,6 +480,8 @@
   var templateLoadingPath = "";
   var templatePromptBaseline = null;
   var layoutRefreshPending = false;
+  // Display-only latest prompt-file state, keyed by task id.
+  var promptFilePreviews = {};
 
   function scheduleLayoutRefresh() {
     if (layoutRefreshPending) return;
@@ -408,6 +567,9 @@
   var templateSelectGroup = document.getElementById("template-select-group");
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
   var promptGroup = document.getElementById("prompt-group");
+  var promptTextInput = document.getElementById("prompt-text");
+  var loadLatestPromptBtn = document.getElementById("load-latest-prompt-btn");
+  var openPromptFileBtn = document.getElementById("open-prompt-file-btn");
   var autoModeInput = document.getElementById("auto-mode");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
@@ -1091,8 +1253,49 @@
     var target = e.target;
     if (target && target.name === "prompt-source" && target.checked) {
       applyPromptSource(target.value);
+      updatePromptFileNotice();
     }
   });
+
+  if (promptTextInput) {
+    promptTextInput.addEventListener("input", updatePromptFileNotice);
+  }
+
+  if (loadLatestPromptBtn) {
+    loadLatestPromptBtn.addEventListener("click", function () {
+      var task = editingTaskId ? getTaskById(editingTaskId) : null;
+      var preview = getPromptFilePreview(task);
+      if (
+        !promptTextInput ||
+        !preview ||
+        preview.source !== "file" ||
+        typeof preview.prompt !== "string"
+      ) {
+        return;
+      }
+      var hasManualEdits =
+        templatePromptBaseline !== null &&
+        String(promptTextInput.value || "") !== templatePromptBaseline;
+      if (
+        hasManualEdits &&
+        !window.confirm(strings.confirmReplacePromptEdits || "")
+      ) {
+        return;
+      }
+      promptTextInput.value = preview.prompt;
+      setTemplatePromptBaseline(preview.prompt);
+    });
+  }
+
+  if (openPromptFileBtn) {
+    openPromptFileBtn.addEventListener("click", function () {
+      if (!editingTaskId) return;
+      vscode.postMessage({
+        type: "openPromptFile",
+        taskId: editingTaskId,
+      });
+    });
+  }
 
   // Cron preset handling with null check
   if (cronPreset && cronExpression) {
@@ -1337,13 +1540,8 @@
 
       if (promptSourceValue !== "inline" && templatePromptBaseline === null) {
         if (formErr) {
-          formErr.textContent = templateLoadingPath
-            ? strings.templateLoadingInProgress ||
-              strings.templateLoadError ||
-              ""
-            : strings.templateLoadError ||
-              strings.templateLoadingInProgress ||
-              "";
+          formErr.textContent =
+            strings.promptFileNotLoadedNote || strings.templateLoadError || "";
           formErr.style.display = "block";
         }
         return;
@@ -1563,6 +1761,7 @@
     if (Array.isArray(nextTasks)) {
       tasks = nextTasks.filter(Boolean);
     }
+    prunePromptFilePreviews();
 
     if (!taskList || !taskList.isConnected) {
       taskList = document.getElementById("task-list");
@@ -1690,7 +1889,13 @@
         lastRunDate && !isNaN(lastRunDate.getTime())
           ? lastRunDate.toLocaleString(locale)
           : strings.labelNever;
-      var promptText = typeof task.prompt === "string" ? task.prompt : "";
+      var livePreview = getPromptFilePreview(task);
+      var promptText =
+        livePreview && typeof livePreview.prompt === "string"
+          ? livePreview.prompt
+          : typeof task.prompt === "string"
+            ? task.prompt
+            : "";
       var promptPreview =
         promptText.length > 180
           ? promptText.substring(0, 180) + "..."
@@ -1825,6 +2030,9 @@
         ": " +
         escapeHtml(promptSourceLabel) +
         "</span>" +
+        (livePreview
+          ? "<span>" + escapeHtml(buildPromptFileMeta(livePreview)) + "</span>"
+          : "") +
         (hasTaskDailyLimit
           ? "<span>" +
             escapeHtml(strings.labelMaxExecutionsPerDay || "") +
@@ -2416,6 +2624,7 @@
     updateChatSessionDefaultNote();
     updateFriendlyVisibility();
     updateCronPreview();
+    updatePromptFileNotice();
   }
 
   function applyUpdatedDefaultsToCreateForm() {
@@ -2514,6 +2723,7 @@
       if (!keepSelection && templateSelect) {
         templateSelect.value = "";
       }
+      updatePromptFileNotice();
       return;
     }
 
@@ -2530,6 +2740,7 @@
       setTemplatePromptBaseline(null);
       clearTemplateLoading();
     }
+    updatePromptFileNotice();
   }
 
   // Initialize dropdowns with cached data
@@ -2704,6 +2915,8 @@
 
     // Switch to edit tab (same form)
     switchTab("create");
+    vscode.postMessage({ type: "requestPromptPreview", taskId: id });
+    updatePromptFileNotice();
   };
 
   if (newTaskBtn) {
@@ -2792,6 +3005,31 @@
                 isTaskInCurrentWorkspace(editingTask);
               setEditingMode(editingTaskId, { canDelete: canDeleteInEdit });
             }
+          }
+          break;
+        case "updatePromptPreviews":
+          if (Array.isArray(message.previews)) {
+            message.previews.forEach(function (preview) {
+              if (!preview || typeof preview.taskId !== "string") return;
+              var task = getTaskById(preview.taskId);
+              if (
+                !task ||
+                String(preview.promptPath || "") !==
+                  String(task.promptPath || "").trim()
+              ) {
+                return;
+              }
+              var existing = promptFilePreviews[preview.taskId];
+              if (
+                existing &&
+                Date.parse(existing.resolvedAt) > Date.parse(preview.resolvedAt)
+              ) {
+                return;
+              }
+              promptFilePreviews[preview.taskId] = preview;
+            });
+            renderTaskList(tasks);
+            updatePromptFileNotice();
           }
           break;
         case "updateAgents":

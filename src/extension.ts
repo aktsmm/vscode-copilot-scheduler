@@ -22,12 +22,19 @@ import {
 } from "./modelQualityExperiment";
 import { getNextCronRun } from "./cronExpressions";
 import {
+  computePromptHash,
   normalizeForCompare,
   resolveGlobalAgentRoots,
   resolveGlobalPromptPath,
-  resolveLocalPromptPath,
+  resolveLocalPromptCandidates,
   resolveGlobalPromptsRoot,
 } from "./promptResolver";
+import {
+  createPromptBlockedError,
+  getPromptBlockedReason,
+  isPromptBlockedError,
+  type PromptBlockedReason,
+} from "./promptExecutionErrors";
 import {
   enqueueExecutionHistoryEntry as enqueueExecutionHistory,
   getExecutionHistoryEntries,
@@ -37,6 +44,7 @@ import {
   setExecutionHistoryContextForTests,
   type ExecutionHistoryEntry,
   type ExecutionHistoryStatus,
+  type ExecutionPromptSource,
   type ExecutionTrigger,
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
@@ -44,12 +52,36 @@ import type {
   ScheduledTask,
   CreateTaskInput,
   TaskAction,
+  PromptPreview,
   PromptSource,
   PromptExecutionRequest,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
 type PromptExecutionOptions = Omit<PromptExecutionRequest, "prompt">;
+
+/**
+ * What to do when a file-backed prompt cannot be read at execution time.
+ * Only applies to tasks whose promptSource is not "inline" and that have a promptPath.
+ */
+type PromptFileFallbackPolicy =
+  | "snapshot"
+  | "blockWhenResolvable"
+  | "blockAlways";
+
+type PromptResolution = {
+  /** Raw prompt text as resolved, before frontmatter parsing or auto-mode hints. */
+  text: string;
+  source: ExecutionPromptSource;
+  resolvedPath?: string;
+  hash: string;
+  resolvedAt: string;
+  fallbackReason?: PromptBlockedReason;
+  /** True when the file was found in a workspace folder other than the preferred one. */
+  crossWorkspaceResolved?: boolean;
+  /** Number of allowed candidate paths found for this task. */
+  candidateCount: number;
+};
 
 const PROMPT_SYNC_DATE_KEY = "promptSyncDate";
 const LAST_VERSION_KEY = "lastKnownVersion";
@@ -244,20 +276,25 @@ async function syncPromptTemplatesIfNeeded(
 
   const tasks = scheduleManager.getAllTasks();
   const promptUpdates: Array<{ id: string; prompt: string }> = [];
+  let hadUnreadableTemplate = false;
 
   for (const task of tasks) {
     if (task.promptSource === "inline") continue;
     if (!task.promptPath) continue;
     try {
       // Background sync should only read persisted file contents.
-      const latest = await resolvePromptText(task, false);
-      if (latest && latest !== task.prompt) {
-        // Avoid syncing empty prompts (would break validation and UX)
-        if (latest.trim()) {
-          promptUpdates.push({ id: task.id, prompt: latest });
-        }
+      const resolution = await resolvePromptSnapshot(task, false);
+      if (resolution.source !== "file") {
+        // Path/read failure: keep retrying on the next sync instead of
+        // marking today as done.
+        hadUnreadableTemplate = true;
+        continue;
+      }
+      if (resolution.text !== task.prompt && resolution.text.trim()) {
+        promptUpdates.push({ id: task.id, prompt: resolution.text });
       }
     } catch (error) {
+      hadUnreadableTemplate = true;
       const errorMessage =
         error instanceof Error ? error.message : String(error ?? "");
       logError(
@@ -276,7 +313,9 @@ async function syncPromptTemplatesIfNeeded(
     // refreshes both TreeView and Webview. Avoid duplicate task-list pushes.
   }
 
-  await context.globalState.update(PROMPT_SYNC_DATE_KEY, todayKey);
+  if (!hadUnreadableTemplate) {
+    await context.globalState.update(PROMPT_SYNC_DATE_KEY, todayKey);
+  }
 }
 
 export function notifyInfo(message: string, timeoutMs = 4000): void {
@@ -363,7 +402,9 @@ function buildExecutionSummary(
   const resultLabel =
     status === "success"
       ? messages.executionResultSuccess()
-      : messages.executionResultFailed();
+      : status === "blocked"
+        ? messages.executionResultBlocked()
+        : messages.executionResultFailed();
   return messages.taskExecutionSummary(
     taskName,
     resultLabel,
@@ -378,34 +419,136 @@ function setExtensionContextForTests(
   setExecutionHistoryContextForTests(context);
 }
 
-async function showExecutionHistoryView(): Promise<void> {
-  const history = getExecutionHistoryEntries();
-  if (history.length === 0) {
-    notifyInfo(messages.executionHistoryEmpty());
-    return;
+function formatHistoryTimestamp(value: string | undefined): string {
+  if (!value) return messages.webviewUnknown();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? messages.webviewUnknown()
+    : messages.formatDateTime(date);
+}
+
+function resolveHistoryPromptSourceLabel(
+  source: ExecutionHistoryEntry["promptSource"],
+): string | undefined {
+  switch (source) {
+    case "inline":
+      return messages.executionPromptSourceInline();
+    case "openDocument":
+      return messages.executionPromptSourceOpenDocument();
+    case "file":
+      return messages.executionPromptSourceFile();
+    case "snapshotFallback":
+      return messages.executionPromptSourceSnapshot();
+    default:
+      return undefined;
+  }
+}
+
+function resolveHistoryFallbackLabel(
+  reason: string | undefined,
+): string | undefined {
+  switch (reason) {
+    case "noPromptPath":
+    case "pathUnresolved":
+    case "readFailed":
+      return describePromptBlockedReason(reason);
+    default:
+      return undefined;
+  }
+}
+
+function buildExecutionHistoryDetail(entry: ExecutionHistoryEntry): string {
+  const lines: string[] = [];
+  if (entry.detail?.trim()) {
+    lines.push(entry.detail.trim());
   }
 
-  const picks = history.map((entry) => {
-    const icon = entry.status === "success" ? "✅" : "❌";
+  const sourceLabel = resolveHistoryPromptSourceLabel(entry.promptSource);
+  if (sourceLabel) {
+    lines.push(`${messages.executionHistoryPromptSource()}: ${sourceLabel}`);
+  }
+  if (entry.promptPathDisplay?.trim()) {
+    lines.push(
+      `${messages.executionHistoryPromptPath()}: ${resolveDisplayErrorMessage(entry.promptPathDisplay)}`,
+    );
+  }
+  if (entry.promptHash && /^[a-f0-9]{12}$/i.test(entry.promptHash)) {
+    lines.push(
+      `${messages.executionHistoryPromptHash()}: ${entry.promptHash.toLowerCase()}`,
+    );
+  }
+  if (entry.promptResolvedAt) {
+    lines.push(
+      `${messages.executionHistoryPromptResolvedAt()}: ${formatHistoryTimestamp(entry.promptResolvedAt)}`,
+    );
+  }
+  const fallbackLabel = resolveHistoryFallbackLabel(entry.promptFallbackReason);
+  if (fallbackLabel) {
+    lines.push(
+      `${messages.executionHistoryPromptFallback()}: ${fallbackLabel}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function buildExecutionHistoryQuickPickItems(
+  history: ExecutionHistoryEntry[],
+): Array<{ label: string; description: string; detail: string }> {
+  return history.map((entry) => {
+    const icon =
+      entry.status === "success"
+        ? "✅"
+        : entry.status === "blocked"
+          ? "⛔"
+          : "❌";
     const statusLabel =
       entry.status === "success"
         ? messages.executionResultSuccess()
-        : messages.executionResultFailed();
+        : entry.status === "blocked"
+          ? messages.executionResultBlocked()
+          : messages.executionResultFailed();
     const triggerLabel =
       entry.trigger === "manual"
         ? messages.executionTriggerManual()
         : messages.executionTriggerAuto();
-    const executedAt = new Date(entry.executedAt);
-    const nextRun = entry.nextRunAt ? new Date(entry.nextRunAt) : undefined;
-    const description = `${messages.formatDateTime(executedAt)} · ${triggerLabel} · ${statusLabel} · ${messages.labelNextRun()}: ${formatNextRunText(nextRun)}`;
+    const nextRunText = entry.nextRunAt
+      ? formatHistoryTimestamp(entry.nextRunAt)
+      : messages.labelNever();
     return {
       label: `${icon} ${entry.taskName}`,
-      description,
-      detail: entry.detail || "",
+      description: `${formatHistoryTimestamp(entry.executedAt)} · ${triggerLabel} · ${statusLabel} · ${messages.labelNextRun()}: ${nextRunText}`,
+      detail: buildExecutionHistoryDetail(entry),
     };
   });
+}
 
-  await vscode.window.showQuickPick(picks, {
+async function showExecutionHistoryView(deps?: {
+  getHistoryEntries(): ExecutionHistoryEntry[];
+  notifyInfo(message: string): void;
+  showQuickPick(
+    items: Array<{ label: string; description: string; detail: string }>,
+    options: {
+      placeHolder: string;
+      matchOnDescription: boolean;
+      matchOnDetail: boolean;
+    },
+  ): Thenable<unknown>;
+}): Promise<void> {
+  const history = deps
+    ? deps.getHistoryEntries()
+    : getExecutionHistoryEntries();
+  if (history.length === 0) {
+    (deps?.notifyInfo ?? notifyInfo)(messages.executionHistoryEmpty());
+    return;
+  }
+
+  const picks = buildExecutionHistoryQuickPickItems(history);
+
+  const showQuickPick = deps?.showQuickPick
+    ? deps.showQuickPick
+    : vscode.window.showQuickPick.bind(vscode.window);
+  await showQuickPick(picks, {
     placeHolder: messages.executionHistoryPickPlaceholder(),
     matchOnDescription: true,
     matchOnDetail: true,
@@ -421,6 +564,10 @@ let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
 
+const PROMPT_PREVIEW_DEBOUNCE_MS = 300;
+const pendingPromptPreviewPaths = new Set<string>();
+let promptPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+
 type PromptExecutionPayload = PromptExecutionRequest;
 
 type ManualRunFailureResult = {
@@ -429,6 +576,7 @@ type ManualRunFailureResult = {
     | "taskNotFound"
     | "executorUnavailable"
     | "alreadyRunning"
+    | "promptBlocked"
     | "executionFailed"
     | "saveFailed";
   errorMessage?: string;
@@ -460,6 +608,18 @@ function handleManualRunFailure(
   if (runResult.reason === "alreadyRunning") {
     const msg = messages.taskAlreadyRunning(taskName);
     notifyInfo(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "promptBlocked") {
+    const msg =
+      resolveDisplayErrorMessage(
+        runResult.errorMessage || messages.webviewUnknown(),
+      ) || messages.webviewUnknown();
+    notifyError(msg);
     if (showWebviewError) {
       SchedulerWebview.showError(msg);
     }
@@ -537,17 +697,24 @@ function registerPromptResourceWatchers(): void {
     void SchedulerWebview.refreshCachesAndNotifyPanel(true);
   };
 
-  const watchPattern = (pattern: vscode.GlobPattern): void => {
+  const watchPattern = (
+    pattern: vscode.GlobPattern,
+    onPromptFileChanged?: (uri: vscode.Uri) => void,
+  ): void => {
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    const handle = (uri: vscode.Uri) => {
+      refreshCaches();
+      onPromptFileChanged?.(uri);
+    };
     promptResourceWatchers.push(
       watcher,
-      watcher.onDidCreate(refreshCaches),
-      watcher.onDidChange(refreshCaches),
-      watcher.onDidDelete(refreshCaches),
+      watcher.onDidCreate(handle),
+      watcher.onDidChange(handle),
+      watcher.onDidDelete(handle),
     );
   };
 
-  watchPattern("**/.github/prompts/**/*.md");
+  watchPattern("**/.github/prompts/**/*.md", schedulePromptPreviewRefresh);
   // Workspace agent definitions can live outside .github/prompts (e.g.
   // .github/agents, AGENTS.md, or repository root), so watch them explicitly.
   watchPattern("**/*.agent.md");
@@ -571,7 +738,178 @@ function registerPromptResourceWatchers(): void {
     }
 
     watchedRoots.add(normalizedRoot);
-    watchPattern(new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md"));
+    watchPattern(
+      new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md"),
+      schedulePromptPreviewRefresh,
+    );
+  }
+}
+
+/**
+ * Push the latest prompt file content to the panel without persisting it.
+ *
+ * Persisting on every file change would multiply last-write-wins task saves
+ * across windows, so the stored snapshot is only updated on execution and by
+ * the daily sync.
+ */
+function schedulePromptPreviewRefresh(uri: vscode.Uri): void {
+  if (uri.scheme !== "file") return;
+
+  pendingPromptPreviewPaths.add(uri.fsPath);
+  if (promptPreviewTimer) {
+    clearTimeout(promptPreviewTimer);
+  }
+  promptPreviewTimer = setTimeout(() => {
+    promptPreviewTimer = undefined;
+    void flushPromptPreviewRefresh();
+  }, PROMPT_PREVIEW_DEBOUNCE_MS);
+}
+
+function getPromptCandidatePaths(task: ScheduledTask): string[] {
+  const promptPath =
+    typeof task.promptPath === "string" ? task.promptPath.trim() : "";
+  if (!promptPath) return [];
+  if (task.promptSource === "global") {
+    const candidate = resolveGlobalPromptPath(
+      getGlobalPromptsRoot(),
+      promptPath,
+    );
+    return candidate ? [candidate] : [];
+  }
+  if (task.promptSource === "local") {
+    return resolveLocalPromptCandidates(
+      getPreferredWorkspaceFolderPaths(task),
+      promptPath,
+    );
+  }
+  return [];
+}
+
+async function flushPromptPreviewRefresh(): Promise<void> {
+  const changedPaths = new Set(
+    Array.from(pendingPromptPreviewPaths, (p) => normalizeForCompare(p)),
+  );
+  pendingPromptPreviewPaths.clear();
+  if (changedPaths.size === 0) return;
+  if (!SchedulerWebview.isPanelOpen()) return;
+
+  const previews: PromptPreview[] = [];
+
+  for (const task of scheduleManager.getAllTasks()) {
+    if (task.promptSource === "inline") continue;
+    if (typeof task.promptPath !== "string" || !task.promptPath.trim()) {
+      continue;
+    }
+    const candidatePaths = getPromptCandidatePaths(task);
+    if (
+      !candidatePaths.some((candidate) =>
+        changedPaths.has(normalizeForCompare(candidate)),
+      )
+    ) {
+      continue;
+    }
+
+    let resolution: PromptResolution;
+    try {
+      // Disk content only: previews must not surface unsaved editor text.
+      resolution = await resolvePromptSnapshot(task, false);
+    } catch {
+      previews.push(buildUnavailablePromptPreview(task));
+      continue;
+    }
+
+    previews.push(buildPromptPreview(task, resolution));
+  }
+
+  if (previews.length > 0) {
+    SchedulerWebview.updatePromptPreviews(previews);
+  }
+}
+
+function buildUnavailablePromptPreview(task: ScheduledTask): PromptPreview {
+  const storedPrompt = typeof task.prompt === "string" ? task.prompt : "";
+  return buildPromptPreview(task, {
+    text: storedPrompt,
+    source: "snapshotFallback",
+    hash: computePromptHash(storedPrompt),
+    resolvedAt: new Date().toISOString(),
+    fallbackReason: "readFailed",
+    candidateCount: 0,
+  });
+}
+
+function buildPromptPreview(
+  task: ScheduledTask,
+  resolution: PromptResolution,
+): PromptPreview {
+  return {
+    taskId: task.id,
+    promptPath:
+      typeof task.promptPath === "string" ? task.promptPath.trim() : "",
+    promptPathDisplay: resolution.resolvedPath
+      ? sanitizeAbsolutePathDetails(
+          resolution.resolvedPath,
+          messages.redactedPlaceholder(),
+        )
+      : "",
+    source: resolution.source,
+    hash: resolution.hash,
+    resolvedAt: resolution.resolvedAt,
+    canOpenPromptFile: resolution.source === "file",
+    hasSnapshotDiff:
+      resolution.source === "file" && resolution.text !== task.prompt,
+    prompt: resolution.source === "file" ? resolution.text : undefined,
+  };
+}
+
+async function handlePromptPreviewRequest(taskId: string): Promise<void> {
+  const task = scheduleManager.getTask(taskId);
+  if (
+    !task ||
+    task.promptSource === "inline" ||
+    typeof task.promptPath !== "string" ||
+    !task.promptPath.trim()
+  ) {
+    return;
+  }
+
+  try {
+    const resolution = await resolvePromptSnapshot(task, false);
+    SchedulerWebview.updatePromptPreviews([
+      buildPromptPreview(task, resolution),
+    ]);
+  } catch (error) {
+    SchedulerWebview.updatePromptPreviews([
+      buildUnavailablePromptPreview(task),
+    ]);
+    logDebug(
+      `[CopilotScheduler] Prompt preview failed for task "${task.name}": ${sanitizeErrorDetailsForLog(
+        error instanceof Error ? error.message : String(error ?? ""),
+      )}`,
+    );
+  }
+}
+
+async function handleOpenPromptFile(taskId: string): Promise<void> {
+  const task = scheduleManager.getTask(taskId);
+  if (!task || task.promptSource === "inline") return;
+
+  try {
+    const resolution = await resolvePromptSnapshot(task, false);
+    if (!resolution.resolvedPath || resolution.source !== "file") {
+      notifyError(messages.labelPromptFileUnavailable());
+      return;
+    }
+    await vscode.window.showTextDocument(
+      vscode.Uri.file(resolution.resolvedPath),
+    );
+  } catch (error) {
+    logDebug(
+      `[CopilotScheduler] Open prompt file failed for task "${task.name}": ${sanitizeErrorDetailsForLog(
+        error instanceof Error ? error.message : String(error ?? ""),
+      )}`,
+    );
+    notifyError(messages.labelPromptFileUnavailable());
   }
 }
 
@@ -579,6 +917,10 @@ async function appendManualRunHistory(
   task: ScheduledTask,
   runResult: { ok: true } | ManualRunFailureResult,
 ): Promise<void> {
+  const promptMetadata = buildPromptHistoryMetadata(
+    takePromptResolution(task.id),
+  );
+
   if (runResult.ok) {
     const latestTask = scheduleManager.getTask(task.id) ?? task;
     const nextRunDate =
@@ -599,12 +941,15 @@ async function appendManualRunHistory(
       status: "success",
       executedAt: new Date().toISOString(),
       nextRunAt,
+      ...promptMetadata,
     });
     return;
   }
 
   const detail =
-    runResult.reason === "executionFailed" || runResult.reason === "saveFailed"
+    runResult.reason === "executionFailed" ||
+    runResult.reason === "saveFailed" ||
+    runResult.reason === "promptBlocked"
       ? runResult.errorMessage || messages.webviewUnknown()
       : runResult.reason === "executorUnavailable"
         ? messages.manualRunUnavailable()
@@ -613,10 +958,11 @@ async function appendManualRunHistory(
     taskId: task.id,
     taskName: task.name,
     trigger: "manual",
-    status: "failed",
+    status: runResult.reason === "promptBlocked" ? "blocked" : "failed",
     executedAt: new Date().toISOString(),
     nextRunAt: undefined,
     detail: resolveDisplayErrorMessage(detail),
+    ...promptMetadata,
   });
 }
 
@@ -917,6 +1263,8 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       throw error;
     }
 
+    await syncPromptSnapshotAfterRun(task);
+
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
       notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
@@ -927,9 +1275,41 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         status: "success",
         executedAt: new Date().toISOString(),
         nextRunAt: nextRunDate?.toISOString(),
+        ...buildPromptHistoryMetadata(
+          lastPromptResolutionByTaskId.get(task.id),
+        ),
       });
     }
   } catch (error) {
+    if (isPromptBlockedError(error)) {
+      // Manual runs record their own history entry via appendManualRunHistory.
+      if (trigger === "auto") {
+        const nextRunDate = getNotificationNextRun(task, new Date());
+        const summary = buildExecutionSummary(
+          task.name,
+          "blocked",
+          nextRunDate,
+        );
+        vscode.window.setStatusBarMessage(`⛔ ${summary}`, 6000);
+        void recordExecutionHistoryBestEffort({
+          taskId: task.id,
+          taskName: task.name,
+          trigger,
+          status: "blocked",
+          executedAt: new Date().toISOString(),
+          nextRunAt: nextRunDate?.toISOString(),
+          detail: resolveDisplayErrorMessage(
+            error instanceof Error ? error.message : String(error),
+          ),
+          ...buildPromptHistoryMetadata(
+            lastPromptResolutionByTaskId.get(task.id),
+          ),
+        });
+      }
+
+      throw error;
+    }
+
     // executePrompt already shows a warning with copy-to-clipboard option,
     // so only log the error here to avoid double notification.
     // Re-throw so callers (checkAndExecuteTasks / runTaskNow) can distinguish
@@ -950,50 +1330,187 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         executedAt: new Date().toISOString(),
         nextRunAt: nextRunDate?.toISOString(),
         detail: resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
+        ...buildPromptHistoryMetadata(
+          lastPromptResolutionByTaskId.get(task.id),
+        ),
       });
     }
 
     throw error;
+  } finally {
+    // Manual runs read the metadata later in appendManualRunHistory.
+    if (trigger === "auto") {
+      lastPromptResolutionByTaskId.delete(task.id);
+    }
   }
 }
 
 /**
- * Resolve prompt text from task (inline, local, or global)
+ * Keep the stored snapshot aligned with the file that was just executed.
+ * Only disk content is persisted; unsaved editor text is never written back.
  */
-async function resolvePromptText(
-  task: ScheduledTask,
-  preferOpenDocument = true,
-): Promise<string> {
-  if (task.promptSource === "inline") {
-    logDebug(`[CopilotScheduler] resolvePromptText: inline (task=${task.id})`);
-    return task.prompt;
+async function syncPromptSnapshotAfterRun(task: ScheduledTask): Promise<void> {
+  const resolution = lastPromptResolutionByTaskId.get(task.id);
+  if (!resolution || resolution.source !== "file") return;
+  if (!resolution.text.trim()) return;
+  if (resolution.text === task.prompt) return;
+
+  try {
+    await scheduleManager.updateTaskPrompts([
+      { id: task.id, prompt: resolution.text },
+    ]);
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : String(error ?? "");
+    logError(
+      `[CopilotScheduler] Prompt snapshot sync failed for task "${task.name}": ${sanitizeErrorDetailsForLog(errorMessage)}`,
+    );
+  }
+}
+
+/**
+ * Workspace folders ordered so that the task's own workspace is tried first.
+ * The task workspace is only used when it is actually open, so the resolver
+ * never reaches outside the current window's allowlisted folders.
+ */
+function getPreferredWorkspaceFolderPaths(task: ScheduledTask): string[] {
+  const allFolders = getWorkspaceFolderPaths();
+  const workspacePath =
+    typeof task.workspacePath === "string" ? task.workspacePath.trim() : "";
+  if (!workspacePath) {
+    return allFolders;
   }
 
-  if (!task.promptPath) {
+  const target = normalizeForCompare(workspacePath);
+  const preferred = allFolders.filter((p) => normalizeForCompare(p) === target);
+  if (preferred.length === 0) {
+    return allFolders;
+  }
+
+  return [
+    ...preferred,
+    ...allFolders.filter((p) => normalizeForCompare(p) !== target),
+  ];
+}
+
+function getPromptFileFallbackPolicy(): PromptFileFallbackPolicy {
+  const config = vscode.workspace.getConfiguration("copilotScheduler");
+  const raw = config.get<string>("promptFileFallback", "snapshot");
+  return raw === "blockWhenResolvable" || raw === "blockAlways"
+    ? raw
+    : "snapshot";
+}
+
+function describePromptBlockedReason(reason: PromptBlockedReason): string {
+  switch (reason) {
+    case "pathUnresolved":
+      return messages.promptBlockedReasonPathUnresolved();
+    case "readFailed":
+      return messages.promptBlockedReasonReadFailed();
+    default:
+      return messages.promptBlockedReasonNoPromptPath();
+  }
+}
+
+/**
+ * Throw when policy forbids running a file-backed task from the stored snapshot.
+ * Inline tasks and tasks without a promptPath are never affected.
+ */
+function assertPromptResolutionAllowed(
+  task: ScheduledTask,
+  resolution: PromptResolution,
+): void {
+  if (task.promptSource === "inline") return;
+  if (typeof task.promptPath !== "string" || !task.promptPath.trim()) return;
+  if (resolution.source === "file" || resolution.source === "openDocument") {
+    return;
+  }
+
+  const policy = getPromptFileFallbackPolicy();
+  if (policy === "snapshot") return;
+
+  const reason = resolution.fallbackReason ?? "readFailed";
+  if (policy === "blockWhenResolvable" && resolution.candidateCount === 0) {
+    return;
+  }
+
+  const message = messages.promptFileBlocked(
+    task.name,
+    describePromptBlockedReason(reason),
+  );
+  logError(`[CopilotScheduler] ${message}`);
+  throw createPromptBlockedError(message, reason);
+}
+
+/**
+ * Resolve prompt text from task (inline, local, or global).
+ *
+ * File-backed tasks read the latest file content at call time. Candidates are
+ * tried in order (preferred workspace first) and the first readable one wins;
+ * only when none can be read does this fall back to the stored snapshot.
+ */
+async function resolvePromptSnapshot(
+  task: ScheduledTask,
+  preferOpenDocument = true,
+): Promise<PromptResolution> {
+  const resolvedAt = new Date().toISOString();
+  const storedPrompt = typeof task.prompt === "string" ? task.prompt : "";
+
+  const buildFallback = (
+    fallbackReason: PromptBlockedReason,
+    candidateCount: number,
+    resolvedPath?: string,
+  ): PromptResolution => ({
+    text: storedPrompt,
+    source: "snapshotFallback",
+    resolvedPath,
+    hash: computePromptHash(storedPrompt),
+    resolvedAt,
+    fallbackReason,
+    candidateCount,
+  });
+
+  if (task.promptSource === "inline") {
+    logDebug(`[CopilotScheduler] resolvePromptText: inline (task=${task.id})`);
+    return {
+      text: storedPrompt,
+      source: "inline",
+      hash: computePromptHash(storedPrompt),
+      resolvedAt,
+      candidateCount: 0,
+    };
+  }
+
+  const promptPath =
+    typeof task.promptPath === "string" ? task.promptPath.trim() : "";
+  if (!promptPath) {
     logDebug(
       `[CopilotScheduler] resolvePromptText: missing promptPath (source=${task.promptSource}, task=${task.id})`,
     );
-    return task.prompt;
+    return buildFallback("noPromptPath", 0);
   }
 
-  const promptPath = task.promptPath.trim();
-  if (!promptPath) {
+  const candidates =
+    task.promptSource === "global"
+      ? [resolveGlobalPromptPath(getGlobalPromptsRoot(), promptPath)].filter(
+          (p): p is string => typeof p === "string" && p.length > 0,
+        )
+      : resolveLocalPromptCandidates(
+          getPreferredWorkspaceFolderPaths(task),
+          promptPath,
+        );
+
+  if (candidates.length === 0) {
     logDebug(
-      `[CopilotScheduler] resolvePromptText: empty promptPath (source=${task.promptSource}, task=${task.id})`,
+      `[CopilotScheduler] resolvePromptText: path resolution failed (source=${task.promptSource}, file=${path.basename(promptPath)}, task=${task.id})`,
     );
-    return task.prompt;
+    return buildFallback("pathUnresolved", 0);
   }
 
-  // Resolve file path
-  let filePath: string | undefined;
+  for (let index = 0; index < candidates.length; index++) {
+    const filePath = candidates[index];
+    const crossWorkspaceResolved = index > 0;
 
-  if (task.promptSource === "global") {
-    filePath = resolveGlobalPromptPath(getGlobalPromptsRoot(), promptPath);
-  } else if (task.promptSource === "local") {
-    filePath = resolveLocalPromptPath(getWorkspaceFolderPaths(), promptPath);
-  }
-
-  if (filePath) {
     if (preferOpenDocument) {
       // Prefer in-memory document text when the file is open (supports unsaved edits).
       const normalizedTarget = normalizeForCompare(filePath);
@@ -1008,7 +1525,15 @@ async function resolvePromptText(
           logDebug(
             `[CopilotScheduler] resolvePromptText: openDocument (file=${path.basename(filePath)}, dirty=${openDoc.isDirty}, task=${task.id})`,
           );
-          return text;
+          return {
+            text,
+            source: "openDocument",
+            resolvedPath: filePath,
+            hash: computePromptHash(text),
+            resolvedAt,
+            crossWorkspaceResolved,
+            candidateCount: candidates.length,
+          };
         }
         logDebug(
           `[CopilotScheduler] resolvePromptText: empty openDocument (file=${path.basename(filePath)}, dirty=${openDoc.isDirty}, task=${task.id})`,
@@ -1022,12 +1547,19 @@ async function resolvePromptText(
         vscode.Uri.file(filePath),
       );
       const content = Buffer.from(bytes).toString("utf8");
-      // If the template file is empty, fall back to the task's stored prompt.
       if (content.trim()) {
         logDebug(
           `[CopilotScheduler] resolvePromptText: file (file=${path.basename(filePath)}, task=${task.id})`,
         );
-        return content;
+        return {
+          text: content,
+          source: "file",
+          resolvedPath: filePath,
+          hash: computePromptHash(content),
+          resolvedAt,
+          crossWorkspaceResolved,
+          candidateCount: candidates.length,
+        };
       }
       logDebug(
         `[CopilotScheduler] resolvePromptText: empty file (file=${path.basename(filePath)}, task=${task.id})`,
@@ -1043,18 +1575,22 @@ async function resolvePromptText(
         `[CopilotScheduler] resolvePromptText: readFile failed (file=${path.basename(filePath)}, task=${task.id})`,
         sanitizeErrorDetailsForLog(errorMessage),
       );
-      // Fall back to inline prompt (file may not exist or be unreadable)
+      // Try the next candidate (the file may live in another workspace folder).
     }
-  } else {
-    logDebug(
-      `[CopilotScheduler] resolvePromptText: path resolution failed (source=${task.promptSource}, file=${path.basename(promptPath)}, task=${task.id})`,
-    );
   }
 
   logDebug(
     `[CopilotScheduler] resolvePromptText: fallback to stored prompt (source=${task.promptSource}, task=${task.id})`,
   );
-  return task.prompt;
+  return buildFallback("readFailed", candidates.length, candidates[0]);
+}
+
+async function resolvePromptText(
+  task: ScheduledTask,
+  preferOpenDocument = true,
+): Promise<string> {
+  const resolution = await resolvePromptSnapshot(task, preferOpenDocument);
+  return resolution.text;
 }
 
 function parsePromptFrontmatter(promptText: string): PromptExecutionPayload {
@@ -1154,12 +1690,56 @@ function applyAutoModeHint(promptText: string, enabled: boolean): string {
   return `${AUTO_MODE_HINT}\n\n${promptText}`;
 }
 
+/**
+ * Prompt resolution metadata for the most recent execution attempt per task.
+ * Written at resolve time so history writers never re-read the file and record
+ * content that differs from what was actually executed.
+ */
+const lastPromptResolutionByTaskId = new Map<string, PromptResolution>();
+
+function takePromptResolution(taskId: string): PromptResolution | undefined {
+  const resolution = lastPromptResolutionByTaskId.get(taskId);
+  lastPromptResolutionByTaskId.delete(taskId);
+  return resolution;
+}
+
+function buildPromptHistoryMetadata(
+  resolution: PromptResolution | undefined,
+): Pick<
+  ExecutionHistoryEntry,
+  | "promptSource"
+  | "promptPathDisplay"
+  | "promptHash"
+  | "promptResolvedAt"
+  | "promptFallbackReason"
+> {
+  if (!resolution) {
+    return {};
+  }
+
+  return {
+    promptSource: resolution.source,
+    promptPathDisplay: resolution.resolvedPath
+      ? sanitizeAbsolutePathDetails(
+          resolution.resolvedPath,
+          messages.redactedPlaceholder(),
+        )
+      : undefined,
+    promptHash: resolution.hash,
+    promptResolvedAt: resolution.resolvedAt,
+    promptFallbackReason: resolution.fallbackReason,
+  };
+}
+
 async function resolvePromptExecution(
   task: ScheduledTask,
   preferOpenDocument = true,
 ): Promise<PromptExecutionPayload> {
-  const promptText = await resolvePromptText(task, preferOpenDocument);
-  const parsed = parsePromptFrontmatter(promptText);
+  const resolution = await resolvePromptSnapshot(task, preferOpenDocument);
+  lastPromptResolutionByTaskId.set(task.id, resolution);
+  assertPromptResolutionAllowed(task, resolution);
+
+  const parsed = parsePromptFrontmatter(resolution.text);
 
   return {
     prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
@@ -1178,6 +1758,8 @@ export const __testOnly = {
   normalizeNotificationMode,
   resolveNotificationMode,
   resolvePromptText,
+  resolvePromptSnapshot,
+  buildUnavailablePromptPreview,
   parsePromptFrontmatter,
   resolveExecutionOption,
   applyAutoModeHint,
@@ -1188,6 +1770,9 @@ export const __testOnly = {
   ensureCreatedTaskAcceptedAfterDisclaimer,
   enqueueExecutionHistory,
   getExecutionHistoryEntries,
+  buildExecutionHistoryQuickPickItems,
+  showExecutionHistoryView,
+  confirmManualRunIfWorkspaceMismatch,
   setExtensionContextForTests,
   resetExecutionHistoryQueueForTests,
 };
@@ -1212,14 +1797,28 @@ function handleTaskAction(action: TaskAction): void {
 
 async function confirmManualRunIfWorkspaceMismatch(
   task: ScheduledTask,
+  deps?: {
+    shouldRunInCurrentWorkspace(task: ScheduledTask): boolean;
+    showWarningMessage(
+      message: string,
+      options: { modal: true },
+      ...items: string[]
+    ): Thenable<string | undefined>;
+  },
 ): Promise<boolean> {
   if (task.scope !== "workspace") {
     return true;
   }
-  if (scheduleManager.shouldTaskRunInCurrentWorkspace(task)) {
+  const shouldRunInCurrentWorkspace = deps
+    ? deps.shouldRunInCurrentWorkspace(task)
+    : scheduleManager.shouldTaskRunInCurrentWorkspace(task);
+  if (shouldRunInCurrentWorkspace) {
     return true;
   }
-  const choice = await vscode.window.showWarningMessage(
+  const showWarningMessage = deps?.showWarningMessage
+    ? deps.showWarningMessage
+    : vscode.window.showWarningMessage.bind(vscode.window);
+  const choice = await showWarningMessage(
     messages.confirmRunOutsideWorkspace(task.name),
     { modal: true },
     messages.confirmRunAnyway(),
@@ -1384,9 +1983,13 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           SchedulerWebview.showError(msg);
           break;
         }
-        const promptText = await resolvePromptText(copyTask);
-        await vscode.env.clipboard.writeText(promptText);
-        notifyInfo(messages.promptCopied());
+        const resolution = await resolvePromptSnapshot(copyTask);
+        await vscode.env.clipboard.writeText(resolution.text);
+        notifyInfo(
+          resolution.source === "snapshotFallback"
+            ? messages.promptCopiedFromSnapshot(copyTask.name)
+            : messages.promptCopied(),
+        );
         break;
       }
 
@@ -1520,6 +2123,8 @@ function registerCreateTaskGuiCommand(
           scheduleManager.getAllTasks(),
           handleTaskAction,
           handleTestPromptAction,
+          (taskId) => void handlePromptPreviewRequest(taskId),
+          (taskId) => void handleOpenPromptFile(taskId),
         );
 
         // Ensure the '+' command always opens the webview in "new task" mode.
@@ -1545,6 +2150,8 @@ function registerListTasksCommand(
           scheduleManager.getAllTasks(),
           handleTaskAction,
           handleTestPromptAction,
+          (taskId) => void handlePromptPreviewRequest(taskId),
+          (taskId) => void handleOpenPromptFile(taskId),
         );
         SchedulerWebview.switchToList();
       } catch (error) {
@@ -1592,6 +2199,8 @@ function registerEditTaskCommand(
           scheduleManager.getAllTasks(),
           handleTaskAction,
           handleTestPromptAction,
+          (requestedTaskId) => void handlePromptPreviewRequest(requestedTaskId),
+          (requestedTaskId) => void handleOpenPromptFile(requestedTaskId),
         );
         SchedulerWebview.editTask(taskId);
       } catch (error) {
@@ -1921,9 +2530,13 @@ function registerCopyPromptCommand(): vscode.Disposable {
           task = selected.task;
         }
 
-        const promptText = await resolvePromptText(task);
-        await vscode.env.clipboard.writeText(promptText);
-        notifyInfo(messages.promptCopied());
+        const resolution = await resolvePromptSnapshot(task);
+        await vscode.env.clipboard.writeText(resolution.text);
+        notifyInfo(
+          resolution.source === "snapshotFallback"
+            ? messages.promptCopiedFromSnapshot(task.name)
+            : messages.promptCopied(),
+        );
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);

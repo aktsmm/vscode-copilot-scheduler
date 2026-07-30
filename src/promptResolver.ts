@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
+import * as crypto from "crypto";
 
 function getDefaultVsCodeUserPromptsRoot(): string {
   if (process.platform === "win32" && process.env.APPDATA) {
@@ -121,6 +122,15 @@ export function isPromptTemplateMarkdownFile(p: string): boolean {
   return isMarkdownFile(p);
 }
 
+/** Short content fingerprint used to compare executed prompt text with the stored snapshot. */
+export function computePromptHash(text: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(typeof text === "string" ? text : "", "utf8")
+    .digest("hex")
+    .slice(0, 12);
+}
+
 export function getPromptTemplateDisplayName(filePath: string): string {
   const fileName = path.basename(filePath);
   if (fileName.toLowerCase().endsWith(".prompt.md")) {
@@ -165,50 +175,91 @@ export function resolveGlobalPromptPath(
  * - Supports multi-root workspaces.
  * - Supports absolute paths and relative paths (relative to workspace root or prompts dir).
  */
+function resolveLocalPromptPathInWorkspace(
+  workspaceRoot: string,
+  promptPath: string,
+): string | undefined {
+  if (!workspaceRoot) return undefined;
+  const promptsDir = path.join(workspaceRoot, ".github", "prompts");
+
+  // Absolute path case: just validate containment.
+  if (path.isAbsolute(promptPath)) {
+    const resolvedAbs = path.resolve(promptPath);
+    if (
+      isPathInsideBaseDir(promptsDir, resolvedAbs) &&
+      isMarkdownFile(resolvedAbs)
+    ) {
+      return resolvedAbs;
+    }
+    return undefined;
+  }
+
+  // Relative paths:
+  // - relative to workspace root (e.g., ".github/prompts/foo.md")
+  // - relative to prompts dir (e.g., "foo.md" or "sub/foo.md")
+  const candidateFromWorkspace = path.resolve(workspaceRoot, promptPath);
+  if (
+    isPathInsideBaseDir(promptsDir, candidateFromWorkspace) &&
+    isMarkdownFile(candidateFromWorkspace)
+  ) {
+    return candidateFromWorkspace;
+  }
+
+  const candidateFromPrompts = path.resolve(promptsDir, promptPath);
+  if (
+    isPathInsideBaseDir(promptsDir, candidateFromPrompts) &&
+    isMarkdownFile(candidateFromPrompts)
+  ) {
+    return candidateFromPrompts;
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve every allowed local prompt path, in workspace-folder order.
+ *
+ * Emits at most one candidate per workspace folder so that a workspace-relative
+ * path is never additionally expanded against the prompts dir
+ * (`.github/prompts/.github/prompts/foo.md`). Callers read candidates in order
+ * and use the first one that is actually readable.
+ */
+export function resolveLocalPromptCandidates(
+  workspaceFolderPaths: string[],
+  promptPath: string,
+): string[] {
+  if (!promptPath || typeof promptPath !== "string") return [];
+  if (!Array.isArray(workspaceFolderPaths)) return [];
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const workspaceRoot of workspaceFolderPaths) {
+    const candidate = resolveLocalPromptPathInWorkspace(
+      workspaceRoot,
+      promptPath,
+    );
+    if (!candidate) continue;
+
+    const key = normalizeForCompare(candidate);
+    if (!key || seen.has(key)) continue;
+
+    seen.add(key);
+    candidates.push(candidate);
+  }
+
+  return candidates;
+}
+
 export function resolveLocalPromptPath(
   workspaceFolderPaths: string[],
   promptPath: string,
 ): string | undefined {
   if (!promptPath || typeof promptPath !== "string") return undefined;
+  if (!Array.isArray(workspaceFolderPaths)) return undefined;
   if (workspaceFolderPaths.length === 0) return undefined;
 
-  for (const workspaceRoot of workspaceFolderPaths) {
-    if (!workspaceRoot) continue;
-    const promptsDir = path.join(workspaceRoot, ".github", "prompts");
-
-    // Absolute path case: just validate containment.
-    if (path.isAbsolute(promptPath)) {
-      const resolvedAbs = path.resolve(promptPath);
-      if (
-        isPathInsideBaseDir(promptsDir, resolvedAbs) &&
-        isMarkdownFile(resolvedAbs)
-      ) {
-        return resolvedAbs;
-      }
-      continue;
-    }
-
-    // Relative paths:
-    // - relative to workspace root (e.g., ".github/prompts/foo.md")
-    // - relative to prompts dir (e.g., "foo.md" or "sub/foo.md")
-    const candidateFromWorkspace = path.resolve(workspaceRoot, promptPath);
-    if (
-      isPathInsideBaseDir(promptsDir, candidateFromWorkspace) &&
-      isMarkdownFile(candidateFromWorkspace)
-    ) {
-      return candidateFromWorkspace;
-    }
-
-    const candidateFromPrompts = path.resolve(promptsDir, promptPath);
-    if (
-      isPathInsideBaseDir(promptsDir, candidateFromPrompts) &&
-      isMarkdownFile(candidateFromPrompts)
-    ) {
-      return candidateFromPrompts;
-    }
-  }
-
-  return undefined;
+  return resolveLocalPromptCandidates(workspaceFolderPaths, promptPath)[0];
 }
 
 /**

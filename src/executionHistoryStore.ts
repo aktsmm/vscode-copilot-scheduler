@@ -7,9 +7,18 @@ export const EXECUTION_HISTORY_KEY = "executionHistory";
 export const EXECUTION_HISTORY_DEFAULT_LIMIT = 50;
 const EXECUTION_HISTORY_MIN_LIMIT = 10;
 const EXECUTION_HISTORY_MAX_LIMIT = 500;
+const ISO_TIMESTAMP_WITH_TIMEZONE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/;
 
 export type ExecutionTrigger = "auto" | "manual";
-export type ExecutionHistoryStatus = "success" | "failed";
+export type ExecutionHistoryStatus = "success" | "failed" | "blocked";
+
+/** How the prompt text actually sent to Copilot was obtained. */
+export type ExecutionPromptSource =
+  | "inline"
+  | "openDocument"
+  | "file"
+  | "snapshotFallback";
 
 export type ExecutionHistoryEntry = {
   taskId: string;
@@ -17,8 +26,22 @@ export type ExecutionHistoryEntry = {
   trigger: ExecutionTrigger;
   status: ExecutionHistoryStatus;
   executedAt: string;
+  /** True when a legacy executedAt value could not be parsed. */
+  executedAtInvalid?: true;
   nextRunAt?: string;
+  /** True when a malformed legacy nextRunAt value was omitted. */
+  nextRunAtInvalid?: true;
   detail?: string;
+  /** Where the executed prompt text came from. */
+  promptSource?: ExecutionPromptSource;
+  /** Sanitized display path of the prompt file that was read. */
+  promptPathDisplay?: string;
+  /** Short hash of the executed prompt text. */
+  promptHash?: string;
+  /** ISO timestamp of when the prompt text was resolved. */
+  promptResolvedAt?: string;
+  /** Why the stored snapshot was used instead of the file. */
+  promptFallbackReason?: string;
 };
 
 type StoreContext = Pick<vscode.ExtensionContext, "globalState">;
@@ -49,15 +72,150 @@ export function isExecutionHistoryEntry(
   const record = item as Record<string, unknown>;
   const trigger = record.trigger;
   const status = record.status;
+  const isOptionalString = (value: unknown): boolean =>
+    value === undefined || typeof value === "string";
   return (
     typeof record.taskId === "string" &&
     typeof record.taskName === "string" &&
     (trigger === "auto" || trigger === "manual") &&
-    (status === "success" || status === "failed") &&
+    (status === "success" || status === "failed" || status === "blocked") &&
     typeof record.executedAt === "string" &&
+    (record.executedAtInvalid === undefined ||
+      record.executedAtInvalid === true) &&
     (record.nextRunAt === undefined || typeof record.nextRunAt === "string") &&
-    (record.detail === undefined || typeof record.detail === "string")
+    (record.nextRunAtInvalid === undefined ||
+      record.nextRunAtInvalid === true) &&
+    (record.detail === undefined || typeof record.detail === "string") &&
+    isOptionalString(record.promptSource) &&
+    isOptionalString(record.promptPathDisplay) &&
+    isOptionalString(record.promptHash) &&
+    isOptionalString(record.promptResolvedAt) &&
+    isOptionalString(record.promptFallbackReason)
   );
+}
+
+function normalizeHistoryTimestamp(
+  value: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(ISO_TIMESTAMP_WITH_TIMEZONE);
+  if (!match) return undefined;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? "0").padEnd(3, "0"));
+  const zone = match[8];
+  const offsetSign = match[9];
+  const offsetHour = Number(match[10] ?? "0");
+  const offsetMinute = Number(match[11] ?? "0");
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    (zone !== "Z" && (offsetHour > 23 || offsetMinute > 59))
+  ) {
+    return undefined;
+  }
+
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, millisecond);
+  const offsetMilliseconds = (offsetHour * 60 + offsetMinute) * 60 * 1000;
+  const utcTimestamp =
+    local.getTime() +
+    (zone === "Z"
+      ? 0
+      : offsetSign === "+"
+        ? -offsetMilliseconds
+        : offsetMilliseconds);
+  if (Number.isNaN(utcTimestamp)) return undefined;
+  const utcDate = new Date(utcTimestamp);
+  const utcYear = utcDate.getUTCFullYear();
+  return utcYear < 0 || utcYear > 9999 ? undefined : utcDate.toISOString();
+}
+
+function normalizeExecutionHistoryEntry(
+  entry: ExecutionHistoryEntry,
+): ExecutionHistoryEntry {
+  const normalizedExecutedAt = normalizeHistoryTimestamp(entry.executedAt);
+  const executedAtInvalid = normalizedExecutedAt ? undefined : true;
+  const executedAt = normalizedExecutedAt ?? entry.executedAt;
+  const normalizedNextRunAt = normalizeHistoryTimestamp(entry.nextRunAt);
+  const nextRunAtInvalid =
+    entry.nextRunAt !== undefined && !normalizedNextRunAt
+      ? true
+      : entry.nextRunAt === undefined && entry.nextRunAtInvalid === true
+        ? true
+        : undefined;
+  const nextRunAt = normalizedNextRunAt;
+  const promptSource =
+    entry.promptSource === "inline" ||
+    entry.promptSource === "openDocument" ||
+    entry.promptSource === "file" ||
+    entry.promptSource === "snapshotFallback"
+      ? entry.promptSource
+      : undefined;
+  const promptHash =
+    typeof entry.promptHash === "string" &&
+    /^[a-f0-9]{12}$/i.test(entry.promptHash)
+      ? entry.promptHash.toLowerCase()
+      : undefined;
+  const promptResolvedAt =
+    typeof entry.promptResolvedAt === "string"
+      ? normalizeHistoryTimestamp(entry.promptResolvedAt)
+      : undefined;
+  const promptFallbackReason =
+    entry.promptFallbackReason === "noPromptPath" ||
+    entry.promptFallbackReason === "pathUnresolved" ||
+    entry.promptFallbackReason === "readFailed"
+      ? entry.promptFallbackReason
+      : undefined;
+  const promptPathDisplay = entry.promptPathDisplay?.trim()
+    ? sanitizeAbsolutePathDetails(entry.promptPathDisplay.trim())
+    : undefined;
+
+  return {
+    taskId: entry.taskId,
+    taskName: entry.taskName,
+    trigger: entry.trigger,
+    status: entry.status,
+    executedAt,
+    executedAtInvalid,
+    nextRunAt,
+    nextRunAtInvalid,
+    detail: entry.detail?.trim()
+      ? sanitizeAbsolutePathDetails(entry.detail.trim())
+      : undefined,
+    promptSource,
+    promptPathDisplay,
+    promptHash,
+    promptResolvedAt,
+    promptFallbackReason,
+  };
 }
 
 export function getExecutionHistoryLimit(): number {
@@ -83,7 +241,9 @@ export function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw.filter(isExecutionHistoryEntry);
+  return raw
+    .filter(isExecutionHistoryEntry)
+    .map(normalizeExecutionHistoryEntry);
 }
 
 async function appendExecutionHistoryEntry(
@@ -92,13 +252,11 @@ async function appendExecutionHistoryEntry(
   if (!contextRef) {
     return;
   }
-  const raw = contextRef.globalState.get<unknown[]>(EXECUTION_HISTORY_KEY, []);
-  const existing = Array.isArray(raw)
-    ? raw.filter(isExecutionHistoryEntry)
-    : [];
+  const existing = getExecutionHistoryEntries();
+  const normalizedEntry = normalizeExecutionHistoryEntry(entry);
   const limit = getExecutionHistoryLimit();
   // Newest-first ordering, matching the previous inline implementation.
-  const next = [entry, ...existing].slice(0, limit);
+  const next = [normalizedEntry, ...existing].slice(0, limit);
   await contextRef.globalState.update(EXECUTION_HISTORY_KEY, next);
 }
 

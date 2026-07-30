@@ -12,6 +12,7 @@ import type {
   TaskAction,
   AgentInfo,
   ModelInfo,
+  PromptPreview,
   PromptTemplate,
   TaskScope,
   WebviewToExtensionMessage,
@@ -61,10 +62,17 @@ export class SchedulerWebview {
   private static onTestPromptCallback:
     | ((request: PromptExecutionRequest) => void)
     | undefined;
+  private static onPromptPreviewRequestCallback:
+    | ((taskId: string) => void)
+    | undefined;
+  private static onOpenPromptFileCallback:
+    | ((taskId: string) => void)
+    | undefined;
   private static extensionUri: vscode.Uri;
   private static currentTasks: ScheduledTask[] = [];
   private static webviewReady = false;
   private static pendingMessages: OutgoingWebviewMessage[] = [];
+  private static promptPreviews = new Map<string, PromptPreview>();
 
   private static getFormDefaults(): {
     defaultScope: TaskScope;
@@ -190,6 +198,21 @@ export class SchedulerWebview {
       this.panel.dispose();
       // onDidDispose handler will reset panel & readyState
     }
+    this.promptPreviews.clear();
+  }
+
+  private static prunePromptPreviews(tasks: readonly ScheduledTask[]): void {
+    const promptPaths = new Map(
+      tasks.map((task) => [
+        task.id,
+        typeof task.promptPath === "string" ? task.promptPath.trim() : "",
+      ]),
+    );
+    for (const [taskId, preview] of this.promptPreviews) {
+      if (promptPaths.get(taskId) !== preview.promptPath) {
+        this.promptPreviews.delete(taskId);
+      }
+    }
   }
 
   private static enqueueMessage(message: OutgoingWebviewMessage): void {
@@ -231,11 +254,16 @@ export class SchedulerWebview {
     tasks: ScheduledTask[],
     onTaskAction: (action: TaskAction) => void,
     onTestPrompt?: (request: PromptExecutionRequest) => void,
+    onPromptPreviewRequest?: (taskId: string) => void,
+    onOpenPromptFile?: (taskId: string) => void,
   ): Promise<void> {
     this.extensionUri = extensionUri;
     this.currentTasks = tasks;
+    this.prunePromptPreviews(tasks);
     this.onTaskActionCallback = onTaskAction;
     this.onTestPromptCallback = onTestPrompt;
+    this.onPromptPreviewRequestCallback = onPromptPreviewRequest;
+    this.onOpenPromptFileCallback = onOpenPromptFile;
 
     // Ensure we have baseline data for the first render (do not block the UI)
     if (this.cachedAgents.length === 0) {
@@ -387,10 +415,43 @@ export class SchedulerWebview {
 
   static updateTasks(tasks: ScheduledTask[]): void {
     this.currentTasks = tasks;
+    this.prunePromptPreviews(tasks);
     this.postMessage({
       type: "updateTasks",
       tasks: this.buildTaskViewModels(tasks),
       workspacePaths: this.getCurrentWorkspacePaths(),
+    });
+  }
+
+  static isPanelOpen(): boolean {
+    return this.panel !== undefined;
+  }
+
+  /**
+   * Push latest prompt-file state for file-backed tasks.
+   *
+   * Previews are merged by task id and always sent as the full set, because
+   * `enqueueMessage` coalesces by message type while the webview is not ready.
+   */
+  static updatePromptPreviews(previews: PromptPreview[]): void {
+    if (!this.panel) return;
+    if (!Array.isArray(previews) || previews.length === 0) return;
+
+    for (const preview of previews) {
+      if (!preview || typeof preview.taskId !== "string") continue;
+      const existing = this.promptPreviews.get(preview.taskId);
+      if (
+        existing &&
+        Date.parse(existing.resolvedAt) > Date.parse(preview.resolvedAt)
+      ) {
+        continue;
+      }
+      this.promptPreviews.set(preview.taskId, preview);
+    }
+
+    this.postMessage({
+      type: "updatePromptPreviews",
+      previews: Array.from(this.promptPreviews.values()),
     });
   }
 
@@ -684,12 +745,29 @@ export class SchedulerWebview {
         await this.loadPromptTemplateContent(message.path, message.source);
         break;
 
+      case "requestPromptPreview":
+        this.onPromptPreviewRequestCallback?.(message.taskId);
+        break;
+
+      case "openPromptFile":
+        this.onOpenPromptFileCallback?.(message.taskId);
+        break;
+
       case "webviewReady":
         this.webviewReady = true;
         // Flush any messages that were queued while the webview was not ready.
         // Cached agents/models/templates are already enqueued by refreshLanguage
         // or show(), so we only need to flush here to avoid duplicates.
         this.flushPendingMessages();
+        for (const task of this.currentTasks) {
+          if (
+            task.promptSource !== "inline" &&
+            typeof task.promptPath === "string" &&
+            task.promptPath.trim()
+          ) {
+            this.onPromptPreviewRequestCallback?.(task.id);
+          }
+        }
         break;
     }
   }
@@ -1085,6 +1163,17 @@ export class SchedulerWebview {
       labelPromptInline: messages.labelPromptInline(),
       labelPromptLocal: messages.labelPromptLocal(),
       labelPromptGlobal: messages.labelPromptGlobal(),
+      labelPromptFileSource: messages.labelPromptFileSource(),
+      labelPromptFileSynced: messages.labelPromptFileSynced(),
+      labelPromptFileDiff: messages.labelPromptFileDiff(),
+      labelPromptFileUnavailable: messages.labelPromptFileUnavailable(),
+      promptFileExecutionNote: messages.promptFileExecutionNote(),
+      promptFileWillBecomeInline: messages.promptFileWillBecomeInline(),
+      promptFileNotLoadedNote: messages.promptFileNotLoadedNote(),
+      promptFileStaleHint: messages.promptFileStaleHint(),
+      actionLoadLatestPrompt: messages.actionLoadLatestPrompt(),
+      actionOpenPromptFile: messages.actionOpenPromptFile(),
+      confirmReplacePromptEdits: messages.confirmReplacePromptEdits(),
       labelPrompt: messages.labelPrompt(),
       labelSchedule: messages.labelSchedule(),
       labelCronExpression: messages.labelCronExpression(),
@@ -1393,6 +1482,38 @@ export class SchedulerWebview {
       border-color: color-mix(in srgb, var(--vscode-testing-iconPassed) 45%, transparent);
       opacity: 1;
       transition: opacity 0.5s ease-out;
+    }
+
+    .prompt-file-notice {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-left: 3px solid var(--vscode-textLink-foreground);
+      background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent);
+      color: var(--vscode-foreground);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .prompt-file-notice.warning {
+      border-left-color: var(--vscode-editorWarning-foreground);
+      background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 10%, transparent);
+    }
+
+    .prompt-file-notice-meta {
+      margin-top: 4px;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .prompt-file-notice-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .prompt-file-notice-actions .btn-secondary {
+      min-height: 28px;
+      padding: 3px 9px;
     }
 
     .form-layout {
@@ -1997,6 +2118,16 @@ export class SchedulerWebview {
             <div class="form-group col-12" id="prompt-group">
               <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
               <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
+              <div id="prompt-file-notice" class="prompt-file-notice" style="display:none;">
+                <div id="prompt-file-notice-live" role="status" aria-live="polite" aria-atomic="true">
+                  <div id="prompt-file-notice-message"></div>
+                  <div id="prompt-file-notice-meta" class="prompt-file-notice-meta"></div>
+                </div>
+                <div class="prompt-file-notice-actions">
+                  <button type="button" class="btn-secondary" id="load-latest-prompt-btn" style="display:none;">${escapeHtml(strings.actionLoadLatestPrompt)}</button>
+                  <button type="button" class="btn-secondary" id="open-prompt-file-btn" style="display:none;">${escapeHtml(strings.actionOpenPromptFile)}</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>

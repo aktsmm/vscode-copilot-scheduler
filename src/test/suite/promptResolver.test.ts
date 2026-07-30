@@ -3,9 +3,11 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
+  computePromptHash,
   getPromptTemplateDisplayName,
   isPromptTemplateMarkdownFile,
   resolveAllowedPathInBaseDir,
+  resolveLocalPromptCandidates,
   resolveLocalPromptPath,
   resolveGlobalPromptPath,
   resolveGlobalPromptsRoot,
@@ -358,6 +360,47 @@ suite("Prompt Resolver Tests", () => {
     const rel = path.join(".github", "prompts", "x.instructions.md");
     const p = resolveLocalPromptPath([ws1], rel);
     assert.strictEqual(p, undefined);
+  });
+
+  test("resolveLocalPromptCandidates emits one candidate per workspace, in order", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const ws2 = path.join("/tmp", "ws2");
+    const rel = path.join(".github", "prompts", "x.md");
+    const candidates = resolveLocalPromptCandidates([ws1, ws2], rel);
+    assert.strictEqual(candidates.length, 2);
+    assert.strictEqual(
+      norm(candidates[0]),
+      norm(path.join(ws1, ".github", "prompts", "x.md")),
+    );
+    assert.strictEqual(
+      norm(candidates[1]),
+      norm(path.join(ws2, ".github", "prompts", "x.md")),
+    );
+  });
+
+  test("resolveLocalPromptCandidates does not expand a workspace-relative path against the prompts dir", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const rel = path.join(".github", "prompts", "x.md");
+    const candidates = resolveLocalPromptCandidates([ws1], rel);
+    assert.strictEqual(candidates.length, 1);
+    assert.ok(
+      !norm(candidates[0]).includes(
+        norm(path.join(".github", "prompts", ".github")).replace(/^[\\/]/, ""),
+      ),
+    );
+  });
+
+  test("resolveLocalPromptCandidates dedupes identical resolutions", () => {
+    const ws1 = path.join("/tmp", "ws1");
+    const rel = path.join(".github", "prompts", "x.md");
+    const candidates = resolveLocalPromptCandidates([ws1, ws1], rel);
+    assert.strictEqual(candidates.length, 1);
+  });
+
+  test("computePromptHash is stable and content sensitive", () => {
+    assert.strictEqual(computePromptHash("abc"), computePromptHash("abc"));
+    assert.notStrictEqual(computePromptHash("abc"), computePromptHash("abd"));
+    assert.strictEqual(computePromptHash("abc").length, 12);
   });
 
   test("isPromptTemplateMarkdownFile allows plain markdown and .prompt.md", () => {

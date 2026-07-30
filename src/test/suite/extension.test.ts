@@ -8,6 +8,8 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { parseExpression } from "cron-parser";
+import type { ExecutionHistoryEntry } from "../../executionHistoryStore";
+import { messages } from "../../i18n";
 import type { ScheduledTask } from "../../types";
 import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
 
@@ -423,6 +425,73 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
+  test("history quick picks expose prompt audit metadata", async () => {
+    const { __testOnly } = await import("../../extension");
+    const buildItems = __testOnly.buildExecutionHistoryQuickPickItems as (
+      entries: ExecutionHistoryEntry[],
+    ) => Array<{ description: string; detail: string }>;
+
+    const [item] = buildItems([
+      {
+        taskId: "task-audit",
+        taskName: "Audit task",
+        trigger: "manual",
+        status: "success",
+        executedAt: "2026-07-30T09:00:00.000Z",
+        promptSource: "snapshotFallback",
+        promptPathDisplay: "daily.prompt.md",
+        promptHash: "ABC123DEF456",
+        promptResolvedAt: "2026-07-30T08:59:59.000Z",
+        promptFallbackReason: "readFailed",
+      },
+    ]);
+
+    assert.ok(item.detail.includes(messages.executionPromptSourceSnapshot()));
+    assert.ok(item.detail.includes("daily.prompt.md"));
+    assert.ok(item.detail.includes("abc123def456"));
+    assert.ok(item.detail.includes(messages.promptBlockedReasonReadFailed()));
+    assert.ok(
+      item.detail.includes(messages.executionHistoryPromptResolvedAt()),
+    );
+  });
+
+  test("history quick picks preserve legacy detail and tolerate malformed dates", async () => {
+    const { __testOnly } = await import("../../extension");
+    const buildItems = __testOnly.buildExecutionHistoryQuickPickItems as (
+      entries: ExecutionHistoryEntry[],
+    ) => Array<{ description: string; detail: string }>;
+
+    const [legacy, malformed] = buildItems([
+      {
+        taskId: "legacy",
+        taskName: "Legacy",
+        trigger: "auto",
+        status: "failed",
+        executedAt: "2026-07-30T09:00:00.000Z",
+        detail: "existing detail",
+      },
+      {
+        taskId: "malformed",
+        taskName: "Malformed",
+        trigger: "auto",
+        status: "success",
+        executedAt: "not-a-date",
+        nextRunAt: "also-not-a-date",
+        promptSource: "not-valid",
+        promptHash: "x",
+        promptResolvedAt: "still-not-a-date",
+        promptFallbackReason: "unknown-reason",
+      } as unknown as ExecutionHistoryEntry,
+    ]);
+
+    assert.strictEqual(legacy.detail, "existing detail");
+    assert.ok(malformed.description.includes(messages.webviewUnknown()));
+    assert.ok(malformed.detail.includes(messages.webviewUnknown()));
+    assert.ok(!malformed.detail.includes("not-valid"));
+    assert.ok(!malformed.detail.includes("unknown-reason"));
+    assert.ok(!malformed.detail.includes("Hash"));
+  });
+
   test("enqueueExecutionHistory rejects the failed write and recovers the queue", async () => {
     const { __testOnly } = await import("../../extension");
     const enqueueExecutionHistory =
@@ -577,6 +646,115 @@ suite("Execution History Queue Tests", () => {
   });
 });
 
+suite("Manual Run Workspace Confirmation Tests", () => {
+  function task(scope: "global" | "workspace"): ScheduledTask {
+    return {
+      id: `confirm-${scope}`,
+      name: "Confirm task",
+      cronExpression: "0 * * * *",
+      prompt: "hello",
+      enabled: true,
+      scope,
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  test("allows global and matching workspace tasks without prompting", async () => {
+    const { __testOnly } = await import("../../extension");
+    const confirm = __testOnly.confirmManualRunIfWorkspaceMismatch;
+    let promptCalls = 0;
+    const deps = {
+      shouldRunInCurrentWorkspace: () => true,
+      showWarningMessage: async () => {
+        promptCalls += 1;
+        return undefined;
+      },
+    };
+
+    assert.strictEqual(await confirm(task("global"), deps), true);
+    assert.strictEqual(await confirm(task("workspace"), deps), true);
+    assert.strictEqual(promptCalls, 0);
+  });
+
+  test("requires explicit confirmation for another workspace", async () => {
+    const { __testOnly } = await import("../../extension");
+    const confirm = __testOnly.confirmManualRunIfWorkspaceMismatch;
+    const choices: Array<string | undefined> = [
+      undefined,
+      messages.confirmRunAnyway(),
+    ];
+    const deps = {
+      shouldRunInCurrentWorkspace: () => false,
+      showWarningMessage: async () => choices.shift(),
+    };
+
+    assert.strictEqual(await confirm(task("workspace"), deps), false);
+    assert.strictEqual(await confirm(task("workspace"), deps), true);
+  });
+});
+
+suite("Execution History View Routing Tests", () => {
+  test("notifies instead of opening QuickPick when history is empty", async () => {
+    const { __testOnly } = await import("../../extension");
+    const notifications: string[] = [];
+    let quickPickCalls = 0;
+
+    await __testOnly.showExecutionHistoryView({
+      getHistoryEntries: () => [],
+      notifyInfo: (message) => notifications.push(message),
+      showQuickPick: async () => {
+        quickPickCalls += 1;
+      },
+    });
+
+    assert.deepStrictEqual(notifications, [messages.executionHistoryEmpty()]);
+    assert.strictEqual(quickPickCalls, 0);
+  });
+
+  test("opens searchable QuickPick with execution history items", async () => {
+    const { __testOnly } = await import("../../extension");
+    let captured:
+      | {
+          items: Array<{ label: string; detail: string }>;
+          options: {
+            placeHolder: string;
+            matchOnDescription: boolean;
+            matchOnDetail: boolean;
+          };
+        }
+      | undefined;
+
+    await __testOnly.showExecutionHistoryView({
+      getHistoryEntries: () => [
+        {
+          taskId: "history-view",
+          taskName: "History view",
+          trigger: "manual",
+          status: "success",
+          executedAt: "2026-07-30T09:00:00.000Z",
+          promptSource: "file",
+          promptHash: "abc123def456",
+        },
+      ],
+      notifyInfo: () => undefined,
+      showQuickPick: async (items, options) => {
+        captured = { items, options };
+      },
+    });
+
+    assert.ok(captured);
+    assert.strictEqual(captured.items.length, 1);
+    assert.ok(captured.items[0].detail.includes("abc123def456"));
+    assert.deepStrictEqual(captured.options, {
+      placeHolder: messages.executionHistoryPickPlaceholder(),
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+  });
+});
+
 suite("Cron Expression Tests", () => {
   test("Valid cron expressions should be accepted", () => {
     const validCronExpressions = [
@@ -603,6 +781,8 @@ suite("i18n Tests", () => {
     assert.ok(typeof messages.extensionActive === "function");
     assert.ok(typeof messages.taskCreated === "function");
     assert.ok(typeof messages.taskDeleted === "function");
+    assert.ok(typeof messages.promptFileExecutionNote === "function");
+    assert.ok(typeof messages.confirmReplacePromptEdits === "function");
   });
 
   test("formatCronForDisplay renders common schedules as human summaries", async () => {
@@ -684,6 +864,8 @@ suite("Webview Test Prompt Wiring Tests", () => {
       createGuiBlock.includes("handleTestPromptAction"),
       "registerCreateTaskGuiCommand should pass handleTestPromptAction to SchedulerWebview.show",
     );
+    assert.ok(createGuiBlock.includes("handlePromptPreviewRequest"));
+    assert.ok(createGuiBlock.includes("handleOpenPromptFile"));
 
     const listCmdStart = createGuiEnd;
     assert.ok(listCmdStart >= 0, "registerListTasksCommand not found");
@@ -700,6 +882,8 @@ suite("Webview Test Prompt Wiring Tests", () => {
       listCmdBlock.includes("handleTestPromptAction"),
       "registerListTasksCommand should pass handleTestPromptAction to SchedulerWebview.show",
     );
+    assert.ok(listCmdBlock.includes("handlePromptPreviewRequest"));
+    assert.ok(listCmdBlock.includes("handleOpenPromptFile"));
 
     const editCmdStart = listCmdEnd;
     const editCmdEnd = source.indexOf(
@@ -715,6 +899,8 @@ suite("Webview Test Prompt Wiring Tests", () => {
       editCmdBlock.includes("handleTestPromptAction"),
       "registerEditTaskCommand should pass handleTestPromptAction to SchedulerWebview.show",
     );
+    assert.ok(editCmdBlock.includes("handlePromptPreviewRequest"));
+    assert.ok(editCmdBlock.includes("handleOpenPromptFile"));
   });
 
   test("Task QuickPick items include workspace/scope metadata", () => {
@@ -1012,13 +1198,14 @@ suite("Webview Test Prompt Wiring Tests", () => {
     );
 
     const watcherTokens = [
-      'watchPattern("**/.github/prompts/**/*.md");',
+      'watchPattern("**/.github/prompts/**/*.md", schedulePromptPreviewRefresh);',
       'resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""))',
       'resolveGlobalAgentRoots(config.get<string>("globalAgentsPath", ""))',
       'new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md")',
-      "watcher.onDidCreate(refreshCaches)",
-      "watcher.onDidChange(refreshCaches)",
-      "watcher.onDidDelete(refreshCaches)",
+      "watcher.onDidCreate(handle)",
+      "watcher.onDidChange(handle)",
+      "watcher.onDidDelete(handle)",
+      "onPromptFileChanged?.(uri)",
     ];
 
     for (const token of watcherTokens) {
@@ -1538,6 +1725,241 @@ suite("resolvePromptText Tests", () => {
         // ignore
       }
     }
+  });
+
+  function setMultiRootWorkspaceFoldersForTest(roots: string[]): () => void {
+    const wsAny = vscode.workspace as unknown as {
+      workspaceFolders?: Array<{ uri: vscode.Uri }>;
+    };
+    const original = wsAny.workspaceFolders;
+    try {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: roots.map((root) => ({ uri: vscode.Uri.file(root) })),
+        configurable: true,
+      });
+    } catch {
+      // Best-effort; tests will fail if the host disallows patching.
+    }
+    return () => {
+      try {
+        Object.defineProperty(vscode.workspace, "workspaceFolders", {
+          value: original,
+          configurable: true,
+        });
+      } catch {
+        // ignore
+      }
+    };
+  }
+
+  test("Falls through to the workspace folder that actually has the file", async () => {
+    const ws1 = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-a-"));
+    const ws2 = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-b-"));
+    const restoreWs = setMultiRootWorkspaceFoldersForTest([ws1, ws2]);
+
+    const fileName = `__test_multiroot_${Date.now()}.md`;
+    const relPath = path.join(".github", "prompts", fileName);
+
+    try {
+      // Only ws2 has the file, but ws1 comes first in the folder list.
+      fs.mkdirSync(path.join(ws2, ".github", "prompts"), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws2, ".github", "prompts", fileName),
+        "WS2_CONTENT",
+        "utf8",
+      );
+
+      const { __testOnly } = await import("../../extension");
+      const task = {
+        id: "t-multiroot-fallthrough",
+        name: "t",
+        cronExpression: "0 * * * *",
+        prompt: "SNAPSHOT",
+        enabled: true,
+        scope: "workspace",
+        workspacePath: ws2,
+        promptSource: "local",
+        promptPath: relPath,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } satisfies ScheduledTask;
+
+      const resolved = await __testOnly.resolvePromptText(task, false);
+      assert.strictEqual(resolved, "WS2_CONTENT");
+    } finally {
+      restoreWs();
+      for (const root of [ws1, ws2]) {
+        try {
+          fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 50,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  });
+
+  test("Prefers the task's own workspace when both folders have the file", async () => {
+    const ws1 = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-a-"));
+    const ws2 = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-b-"));
+    const restoreWs = setMultiRootWorkspaceFoldersForTest([ws1, ws2]);
+
+    const fileName = `__test_multiroot_same_${Date.now()}.md`;
+    const relPath = path.join(".github", "prompts", fileName);
+
+    try {
+      for (const [root, content] of [
+        [ws1, "WS1_CONTENT"],
+        [ws2, "WS2_CONTENT"],
+      ] as const) {
+        fs.mkdirSync(path.join(root, ".github", "prompts"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(root, ".github", "prompts", fileName),
+          content,
+          "utf8",
+        );
+      }
+
+      const { __testOnly } = await import("../../extension");
+      const task = {
+        id: "t-multiroot-preferred",
+        name: "t",
+        cronExpression: "0 * * * *",
+        prompt: "SNAPSHOT",
+        enabled: true,
+        scope: "workspace",
+        workspacePath: ws2,
+        promptSource: "local",
+        promptPath: relPath,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } satisfies ScheduledTask;
+
+      const resolved = await __testOnly.resolvePromptText(task, false);
+      assert.strictEqual(resolved, "WS2_CONTENT");
+    } finally {
+      restoreWs();
+      for (const root of [ws1, ws2]) {
+        try {
+          fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 50,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  });
+
+  test("resolvePromptSnapshot reports file source, hash, and path", async () => {
+    const wsRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-ws-"),
+    );
+    const restoreWs = setWorkspaceFoldersForTest(wsRoot);
+    const promptsDir = path.join(wsRoot, ".github", "prompts");
+
+    const fileName = `__test_snapshot_meta_${Date.now()}.md`;
+    const absPath = path.join(promptsDir, fileName);
+    const relPath = path.join(".github", "prompts", fileName);
+
+    try {
+      fs.mkdirSync(promptsDir, { recursive: true });
+      fs.writeFileSync(absPath, "FILE_CONTENT", "utf8");
+
+      const { __testOnly } = await import("../../extension");
+      const { computePromptHash } = await import("../../promptResolver");
+      const resolvePromptSnapshot = __testOnly.resolvePromptSnapshot as (
+        task: ScheduledTask,
+        preferOpenDocument?: boolean,
+      ) => Promise<{
+        text: string;
+        source: string;
+        resolvedPath?: string;
+        hash: string;
+        candidateCount: number;
+        fallbackReason?: string;
+      }>;
+
+      const task = {
+        id: "t-snapshot-meta",
+        name: "t",
+        cronExpression: "0 * * * *",
+        prompt: "SNAPSHOT",
+        enabled: true,
+        scope: "global",
+        promptSource: "local",
+        promptPath: relPath,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } satisfies ScheduledTask;
+
+      const resolution = await resolvePromptSnapshot(task, false);
+      assert.strictEqual(resolution.source, "file");
+      assert.strictEqual(resolution.text, "FILE_CONTENT");
+      assert.strictEqual(resolution.hash, computePromptHash("FILE_CONTENT"));
+      assert.strictEqual(resolution.candidateCount, 1);
+      assert.strictEqual(resolution.fallbackReason, undefined);
+      assert.ok(resolution.resolvedPath);
+
+      fs.rmSync(absPath, { force: true });
+      const missing = await resolvePromptSnapshot(task, false);
+      assert.strictEqual(missing.source, "snapshotFallback");
+      assert.strictEqual(missing.text, "SNAPSHOT");
+      assert.strictEqual(missing.fallbackReason, "readFailed");
+    } finally {
+      restoreWs();
+      try {
+        fs.rmSync(wsRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("unavailable prompt preview clears stale file actions", async () => {
+    const { __testOnly } = await import("../../extension");
+    const buildUnavailable = __testOnly.buildUnavailablePromptPreview as (
+      task: ScheduledTask,
+    ) => {
+      source: string;
+      prompt?: string;
+      canOpenPromptFile: boolean;
+      hasSnapshotDiff: boolean;
+      hash: string;
+    };
+    const task = {
+      id: "unavailable-preview",
+      name: "Unavailable",
+      cronExpression: "0 * * * *",
+      prompt: "SAVED_SNAPSHOT",
+      enabled: true,
+      scope: "workspace",
+      promptSource: "local",
+      promptPath: ".github/prompts/empty.md",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const preview = buildUnavailable(task);
+    assert.strictEqual(preview.source, "snapshotFallback");
+    assert.strictEqual(preview.prompt, undefined);
+    assert.strictEqual(preview.canOpenPromptFile, false);
+    assert.strictEqual(preview.hasSnapshotDiff, false);
+    assert.strictEqual(preview.hash.length, 12);
   });
 });
 

@@ -59,24 +59,24 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 
 ## 📋 コマンド
 
-| コマンド                                            | 説明                         |
-| --------------------------------------------------- | ---------------------------- |
-| `Copilot Scheduler: Create Scheduled Prompt`        | 新規タスク作成 (CLI)         |
-| `Copilot Scheduler: Create Scheduled Prompt (GUI)`  | 新規タスク作成 (GUI)         |
-| `Copilot Scheduler: List Scheduled Tasks`           | すべてのタスクを表示         |
-| `Copilot Scheduler: Edit Task`                      | タスクを編集                 |
-| `Copilot Scheduler: Delete Task`                    | タスクを削除                 |
-| `Copilot Scheduler: Toggle Task (Enable/Disable)`   | タスクの有効/無効を切り替え  |
-| `Copilot Scheduler: Run Now`                        | タスクを即座に実行           |
-| `Copilot Scheduler: Copy Prompt to Clipboard`       | プロンプトをクリップボードに |
-| `Copilot Scheduler: Enable Task`                    | タスクを有効にする           |
-| `Copilot Scheduler: Disable Task`                   | タスクを無効にする           |
-| `Copilot Scheduler: Duplicate Task`                 | タスクを複製                 |
-| `Copilot Scheduler: Move Task to Current Workspace` | タスクを現在のWSへ移動       |
-| `Copilot Scheduler: Open Settings`                  | 設定を開く                   |
-| `Copilot Scheduler: Show Version`                   | バージョン情報を表示         |
-| `Copilot Scheduler: Show Execution History`         | 実行履歴を表示               |
-| `Copilot Scheduler: Dump Model Catalog Diagnostics` | モデルカタログ診断を表示     |
+| コマンド                                            | 説明                                                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `Copilot Scheduler: Create Scheduled Prompt`        | 新規タスク作成 (CLI)                                                                                   |
+| `Copilot Scheduler: Create Scheduled Prompt (GUI)`  | 新規タスク作成 (GUI)                                                                                   |
+| `Copilot Scheduler: List Scheduled Tasks`           | すべてのタスクを表示                                                                                   |
+| `Copilot Scheduler: Edit Task`                      | タスクを編集                                                                                           |
+| `Copilot Scheduler: Delete Task`                    | タスクを削除                                                                                           |
+| `Copilot Scheduler: Toggle Task (Enable/Disable)`   | タスクの有効/無効を切り替え                                                                            |
+| `Copilot Scheduler: Run Now`                        | タスクを即座に実行                                                                                     |
+| `Copilot Scheduler: Copy Prompt to Clipboard`       | プロンプトをクリップボードに                                                                           |
+| `Copilot Scheduler: Enable Task`                    | タスクを有効にする                                                                                     |
+| `Copilot Scheduler: Disable Task`                   | タスクを無効にする                                                                                     |
+| `Copilot Scheduler: Duplicate Task`                 | タスクを複製                                                                                           |
+| `Copilot Scheduler: Move Task to Current Workspace` | タスクを現在のWSへ移動                                                                                 |
+| `Copilot Scheduler: Open Settings`                  | 設定を開く                                                                                             |
+| `Copilot Scheduler: Show Version`                   | バージョン情報を表示                                                                                   |
+| `Copilot Scheduler: Show Execution History`         | 実行履歴を表示（記録済みの場合はプロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由も表示） |
+| `Copilot Scheduler: Dump Model Catalog Diagnostics` | モデルカタログ診断を表示                                                                               |
 
 ## 🛠️ Copilot Chat ツール
 
@@ -90,6 +90,8 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 | `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                          |
 | `#scheduler_set_task_enabled` | タスクを有効化または無効化します。                                                                         |
 
+`kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、新しい順の `entries` が含まれます。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
+
 エージェントモードでは、Copilot が自然文の依頼からこれらのツールを選ぶこともできます。例:
 
 - 「このリポジトリの要約を毎週平日 9:00 に作るワークスペースタスクをスケジュール設定して」
@@ -102,6 +104,8 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 write 系ツールは既定で有効ですが、信頼済みワークスペースが必要です。`copilotScheduler.lmTools.enableWriteTools` を `false` にすると、読み取り専用ツールだけを残して作成・更新・削除・有効/無効切替を無効化できます。
 
 `copilotScheduler.lmTools.confirmationMode` が制御するのは、この拡張が write 系ツールで返すカスタム確認メッセージだけです。VS Code または Copilot Chat 側の汎用承認ダイアログは引き続き表示される場合があり、利用可能な場合は VS Code 側の Always Allow フローを使えます。
+
+タスクスナップショットと revision metadata は同一ディレクトリの一時ファイルへ書き込み、atomic replace で更新します。空/破損ファイルと metadata のない revision 0 の `[]` は有効な legacy globalState を上書きせず、revision 付きの空配列は正当な全削除として維持します。foreground save と mirror は保存先ごとに同じ queue を使います。MIT ライセンスの `proper-lockfile` による atomic directory lock、heartbeat/stale recovery、revision 再確認により、古い VS Code ウィンドウが新しいタスクを上書きするのを防ぎ、競合時は最新snapshotを再読み込みして再試行を案内します。payload/mirrorの完了後にだけmetadataを進め、lockを解放します。
 
 ## ⚙️ 設定
 
@@ -122,6 +126,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.minimumIntervalWarning`   | `true`            | 30分未満のcron間隔を設定するときに警告表示                                                                                                                                                                                                                               |
 | `copilotScheduler.globalPromptsPath`        | `""`              | グローバルプロンプトフォルダーのパス（未指定時: VS Code の User/prompts フォルダー。Windows: `%APPDATA%/Code/User/prompts`、macOS: `~/Library/Application Support/Code/User/prompts`、Linux: `$XDG_CONFIG_HOME/Code/User/prompts` または `~/.config/Code/User/prompts`） |
 | `copilotScheduler.globalAgentsPath`         | `""`              | グローバルエージェントフォルダー（`*.agent.md`）のパス（未指定時: VS Code の User/prompts フォルダーと `~/.copilot/agents` を自動検出。設定すると既定の探索先より優先）                                                                                                  |
+| `copilotScheduler.promptFileFallback`       | `"snapshot"`      | ローカル / グローバルのプロンプトファイルを実行時に読めなかった場合の動作: `snapshot`（保存済みスナップショットで実行）/ `blockWhenResolvable`（パスは解決できるのに読めない場合は中止）/ `blockAlways`（常に中止）。インラインプロンプトは対象外                        |
 | `copilotScheduler.logLevel`                 | `info`            | ログレベル (none/error/info/debug)                                                                                                                                                                                                                                       |
 | `copilotScheduler.executionHistoryLimit`    | `50`              | 実行履歴ビューに保持する件数上限（10〜500）                                                                                                                                                                                                                              |
 | `copilotScheduler.lmTools.enableWriteTools` | `true`            | Copilot Chat ツールからタスクの作成・更新・削除・有効/無効切替を許可します。`false` にすると読み取り専用ツールだけが利用できます。                                                                                                                                       |
@@ -166,6 +171,8 @@ Webview では、対応 family に対して Copilot Chat に近い思考の負�
 
 - **ローカル**: ワークスペース内の `.github/prompts/*.md`
 - **グローバル**: VS Code ユーザープロンプトフォルダ（または `copilotScheduler.globalPromptsPath` で指定したフォルダ）
+- 編集フォームは保存済みスナップショットを表示し、手編集したまま保存すると **インライン** へ切り替わることを明示します。ファイル参照タスクでは **最新の保存内容を読み込む** でフォームを明示更新するか、**プロンプトファイルを開く** でソースを編集できます。
+- パネルのプレビューはディスクへ保存済みの内容だけを読みます。実行時は開いているエディターの内容を優先し、なければ最新の保存済みファイルを読み込みます。
 - `ローカル/グローバル` テンプレート選択中に本文を編集して保存した場合（テンプレート読込完了後）は、実行内容との不一致を防ぐため自動的に **インライン** として保存されます。
 
 `copilotScheduler.globalAgentsPath` が空の場合、グローバル custom agent は VS Code の user prompts/customization フォルダーと `~/.copilot/agents` から自動検出されます。

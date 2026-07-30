@@ -96,6 +96,76 @@ suite("Task Store Selection (revision) Tests", () => {
     assert.deepStrictEqual(res.chosenTasks, [{ id: "g1" }]);
   });
 
+  test("Keeps legacy globalState tasks when an empty revision-zero file is invalid", () => {
+    const res = selectTaskStore<T>(
+      {
+        kind: "globalState",
+        exists: true,
+        ok: true,
+        tasks: [{ id: "legacy" }],
+        revision: 0,
+      },
+      {
+        kind: "file",
+        exists: true,
+        ok: false,
+        tasks: [],
+        revision: 0,
+      },
+    );
+
+    assert.strictEqual(res.chosenKind, "globalState");
+    assert.deepStrictEqual(res.chosenTasks, [{ id: "legacy" }]);
+    assert.strictEqual(res.shouldHealFile, true);
+    assert.strictEqual(res.shouldHealGlobalState, false);
+  });
+
+  test("Keeps legacy globalState tasks when a meta-less file contains an empty array", () => {
+    const res = selectTaskStore<T>(
+      {
+        kind: "globalState",
+        exists: true,
+        ok: true,
+        tasks: [{ id: "legacy" }],
+        revision: 0,
+      },
+      {
+        kind: "file",
+        exists: true,
+        ok: true,
+        tasks: [],
+        revision: 0,
+      },
+    );
+
+    assert.strictEqual(res.chosenKind, "globalState");
+    assert.deepStrictEqual(res.chosenTasks, [{ id: "legacy" }]);
+    assert.strictEqual(res.shouldHealFile, true);
+  });
+
+  test("Keeps a revision-backed empty file as a valid delete", () => {
+    const res = selectTaskStore<T>(
+      {
+        kind: "globalState",
+        exists: true,
+        ok: true,
+        tasks: [{ id: "old" }],
+        revision: 0,
+      },
+      {
+        kind: "file",
+        exists: true,
+        ok: true,
+        tasks: [],
+        revision: 1,
+      },
+    );
+
+    assert.strictEqual(res.chosenKind, "file");
+    assert.deepStrictEqual(res.chosenTasks, []);
+    assert.strictEqual(res.shouldHealGlobalState, true);
+  });
+
   test("Invalid file store never wins against an existing globalState store", () => {
     const res = selectTaskStore<T>(
       {
@@ -185,7 +255,9 @@ suite("Task Store Selection (revision) Tests", () => {
         revision: 7,
       },
     );
-    assert.strictEqual(res.chosenKind, "file");
+    assert.strictEqual(res.chosenKind, "none");
+    assert.deepStrictEqual(res.chosenTasks, []);
+    assert.strictEqual(res.shouldHealFile, false);
     assert.strictEqual(res.shouldHealGlobalState, false);
   });
 });

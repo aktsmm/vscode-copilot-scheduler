@@ -18,6 +18,27 @@ export type TaskScope = "global" | "workspace";
 export type PromptSource = "inline" | "local" | "global";
 
 /**
+ * Latest prompt-file state pushed to the Webview for a file-backed task.
+ * Display only: receiving a preview never rewrites the stored snapshot.
+ */
+export interface PromptPreview {
+  taskId: string;
+  /** Prompt path stored on the task, used to reject stale previews. */
+  promptPath: string;
+  /** Sanitized path of the file that was read. */
+  promptPathDisplay: string;
+  source: "inline" | "openDocument" | "file" | "snapshotFallback";
+  hash: string;
+  resolvedAt: string;
+  /** Whether the extension can safely open the currently resolved file. */
+  canOpenPromptFile: boolean;
+  /** True when the file content differs from the task's stored prompt. */
+  hasSnapshotDiff: boolean;
+  /** Latest file content, present only when the file was readable. */
+  prompt?: string;
+}
+
+/**
  * Log level type
  */
 export type LogLevel = "none" | "error" | "info" | "debug";
@@ -370,6 +391,8 @@ export type WebviewToExtensionMessage =
   | { type: "deleteTask"; taskId: string }
   | { type: "moveTaskToCurrentWorkspace"; taskId: string }
   | { type: "copyTask"; taskId: string }
+  | { type: "requestPromptPreview"; taskId: string }
+  | { type: "openPromptFile"; taskId: string }
   | { type: "loadPromptTemplate"; path: string; source: "local" | "global" }
   | { type: "webviewReady" };
 

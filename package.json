@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -253,6 +253,21 @@
           "type": "string",
           "default": "",
           "description": "%config.globalAgentsPath%"
+        },
+        "copilotScheduler.promptFileFallback": {
+          "type": "string",
+          "default": "snapshot",
+          "enum": [
+            "snapshot",
+            "blockWhenResolvable",
+            "blockAlways"
+          ],
+          "enumDescriptions": [
+            "%config.promptFileFallback.snapshot%",
+            "%config.promptFileFallback.blockWhenResolvable%",
+            "%config.promptFileFallback.blockAlways%"
+          ],
+          "description": "%config.promptFileFallback%"
         },
         "copilotScheduler.logLevel": {
           "type": "string",
@@ -681,12 +696,14 @@
     "verify:vsix": "node scripts/verify-vsix-contents.js"
   },
   "dependencies": {
-    "cron-parser": "^4.9.0"
+    "cron-parser": "^4.9.0",
+    "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/vscode": "^1.95.0",
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",

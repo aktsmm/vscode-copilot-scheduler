@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 
 import { createSchedulerQueryTool } from "../../lmTools/tools/query";
 import {
+  enqueueExecutionHistoryEntry,
   resetExecutionHistoryQueueForTests,
   setExecutionHistoryContextForTests,
 } from "../../executionHistoryStore";
@@ -156,5 +157,90 @@ suite("lmTools scheduler_query", () => {
     const payload = parseJson(result);
     assert.strictEqual(payload.ok, true);
     assert.strictEqual(payload.count, 0);
+  });
+
+  test("kind=history preserves prompt audit metadata", async () => {
+    const entries: unknown[] = [];
+    setExecutionHistoryContextForTests({
+      globalState: {
+        get<T>(_key: string, defaultValue?: T): T {
+          return (entries.length > 0 ? entries : defaultValue) as T;
+        },
+        update(_key: string, value: unknown): Thenable<void> {
+          entries.splice(0, entries.length, ...((value as unknown[]) || []));
+          return Promise.resolve();
+        },
+        keys(): readonly string[] {
+          return entries.length > 0 ? ["executionHistory"] : [];
+        },
+        setKeysForSync(): void {},
+      },
+    });
+    await enqueueExecutionHistoryEntry({
+      taskId: "audit-task",
+      taskName: "Audit task",
+      trigger: "manual",
+      status: "success",
+      executedAt: "2026-07-30T09:00:00.000Z",
+      promptSource: "file",
+      promptPathDisplay: "daily.prompt.md",
+      promptHash: "abc123def456",
+      promptResolvedAt: "2026-07-30T08:59:59.000Z",
+    });
+
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+    );
+    const payload = parseJson(
+      await invoke(tool, { kind: "history", taskId: "audit-task" }),
+    );
+    const history = payload.entries as Array<Record<string, unknown>>;
+    assert.strictEqual(payload.count, 1);
+    assert.strictEqual(history[0]?.promptSource, "file");
+    assert.strictEqual(history[0]?.promptPathDisplay, "daily.prompt.md");
+    assert.strictEqual(history[0]?.promptHash, "abc123def456");
+  });
+
+  test("kind=history reports truncation and preserves newest-first order", async () => {
+    const entries: unknown[] = [];
+    setExecutionHistoryContextForTests({
+      globalState: {
+        get<T>(_key: string, defaultValue?: T): T {
+          return (entries.length > 0 ? entries : defaultValue) as T;
+        },
+        update(_key: string, value: unknown): Thenable<void> {
+          entries.splice(0, entries.length, ...((value as unknown[]) || []));
+          return Promise.resolve();
+        },
+        keys(): readonly string[] {
+          return entries.length > 0 ? ["executionHistory"] : [];
+        },
+        setKeysForSync(): void {},
+      },
+    });
+    for (let index = 0; index < 3; index++) {
+      await enqueueExecutionHistoryEntry({
+        taskId: `history-${index}`,
+        taskName: `History ${index}`,
+        trigger: "auto",
+        status: "success",
+        executedAt: `2026-07-30T09:0${index}:00.000Z`,
+      });
+    }
+
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+    );
+    const payload = parseJson(
+      await invoke(tool, { kind: "history", limit: 2 }),
+    );
+    const history = payload.entries as Array<Record<string, unknown>>;
+    assert.strictEqual(payload.total, 3);
+    assert.strictEqual(payload.count, 2);
+    assert.strictEqual(payload.hasMore, true);
+    assert.deepStrictEqual(
+      history.map((item) => item.taskId),
+      ["history-2", "history-1"],
+    );
   });
 });

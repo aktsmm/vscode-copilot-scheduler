@@ -126,9 +126,12 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
     input.taskId && typeof input.taskId === "string"
       ? entries.filter((entry) => entry.taskId === input.taskId)
       : entries;
+  const total = filtered.length;
   return buildJsonTextResult({
     ok: true,
-    count: Math.min(filtered.length, limit),
+    total,
+    count: Math.min(total, limit),
+    hasMore: total > limit,
     entries: filtered.slice(0, limit),
   });
 }

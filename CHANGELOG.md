@@ -5,6 +5,31 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-30
+
+### Added
+
+- **Prompt file execution transparency**: execution history now records where the executed prompt came from (`inline` / `openDocument` / `file` / `snapshotFallback`), the resolved file path, a short content hash, and the resolution timestamp.
+- **`copilotScheduler.promptFileFallback` setting**: choose what happens when a `local` or `global` prompt file cannot be read at execution time — `snapshot` (default, current behavior), `blockWhenResolvable`, or `blockAlways`. Inline prompts and tasks without a prompt path are never affected.
+- **`blocked` execution status**: runs stopped by the fallback policy are recorded as `blocked` instead of `failed`, and do not consume the task's `lastRun` or daily execution budget.
+- **Live prompt file state in the panel**: editing a prompt file now refreshes the task card and edit form with the latest saved file content, source path, last check time, and a badge when the file differs from the saved snapshot. The edit form explains runtime file resolution and provides explicit actions to load the latest saved content or open the source file without overwriting manual edits automatically.
+- **Prompt audit details in execution history**: the history QuickPick now shows recorded prompt source, sanitized path, content hash, resolution time, and localized fallback reason. Malformed legacy timestamps no longer break the history view.
+- **Explicit LM history pagination contract**: `scheduler_query kind=history` now returns `total` and `hasMore` alongside returned `count`, preserves newest-first order, and marks malformed legacy timestamps without inventing audit times.
+
+### Fixed
+
+- **Multi-root prompt resolution**: `local` prompt paths are now resolved against the task's own workspace folder first, and candidates are tried in order until one is actually readable. Previously the first syntactically valid path won even when the file only existed in another workspace folder.
+- **Snapshot drift**: the stored prompt snapshot is now synchronized after a successful run whenever the prompt was read from disk, so the panel and TreeView stop showing stale text.
+- **Daily prompt sync retry**: the daily sync no longer marks the day as complete when a prompt file could not be read, so transient failures are retried instead of skipped.
+- **Prompt preview recovery and accessibility**: empty or unreadable prompt files now replace stale successful previews with an unavailable state, deleted/path-changed tasks are pruned from the client preview cache, prompt action buttons sit outside the live region, and keyboard focus returns to the prompt editor when an action disappears.
+- **Execution history persistence healing**: history appends now normalize incoming and legacy entries, write only declared fields, canonicalize timezone-qualified ISO timestamps, mark ambiguous/malformed legacy dates without inventing audit times, sanitize display details, and prevent malformed optional timestamps from leaking through LM history responses.
+- **Crash-safe task persistence**: task snapshots and revision metadata now use write/sync/rename replacement; empty/corrupt and meta-less revision-zero snapshots cannot erase valid legacy globalState tasks; revision-backed empty deletes remain valid; foreground/mirror writes share destination queues; heartbeat-backed atomic directory locks plus revision rechecks reject stale-window overwrites and reload the winning snapshot; and payloads finish before metadata advances or locks are released.
+- Copying a prompt now reports when the saved snapshot was used because the prompt file could not be read.
+
+### Tests
+
+- Added multi-root prompt resolution regression coverage, prompt resolution metadata assertions, ordered candidate resolution tests, prompt hash stability tests, execution history normalization/writeback/truncation guards, QuickPick/LM query prompt-audit contract tests, and Webview regression coverage for prompt-file notices, stale/unavailable preview recovery, live-region semantics, focus recovery, initial preview loading, and explicit latest-content loading.
+
 ## [1.1.2] - 2026-07-09
 
 ### Added

@@ -566,6 +566,305 @@ suite("ScheduleManager Scope Migration Persistence Tests", () => {
   });
 });
 
+suite("ScheduleManager Empty File Recovery Tests", () => {
+  test("loads legacy globalState tasks when the file snapshot is whitespace", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const rawTask = {
+      id: "legacy-global-task",
+      name: "Legacy global task",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: false,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(tmp, "scheduledTasks.json"), "  \r\n", "utf8");
+
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+      assert.ok(manager.getTask(rawTask.id));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("loads legacy globalState tasks when a meta-less file contains an empty array", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const rawTask = {
+      id: "legacy-global-empty-array",
+      name: "Legacy global task",
+      prompt: "hello",
+      cronExpression: "0 * * * *",
+      enabled: false,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(tmp, "scheduledTasks.json"), "[]", "utf8");
+
+    try {
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(tmp, [rawTask]),
+      );
+      assert.ok(manager.getTask(rawTask.id));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+suite("ScheduleManager Mirror Ordering Tests", () => {
+  test("does not advance globalState metadata when task payload sync fails", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const attemptedKeys: string[] = [];
+    let resolvePayloadAttempt: (() => void) | undefined;
+    const payloadAttempted = new Promise<void>((resolve) => {
+      resolvePayloadAttempt = resolve;
+    });
+    const memento = new MockMemento();
+    const context = {
+      globalState: {
+        keys: () => memento.keys(),
+        get: memento.get.bind(memento),
+        update(key: string, value: unknown): Thenable<void> {
+          attemptedKeys.push(key);
+          if (key === "scheduledTasks") {
+            resolvePayloadAttempt?.();
+            return Promise.reject(new Error("payload mirror failed"));
+          }
+          return memento.update(key, value);
+        },
+        setKeysForSync(): void {},
+      },
+      globalStorageUri: vscode.Uri.file(tmp),
+    } as unknown as vscode.ExtensionContext;
+
+    try {
+      const manager = new ScheduleManager(context);
+      await manager.createTask({
+        name: "mirror-order",
+        cronExpression: "0 * * * *",
+        prompt: "hello",
+        scope: "global",
+        enabled: false,
+      });
+      await payloadAttempted;
+      await Promise.resolve();
+
+      assert.ok(attemptedKeys.includes("scheduledTasks"));
+      assert.strictEqual(
+        attemptedKeys.includes("scheduledTasksRevision"),
+        false,
+      );
+      assert.strictEqual(
+        attemptedKeys.includes("scheduledTasksSavedAt"),
+        false,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("serializes successive globalState mirrors by revision", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const memento = new MockMemento();
+    let payloadCalls = 0;
+    let releaseFirstPayload: (() => void) | undefined;
+    const firstPayloadGate = new Promise<void>((resolve) => {
+      releaseFirstPayload = resolve;
+    });
+    let resolveFirstPayloadStarted: (() => void) | undefined;
+    const firstPayloadStarted = new Promise<void>((resolve) => {
+      resolveFirstPayloadStarted = resolve;
+    });
+    let resolveSecondRevision: (() => void) | undefined;
+    const secondRevisionSaved = new Promise<void>((resolve) => {
+      resolveSecondRevision = resolve;
+    });
+    const revisions: number[] = [];
+    const context = {
+      globalState: {
+        keys: () => memento.keys(),
+        get: memento.get.bind(memento),
+        async update(key: string, value: unknown): Promise<void> {
+          if (key === "scheduledTasks") {
+            payloadCalls += 1;
+            if (payloadCalls === 1) {
+              resolveFirstPayloadStarted?.();
+              await firstPayloadGate;
+            }
+          }
+          if (key === "scheduledTasksRevision") {
+            revisions.push(value as number);
+            if (value === 2) resolveSecondRevision?.();
+          }
+          await memento.update(key, value);
+        },
+        setKeysForSync(): void {},
+      },
+      globalStorageUri: vscode.Uri.file(tmp),
+    } as unknown as vscode.ExtensionContext;
+
+    try {
+      const manager = new ScheduleManager(context);
+      const firstSave = manager.createTask({
+        name: "mirror-one",
+        cronExpression: "0 * * * *",
+        prompt: "one",
+        scope: "global",
+        enabled: false,
+      });
+      await firstPayloadStarted;
+      const secondSave = manager.createTask({
+        name: "mirror-two",
+        cronExpression: "0 * * * *",
+        prompt: "two",
+        scope: "global",
+        enabled: false,
+      });
+
+      assert.strictEqual(payloadCalls, 1);
+      releaseFirstPayload?.();
+      await Promise.all([firstSave, secondSave]);
+      await secondRevisionSaved;
+
+      assert.strictEqual(payloadCalls, 2);
+      assert.deepStrictEqual(revisions, [1, 2]);
+    } finally {
+      releaseFirstPayload?.();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("orders a foreground globalState fallback after an older mirror", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const memento = new MockMemento();
+    let payloadCalls = 0;
+    let releaseFirstPayload: (() => void) | undefined;
+    const firstPayloadGate = new Promise<void>((resolve) => {
+      releaseFirstPayload = resolve;
+    });
+    let resolveFirstPayloadStarted: (() => void) | undefined;
+    const firstPayloadStarted = new Promise<void>((resolve) => {
+      resolveFirstPayloadStarted = resolve;
+    });
+    const revisions: number[] = [];
+    const context = {
+      globalState: {
+        keys: () => memento.keys(),
+        get: memento.get.bind(memento),
+        async update(key: string, value: unknown): Promise<void> {
+          if (key === "scheduledTasks") {
+            payloadCalls += 1;
+            if (payloadCalls === 1) {
+              resolveFirstPayloadStarted?.();
+              await firstPayloadGate;
+            }
+          }
+          if (key === "scheduledTasksRevision") {
+            revisions.push(value as number);
+          }
+          await memento.update(key, value);
+        },
+        setKeysForSync(): void {},
+      },
+      globalStorageUri: vscode.Uri.file(tmp),
+    } as unknown as vscode.ExtensionContext;
+
+    try {
+      const manager = new ScheduleManager(context);
+      const firstSave = manager.createTask({
+        name: "mirror-revision-one",
+        cronExpression: "0 * * * *",
+        prompt: "one",
+        scope: "global",
+        enabled: false,
+      });
+      await firstPayloadStarted;
+
+      const internals = manager as unknown as {
+        queueFileWrite(): Promise<void>;
+      };
+      internals.queueFileWrite = async () => {
+        throw new Error("force globalState fallback");
+      };
+      const secondSave = manager.createTask({
+        name: "fallback-revision-two",
+        cronExpression: "0 * * * *",
+        prompt: "two",
+        scope: "global",
+        enabled: false,
+      });
+      await Promise.resolve();
+      assert.strictEqual(payloadCalls, 1);
+
+      releaseFirstPayload?.();
+      await Promise.all([firstSave, secondSave]);
+
+      assert.strictEqual(payloadCalls, 2);
+      assert.deepStrictEqual(revisions, [1, 2]);
+    } finally {
+      releaseFirstPayload?.();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+suite("ScheduleManager Cross-Window Conflict Tests", () => {
+  test("rejects a stale writer and reloads the latest persisted tasks", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const sharedState = new MockMemento();
+    const createContext = () =>
+      ({
+        globalState: sharedState,
+        globalStorageUri: vscode.Uri.file(tmp),
+      }) as unknown as vscode.ExtensionContext;
+
+    try {
+      const managerA = new ScheduleManager(createContext());
+      const managerB = new ScheduleManager(createContext());
+      const taskA = await managerA.createTask({
+        name: "window-a",
+        cronExpression: "0 * * * *",
+        prompt: "from-a",
+        scope: "global",
+        enabled: false,
+      });
+
+      await assert.rejects(
+        () =>
+          managerB.createTask({
+            name: "window-b",
+            cronExpression: "0 * * * *",
+            prompt: "from-b",
+            scope: "global",
+            enabled: false,
+          }),
+        new RegExp(messages.taskStoreChangedExternally()),
+      );
+
+      assert.deepStrictEqual(
+        managerB.getAllTasks().map((task) => task.id),
+        [taskA.id],
+      );
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string }>;
+      assert.deepStrictEqual(
+        persisted.map((task) => task.id),
+        [taskA.id],
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
   test("does not throw when globalState scheduledTasks is not an array", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));

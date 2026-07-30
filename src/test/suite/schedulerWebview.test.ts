@@ -5,7 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
-import type { ScheduledTask } from "../../types";
+import type { PromptPreview, ScheduledTask } from "../../types";
 import {
   runSanitizerParityCases,
   runSharedSanitizerCases,
@@ -774,6 +774,75 @@ suite("SchedulerWebview Message Queue Tests", () => {
       wv.currentTasks = originalTasks;
     }
   });
+
+  test("updatePromptPreviews keeps the newest resolution per task", () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      promptPreviews?: Map<string, PromptPreview>;
+      currentTasks?: ScheduledTask[];
+    };
+    const originalPanel = wv.panel;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalPreviews = wv.promptPreviews;
+    const originalTasks = wv.currentTasks;
+
+    try {
+      wv.panel = {
+        webview: { postMessage: () => Promise.resolve(true) },
+      };
+      wv.webviewReady = true;
+      wv.pendingMessages = [];
+      wv.promptPreviews = new Map<string, PromptPreview>();
+
+      const base: PromptPreview = {
+        taskId: "preview-task",
+        promptPath: ".github/prompts/daily.md",
+        promptPathDisplay: "daily.md",
+        source: "file",
+        hash: "new-hash",
+        resolvedAt: "2026-07-30T10:00:00.000Z",
+        canOpenPromptFile: true,
+        hasSnapshotDiff: true,
+        prompt: "new",
+      };
+      SchedulerWebview.updatePromptPreviews([base]);
+      SchedulerWebview.updatePromptPreviews([
+        {
+          ...base,
+          hash: "old-hash",
+          prompt: "old",
+          resolvedAt: "2026-07-30T09:00:00.000Z",
+        },
+      ]);
+
+      assert.strictEqual(wv.promptPreviews.get("preview-task")?.prompt, "new");
+
+      SchedulerWebview.updateTasks([
+        {
+          id: "preview-task",
+          name: "Preview task",
+          cronExpression: "0 * * * *",
+          prompt: "snapshot",
+          enabled: true,
+          scope: "workspace",
+          promptSource: "local",
+          promptPath: ".github/prompts/other.md",
+          createdAt: new Date("2026-07-30T00:00:00.000Z"),
+          updatedAt: new Date("2026-07-30T00:00:00.000Z"),
+        },
+      ]);
+      assert.strictEqual(wv.promptPreviews.has("preview-task"), false);
+    } finally {
+      wv.panel = originalPanel;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.promptPreviews = originalPreviews;
+      wv.currentTasks = originalTasks;
+    }
+  });
 });
 
 suite("SchedulerWebview Test Prompt Routing Tests", () => {
@@ -827,6 +896,90 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
       });
     } finally {
       wv.onTestPromptCallback = originalCallback;
+    }
+  });
+
+  test("handleMessage forwards prompt preview and open-file requests by task id", async () => {
+    const wv = SchedulerWebview as unknown as {
+      onPromptPreviewRequestCallback?: (taskId: string) => void;
+      onOpenPromptFileCallback?: (taskId: string) => void;
+      handleMessage?: (message: unknown) => Promise<void>;
+    };
+    const originalPreview = wv.onPromptPreviewRequestCallback;
+    const originalOpen = wv.onOpenPromptFileCallback;
+    const calls: string[] = [];
+
+    try {
+      wv.onPromptPreviewRequestCallback = (taskId) =>
+        calls.push(`preview:${taskId}`);
+      wv.onOpenPromptFileCallback = (taskId) => calls.push(`open:${taskId}`);
+
+      await wv.handleMessage?.({
+        type: "requestPromptPreview",
+        taskId: "task-a",
+      });
+      await wv.handleMessage?.({ type: "openPromptFile", taskId: "task-a" });
+
+      assert.deepStrictEqual(calls, ["preview:task-a", "open:task-a"]);
+    } finally {
+      wv.onPromptPreviewRequestCallback = originalPreview;
+      wv.onOpenPromptFileCallback = originalOpen;
+    }
+  });
+
+  test("webviewReady requests previews only for file-backed tasks", async () => {
+    const wv = SchedulerWebview as unknown as {
+      currentTasks?: ScheduledTask[];
+      webviewReady?: boolean;
+      pendingMessages?: unknown[];
+      onPromptPreviewRequestCallback?: (taskId: string) => void;
+      handleMessage?: (message: unknown) => Promise<void>;
+    };
+    const originalTasks = wv.currentTasks;
+    const originalReady = wv.webviewReady;
+    const originalPending = wv.pendingMessages;
+    const originalPreview = wv.onPromptPreviewRequestCallback;
+    const requested: string[] = [];
+
+    try {
+      wv.currentTasks = [
+        {
+          id: "local-task",
+          name: "Local",
+          cronExpression: "0 * * * *",
+          prompt: "snapshot",
+          enabled: true,
+          scope: "workspace",
+          promptSource: "local",
+          promptPath: ".github/prompts/local.md",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          id: "inline-task",
+          name: "Inline",
+          cronExpression: "0 * * * *",
+          prompt: "inline",
+          enabled: true,
+          scope: "workspace",
+          promptSource: "inline",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+      wv.webviewReady = false;
+      wv.pendingMessages = [];
+      wv.onPromptPreviewRequestCallback = (taskId) => requested.push(taskId);
+
+      await wv.handleMessage?.({ type: "webviewReady" });
+
+      assert.strictEqual(wv.webviewReady, true);
+      assert.deepStrictEqual(requested, ["local-task"]);
+    } finally {
+      wv.currentTasks = originalTasks;
+      wv.webviewReady = originalReady;
+      wv.pendingMessages = originalPending;
+      wv.onPromptPreviewRequestCallback = originalPreview;
     }
   });
 
@@ -1227,6 +1380,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "templatePromptBaseline === null",
       "templatePromptBaseline !== null",
       "taskData.prompt !== templatePromptBaseline",
+      "strings.promptFileNotLoadedNote",
       'taskData.promptSource = "inline"',
       'taskData.promptPath = ""',
     ];
@@ -1235,6 +1389,174 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(submitSource, token),
         `Expected token not found in submit inline-convert flow: ${token}`,
+      );
+    }
+  });
+
+  test("prompt file notice mirrors template save states", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    const noticeSource = extractBlockFromStartToken(
+      source,
+      "function updatePromptFileNotice() {",
+    );
+
+    const expectedTokens = [
+      'source === "inline"',
+      "loadingCurrentTemplate",
+      "templatePromptBaseline === null",
+      'String(promptText.value || "") === templatePromptBaseline',
+      "strings.promptFileExecutionNote",
+      "strings.promptFileWillBecomeInline",
+      "strings.promptFileNotLoadedNote",
+    ];
+
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(noticeSource, token),
+        `Expected token not found in prompt file notice flow: ${token}`,
+      );
+    }
+  });
+
+  test("prompt file metadata reports path, resolution time, diff, and stale state", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const metaSource = extractBlockFromStartToken(
+      scriptSource,
+      "function buildPromptFileMeta(preview) {",
+    );
+
+    for (const token of [
+      "strings.labelPromptFileSource",
+      "basenameFromPathLike(preview.promptPathDisplay)",
+      "strings.labelPromptFileSynced",
+      'preview.source !== "file"',
+      "strings.promptFileStaleHint",
+      "preview.hasSnapshotDiff",
+      "strings.labelPromptFileDiff",
+    ]) {
+      assert.ok(
+        sourceContainsToken(metaSource, token),
+        `Expected token not found in prompt metadata flow: ${token}`,
+      );
+    }
+  });
+
+  test("prompt file notice keeps actions outside the live region and recovers focus", () => {
+    const htmlSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const noticeStart = htmlSource.indexOf('id="prompt-file-notice"');
+    const liveStart = htmlSource.indexOf(
+      'id="prompt-file-notice-live" role="status" aria-live="polite" aria-atomic="true"',
+      noticeStart,
+    );
+    const liveEnd = htmlSource.indexOf("</div>", liveStart);
+    const actionsStart = htmlSource.indexOf(
+      'class="prompt-file-notice-actions"',
+      liveStart,
+    );
+
+    assert.ok(noticeStart >= 0 && liveStart > noticeStart);
+    assert.ok(liveEnd > liveStart && actionsStart > liveEnd);
+    assert.ok(
+      sourceContainsToken(
+        scriptSource,
+        "document.activeElement === loadLatestPromptBtn",
+      ),
+    );
+    assert.ok(
+      sourceContainsToken(
+        scriptSource,
+        "document.activeElement === openPromptFileBtn",
+      ),
+    );
+    assert.ok(sourceContainsToken(scriptSource, "promptTextInput.focus()"));
+  });
+
+  test("task list rendering prunes removed and path-mismatched previews", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const pruneSource = extractBlockFromStartToken(
+      scriptSource,
+      "function prunePromptFilePreviews() {",
+    );
+    const renderSource = extractBlockFromStartToken(
+      scriptSource,
+      "function renderTaskList(nextTasks) {",
+    );
+
+    assert.ok(
+      sourceContainsToken(pruneSource, "delete promptFilePreviews[taskId]"),
+    );
+    assert.ok(
+      sourceContainsToken(pruneSource, 'String(task.promptPath || "").trim()'),
+    );
+    assert.ok(sourceContainsToken(renderSource, "prunePromptFilePreviews()"));
+  });
+
+  test("latest prompt action applies preview text and resets the baseline", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+    const start = source.indexOf(
+      'loadLatestPromptBtn.addEventListener("click", function () {',
+    );
+    const end = source.indexOf("if (openPromptFileBtn) {", start);
+    assert.ok(start >= 0 && end > start, "Latest prompt handler was not found");
+    const handler = source.slice(start, end);
+
+    const expectedTokens = [
+      'preview.source !== "file"',
+      "window.confirm(strings.confirmReplacePromptEdits",
+      "promptTextInput.value = preview.prompt",
+      "setTemplatePromptBaseline(preview.prompt)",
+    ];
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(handler, token),
+        `Expected token not found in latest prompt handler: ${token}`,
+      );
+    }
+  });
+
+  test("webview rejects mismatched and older prompt previews", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+    const messageHandler = extractBlockFromStartToken(
+      source,
+      'case "updatePromptPreviews":',
+    );
+
+    const expectedTokens = [
+      'String(preview.promptPath || "") !==',
+      'String(task.promptPath || "").trim()',
+      "Date.parse(existing.resolvedAt) > Date.parse(preview.resolvedAt)",
+      "updatePromptFileNotice()",
+    ];
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(messageHandler, token),
+        `Expected token not found in preview message flow: ${token}`,
       );
     }
   });

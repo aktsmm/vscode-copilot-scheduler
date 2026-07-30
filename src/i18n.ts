@@ -41,15 +41,6 @@ export const messages = {
       "Copilot Scheduler is now active",
       "Copilot Scheduler が有効になりました",
     ),
-  extensionDeactivated: () =>
-    t(
-      "Copilot Scheduler has been deactivated",
-      "Copilot Scheduler が無効になりました",
-    ),
-  schedulerStarted: () =>
-    t("Scheduler started", "スケジューラーが開始されました"),
-  schedulerStopped: () =>
-    t("Scheduler stopped", "スケジューラーが停止されました"),
 
   // ==================== Task Operations ====================
   taskCreated: (name: string) =>
@@ -84,12 +75,77 @@ export const messages = {
     ),
   executionResultSuccess: () => t("Success", "成功"),
   executionResultFailed: () => t("Failed", "失敗"),
+  executionResultBlocked: () => t("Blocked", "実行前に中止"),
+  promptFileBlocked: (name: string, reason: string) =>
+    t(
+      `Task "${name}" was not executed because the latest prompt file could not be used (${reason})`,
+      `タスク「${name}」は最新のプロンプトファイルを読み込めなかったため実行しませんでした（${reason}）`,
+    ),
+  promptBlockedReasonPathUnresolved: () =>
+    t(
+      "prompt file path could not be resolved",
+      "プロンプトファイルのパスを解決できません",
+    ),
+  promptBlockedReasonReadFailed: () =>
+    t("prompt file could not be read", "プロンプトファイルを読み込めません"),
+  promptBlockedReasonNoPromptPath: () =>
+    t("prompt file path is not set", "プロンプトファイルのパスが未設定です"),
+  promptCopiedFromSnapshot: (name: string) =>
+    t(
+      `Copied the saved snapshot for "${name}" because the prompt file could not be read`,
+      `プロンプトファイルを読み込めなかったため、「${name}」の保存済みスナップショットをコピーしました`,
+    ),
+  labelPromptFileSource: () => t("Prompt file", "プロンプトファイル"),
+  labelPromptFileSynced: () => t("Checked", "最終確認"),
+  labelPromptFileDiff: () =>
+    t("Differs from saved snapshot", "保存済みスナップショットと差分あり"),
+  labelPromptFileUnavailable: () =>
+    t("File not readable", "ファイルを読み込めません"),
+  promptFileExecutionNote: () =>
+    t(
+      "This field shows the saved snapshot. At run time, an open editor buffer is used first; otherwise the latest saved prompt file is loaded.",
+      "この欄は保存済みスナップショットです。実行時は開いているエディターの内容を優先し、なければプロンプトファイルの最新の保存内容を読み込みます。",
+    ),
+  promptFileWillBecomeInline: () =>
+    t(
+      "Saving these edits will stop using the prompt file and store this text as an inline prompt.",
+      "この編集内容を保存すると、プロンプトファイルの参照をやめ、この本文をインラインプロンプトとして固定します。",
+    ),
+  promptFileNotLoadedNote: () =>
+    t(
+      "Load a prompt file before saving this task.",
+      "このタスクを保存する前にプロンプトファイルを読み込んでください。",
+    ),
+  promptFileStaleHint: () =>
+    t(
+      "The latest saved prompt file could not be read. The displayed snapshot may be out of date.",
+      "プロンプトファイルの最新の保存内容を読み込めませんでした。表示中のスナップショットは古い可能性があります。",
+    ),
+  actionLoadLatestPrompt: () =>
+    t("Load latest saved file", "最新の保存内容を読み込む"),
+  actionOpenPromptFile: () => t("Open prompt file", "プロンプトファイルを開く"),
+  confirmReplacePromptEdits: () =>
+    t(
+      "Replace your unsaved edits with the latest saved prompt file?",
+      "未保存の編集内容を、プロンプトファイルの最新の保存内容で置き換えますか？",
+    ),
   executionTriggerAuto: () => t("Auto", "自動"),
   executionTriggerManual: () => t("Manual", "手動"),
   executionHistoryEmpty: () =>
     t("Execution history is empty", "実行履歴はまだありません"),
   executionHistoryPickPlaceholder: () =>
     t("Recent execution history (latest first)", "実行履歴（新しい順）"),
+  executionHistoryPromptSource: () => t("Prompt", "プロンプト"),
+  executionHistoryPromptPath: () => t("Path", "パス"),
+  executionHistoryPromptHash: () => t("Hash", "ハッシュ"),
+  executionHistoryPromptResolvedAt: () => t("Resolved", "解決時刻"),
+  executionHistoryPromptFallback: () => t("Fallback", "フォールバック"),
+  executionPromptSourceInline: () => t("Inline", "インライン"),
+  executionPromptSourceOpenDocument: () =>
+    t("Open editor", "開いているエディター"),
+  executionPromptSourceFile: () => t("File", "ファイル"),
+  executionPromptSourceSnapshot: () =>
+    t("Saved snapshot", "保存済みスナップショット"),
   taskExecutionFailed: (name: string, error: string) =>
     t(
       `Task "${name}" execution failed: ${error}`,
@@ -111,6 +167,16 @@ export const messages = {
     t(
       `Task "${name}" is already running`,
       `タスク「${name}」はすでに実行中です`,
+    ),
+  taskStoreBusy: () =>
+    t(
+      "Task storage is busy in another window. Try again shortly.",
+      "別のウィンドウがタスクを保存中です。少し待ってから再試行してください。",
+    ),
+  taskStoreChangedExternally: () =>
+    t(
+      "Tasks changed in another window. The latest saved tasks were reloaded; retry your change.",
+      "別のウィンドウでタスクが変更されました。最新の保存内容を再読み込みしたため、変更を再試行してください。",
     ),
   taskNotFound: () => t("Task not found", "タスクが見つかりません"),
   noTasksFound: () =>
@@ -158,12 +224,7 @@ export const messages = {
       "Enter cron expression (e.g., '0 9 * * 1-5' for weekdays at 9am)",
       "cron式を入力（例: '0 9 * * 1-5' で平日9時）",
     ),
-  selectAgent: () => t("Select agent", "Agentを選択"),
-  selectModel: () => t("Select model", "モデルを選択"),
-  selectScope: () => t("Select scope", "スコープを選択"),
   selectTask: () => t("Select a task", "タスクを選択"),
-  selectPromptTemplate: () =>
-    t("Select prompt template", "プロンプトテンプレートを選択"),
 
   // ==================== Actions ====================
   actionRun: () => t("Run", "実行"),
@@ -544,11 +605,6 @@ export const messages = {
     t(
       `Daily execution limit (${limit}) reached. No more automatic executions today. You can increase this limit in settings.`,
       `1日の実行回数上限（${limit}回）に達しました。本日はこれ以上の自動実行は行われません。設定で上限を変更できます。`,
-    ),
-  storageWriteTimeout: () =>
-    t(
-      "Timed out while saving tasks. Your environment may be blocking VS Code extension storage.",
-      "タスクの保存がタイムアウトしました。環境により VS Code の拡張ストレージがブロックされている可能性があります。",
     ),
   jitterApplied: (seconds: number) =>
     t(

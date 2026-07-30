@@ -17,6 +17,8 @@ import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { selectTaskStore } from "./taskStoreSelection";
+import { writeFileAtomically } from "./atomic-file-write";
+import { TaskStoreLockBusyError, withTaskStoreLock } from "./task-store-lock";
 import {
   areModelSelectionsEqual,
   findBestMatchingModel,
@@ -37,6 +39,7 @@ import {
   resolveGlobalPromptsRoot,
   resolveLocalPromptPath,
 } from "./promptResolver";
+import { isPromptBlockedError } from "./promptExecutionErrors";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -65,11 +68,14 @@ type TaskStorageMeta = {
   savedAt: string; // ISO string
 };
 
+class TaskStoreConflictError extends Error {}
+
 type ManualRunNextRunPolicy = "advance" | "fromNow";
 type ManualRunFailureReason =
   | "taskNotFound"
   | "executorUnavailable"
   | "alreadyRunning"
+  | "promptBlocked"
   | "executionFailed"
   | "saveFailed";
 type ManualRunResult =
@@ -206,6 +212,7 @@ export class ScheduleManager {
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
+  private storageLockFilePath: string;
   private onTasksChangedCallbacks: Array<() => void> = [];
   private onExecuteCallback:
     | ((task: ScheduledTask) => Promise<void>)
@@ -219,6 +226,8 @@ export class ScheduleManager {
 
   private storageRevision = 0;
   private saveQueue: Promise<void> = Promise.resolve();
+  private globalStateWriteQueue: Promise<void> = Promise.resolve();
+  private fileWriteQueue: Promise<void> = Promise.resolve();
 
   private static readonly FIRST_RUN_DELAY_MINUTES = 3;
 
@@ -239,6 +248,10 @@ export class ScheduleManager {
     this.storageMetaFilePath = path.join(
       this.context.globalStorageUri.fsPath,
       STORAGE_META_FILE_NAME,
+    );
+    this.storageLockFilePath = path.join(
+      this.context.globalStorageUri.fsPath,
+      "scheduledTasks.lock",
     );
     this.loadDailyExecCount();
     this.loadDailyTaskExecCounts();
@@ -278,13 +291,7 @@ export class ScheduleManager {
   }
 
   private async saveMetaToFile(meta: TaskStorageMeta): Promise<void> {
-    const dir = path.dirname(this.storageMetaFilePath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(
-      this.storageMetaFilePath,
-      JSON.stringify(meta),
-      "utf8",
-    );
+    await writeFileAtomically(this.storageMetaFilePath, JSON.stringify(meta));
   }
 
   private async saveMetaToGlobalState(meta: TaskStorageMeta): Promise<void> {
@@ -297,7 +304,7 @@ export class ScheduleManager {
       if (!this.storageFilePath) return { tasks: [], ok: false };
       if (!fs.existsSync(this.storageFilePath)) return { tasks: [], ok: false };
       const raw = fs.readFileSync(this.storageFilePath, "utf8");
-      if (!raw.trim()) return { tasks: [], ok: true };
+      if (!raw.trim()) return { tasks: [], ok: false };
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return { tasks: [], ok: false };
       return { tasks: parsed as unknown[], ok: true };
@@ -311,45 +318,13 @@ export class ScheduleManager {
   }
 
   private async saveTasksToFile(tasksArray: ScheduledTask[]): Promise<void> {
-    const dir = path.dirname(this.storageFilePath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(
-      this.storageFilePath,
-      JSON.stringify(tasksArray),
-      "utf8",
-    );
+    await writeFileAtomically(this.storageFilePath, JSON.stringify(tasksArray));
   }
 
   private async saveTasksToGlobalState(
     tasksArray: ScheduledTask[],
   ): Promise<void> {
-    const timeoutMs = 10000;
-
-    const updateThenable = this.context.globalState.update(
-      STORAGE_KEY,
-      tasksArray,
-    );
-    const updatePromise = Promise.resolve(updateThenable);
-
-    let timerId: NodeJS.Timeout | undefined;
-    let result: "ok" | "timeout";
-    try {
-      result = await Promise.race([
-        updatePromise.then(() => "ok" as const),
-        new Promise<"timeout">((resolve) => {
-          timerId = setTimeout(() => resolve("timeout"), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timerId !== undefined) {
-        clearTimeout(timerId);
-      }
-    }
-
-    if (result === "timeout") {
-      void updatePromise.catch(() => undefined);
-      throw new Error(messages.storageWriteTimeout());
-    }
+    await this.context.globalState.update(STORAGE_KEY, tasksArray);
   }
 
   // ==================== Safety: Daily Execution Limit ====================
@@ -705,12 +680,15 @@ export class ScheduleManager {
     }
   }
 
-  private isPersistedTaskShape(value: unknown): value is ScheduledTask {
+  private hasMinimumPersistedTaskShape(
+    value: unknown,
+  ): value is Record<string, unknown> &
+    Pick<ScheduledTask, "id" | "name" | "prompt" | "cronExpression"> {
     if (!value || typeof value !== "object") {
       return false;
     }
 
-    const candidate = value as Partial<ScheduledTask>;
+    const candidate = value as Record<string, unknown>;
     return (
       typeof candidate.id === "string" &&
       candidate.id.trim().length > 0 &&
@@ -767,15 +745,16 @@ export class ScheduleManager {
 
     let needsSave = false;
     const needsStoreHealing =
-      !globalTasksOk || (fileStoreExists && !fileLoad.ok);
+      !globalTasksOk ||
+      (selection.chosenKind !== "none" && fileStoreExists && !fileLoad.ok);
 
     for (const rawTask of tasksToLoad) {
-      if (!this.isPersistedTaskShape(rawTask)) {
+      if (!this.hasMinimumPersistedTaskShape(rawTask)) {
         needsSave = true;
         continue;
       }
 
-      const task = rawTask;
+      const task = rawTask as unknown as ScheduledTask;
       // Restore Date objects from JSON serialization
       task.createdAt = new Date(task.createdAt);
       task.updatedAt = new Date(task.updatedAt);
@@ -1022,6 +1001,39 @@ export class ScheduleManager {
   private async saveTasksInternal(options?: {
     bumpRevision?: boolean;
   }): Promise<void> {
+    try {
+      await withTaskStoreLock(this.storageLockFilePath, () =>
+        this.saveTasksWhileLocked(options),
+      );
+    } catch (error) {
+      if (
+        error instanceof TaskStoreConflictError ||
+        error instanceof TaskStoreLockBusyError
+      ) {
+        this.tasks.clear();
+        this.loadTasks();
+        this.notifyTasksChanged();
+        throw new Error(
+          error instanceof TaskStoreConflictError
+            ? messages.taskStoreChangedExternally()
+            : messages.taskStoreBusy(),
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async saveTasksWhileLocked(options?: {
+    bumpRevision?: boolean;
+  }): Promise<void> {
+    const latestPersistedRevision = Math.max(
+      this.loadMetaFromFile()?.revision ?? 0,
+      this.loadMetaFromGlobalState().revision,
+    );
+    if (latestPersistedRevision > this.storageRevision) {
+      throw new TaskStoreConflictError();
+    }
+
     const bumpRevision = options?.bumpRevision !== false;
     const tasksArray = Array.from(this.tasks.values());
 
@@ -1036,27 +1048,22 @@ export class ScheduleManager {
     // Prefer file persistence for responsiveness and reliability.
     // If file save succeeds, return immediately and sync globalState in background.
     try {
-      await this.saveTasksToFile(tasksArray);
-      await this.saveMetaToFile(meta);
+      await this.queueFileWrite(tasksArray, meta);
       this.storageRevision = meta.revision;
 
-      void Promise.all([
-        this.saveTasksToGlobalState(tasksArray),
-        this.saveMetaToGlobalState(meta),
-      ]).catch((error) =>
+      await this.queueGlobalStateWrite(tasksArray, meta).catch((error) => {
         logDebug(
           "[CopilotScheduler] Task save to globalState failed (file succeeded):",
           toSafeErrorDetails(error),
-        ),
-      );
+        );
+      });
 
       this.notifyTasksChanged();
       return;
     } catch (fileError) {
       // If file persistence fails, fall back to globalState (await so at least one store succeeds).
       try {
-        await this.saveTasksToGlobalState(tasksArray);
-        await this.saveMetaToGlobalState(meta);
+        await this.queueGlobalStateWrite(tasksArray, meta);
         this.storageRevision = meta.revision;
       } catch (globalStateError) {
         throw globalStateError instanceof Error
@@ -1065,21 +1072,50 @@ export class ScheduleManager {
       }
 
       // Best-effort background file sync for future reliability.
-      void Promise.all([
-        this.saveTasksToFile(tasksArray),
-        this.saveMetaToFile(meta),
-      ]).catch((error) =>
+      await this.queueFileWrite(tasksArray, meta).catch((error) => {
         logDebug(
           "[CopilotScheduler] Task save to file failed (globalState succeeded):",
           {
             fileError: toSafeErrorDetails(fileError),
             syncError: toSafeErrorDetails(error),
           },
-        ),
-      );
+        );
+      });
     }
 
     this.notifyTasksChanged();
+  }
+
+  private cloneTasksForMirror(tasksArray: ScheduledTask[]): ScheduledTask[] {
+    return JSON.parse(JSON.stringify(tasksArray)) as ScheduledTask[];
+  }
+
+  private queueGlobalStateWrite(
+    tasksArray: ScheduledTask[],
+    meta: TaskStorageMeta,
+  ): Promise<void> {
+    const tasksSnapshot = this.cloneTasksForMirror(tasksArray);
+    const metaSnapshot = { ...meta };
+    const op = this.globalStateWriteQueue.then(async () => {
+      await this.saveTasksToGlobalState(tasksSnapshot);
+      await this.saveMetaToGlobalState(metaSnapshot);
+    });
+    this.globalStateWriteQueue = op.catch(() => undefined);
+    return op;
+  }
+
+  private queueFileWrite(
+    tasksArray: ScheduledTask[],
+    meta: TaskStorageMeta,
+  ): Promise<void> {
+    const tasksSnapshot = this.cloneTasksForMirror(tasksArray);
+    const metaSnapshot = { ...meta };
+    const op = this.fileWriteQueue.then(async () => {
+      await this.saveTasksToFile(tasksSnapshot);
+      await this.saveMetaToFile(metaSnapshot);
+    });
+    this.fileWriteQueue = op.catch(() => undefined);
+    return op;
   }
 
   /**
@@ -2025,6 +2061,14 @@ export class ScheduleManager {
         await this.onExecuteCallback(task);
       } catch (error) {
         const details = toSafeErrorDetails(error);
+        if (isPromptBlockedError(error)) {
+          logError("[CopilotScheduler] runTaskNow blocked:", details);
+          return {
+            ok: false,
+            reason: "promptBlocked",
+            errorMessage: details,
+          };
+        }
         const userNotified =
           !!error &&
           typeof error === "object" &&
