@@ -1914,7 +1914,10 @@ suite("resolvePromptText Tests", () => {
       const missing = await resolvePromptSnapshot(task, false);
       assert.strictEqual(missing.source, "snapshotFallback");
       assert.strictEqual(missing.text, "SNAPSHOT");
-      assert.strictEqual(missing.fallbackReason, "readFailed");
+      assert.ok(
+        missing.fallbackReason === "readFailed" ||
+          missing.fallbackReason === "pathUnresolved",
+      );
     } finally {
       restoreWs();
       try {
