@@ -82,20 +82,25 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 
 Copilot Chat のエージェントモードでは、`#` 参照でスケジューラ用ツールを呼び出せます。
 
-| ツール                        | 説明                                                                                                       |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `#scheduler_query`            | 読み取り専用の問い合わせ。`kind=list` / `kind=get` / `kind=history` / `kind=preview_cron` を指定できます。 |
-| `#scheduler_create_task`      | スケジュールタスクを作成します。                                                                           |
-| `#scheduler_update_task`      | タスクの項目を更新します。有効/無効の変更は `#scheduler_set_task_enabled` を使います。                     |
-| `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                          |
-| `#scheduler_set_task_enabled` | タスクを有効化または無効化します。                                                                         |
+| ツール                        | 説明                                                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `#scheduler_query`            | 読み取り専用の問い合わせ。`kind=list` / `kind=get` / `kind=history` / `kind=preview_cron` / `kind=list_models` / `kind=list_agents`。 |
+| `#scheduler_create_task`      | モデル・エージェント・実行制御を含めてスケジュールタスクを作成します。                                                                |
+| `#scheduler_update_task`      | `model` / `agent` / `scope` / 実行制御を含めてタスクの項目を更新します。有効/無効の変更は `#scheduler_set_task_enabled` を使います。        |
+| `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                                                     |
+| `#scheduler_set_task_enabled` | タスクを有効化または無効化します。                                                                                                    |
 
 `kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、新しい順の `entries` が含まれます。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
+
+`kind=list` は prompt 本文の代わりに短い `promptPreview` と `promptLength` を返します。`local` / `global` のタスクは prompt ファイル全体のスナップショットを保持するためです。write 系ツールの成功レスポンスも同じ形で返します。全文が必要なときは `kind=get` を使い、preview をタスクに書き戻さないでください。
+
+`kind=list_models` は選択可能なモデルの `id` と `supportedReasoningEfforts` を返し、`kind=list_agents` はファイルパスを含めずに選択可能なエージェントを返します。モデル一覧は Copilot Scheduler ビューのモデル選択肢と同一なので、UI で見えない・変更できないモデルを Chat が設定することはありません。作成/更新では `model`（任意で `modelReasoningEffort`）、`agent`、実行制御の `autoMode` / `jitterSeconds` / `maxExecutionsPerDay` / `allowedTimeStart` / `allowedTimeEnd` を指定できます。この一覧にない `model` id は、無言で既定モデルにフォールバックせず有効な id 一覧付きでエラーになります。`model` に空文字を渡すと選択が解除され、既定モデルに戻ります。なお Language Model API が利用できず組込みの fallback カタログしか分からないときは、エラーにせず warning 付きで保存します。
 
 エージェントモードでは、Copilot が自然文の依頼からこれらのツールを選ぶこともできます。例:
 
 - 「このリポジトリの要約を毎週平日 9:00 に作るワークスペースタスクをスケジュール設定して」
 - 「日次サマリータスクを 10:30 実行に変更して」
+- 「日次サマリータスクのモデルを Claude Sonnet にして」
 - 「リリースリマインダーのタスクを再開するまで一時停止して」
 - 「変更する前に、登録済みの Copilot スケジュールタスクを見せて」
 

@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { ScheduledTask } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
   shouldUseCustomConfirmation,
+  toTaskSummary,
 } from "../shared";
 
 interface SetEnabledToolInput {
@@ -62,14 +62,11 @@ export function createSchedulerSetTaskEnabledTool(
       if (!result.ok) {
         return formatMutationFailure(result);
       }
-      const payload: {
-        ok: true;
-        action: "enable" | "disable";
-        task: ScheduledTask;
-      } = {
-        ok: true,
-        action: input.enabled ? "enable" : "disable",
-        task: result.task,
+      const payload = {
+        ok: true as const,
+        action: input.enabled ? ("enable" as const) : ("disable" as const),
+        promptTextOmitted: true,
+        task: toTaskSummary(result.task),
       };
       return buildJsonTextResult(payload);
     },

@@ -48,6 +48,7 @@ import {
   type ExecutionTrigger,
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
+import { createModelSelectionResolver } from "./taskMutationService";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -1033,7 +1034,20 @@ export function activate(context: vscode.ExtensionContext): void {
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
-  registerLmTools(context, scheduleManager);
+  // Chat must only offer models the user can also see in the Webview picker and
+  // that startup healing can resolve, so all three share one filtered catalog.
+  const loadPickerModelCatalog = async () => {
+    const { models, source } =
+      await CopilotExecutor.getAvailableModelsWithSource();
+    return { source, models: filterPickerModelCatalog(models) };
+  };
+  registerLmTools(context, scheduleManager, {
+    catalogProvider: {
+      listModels: loadPickerModelCatalog,
+      listAgents: () => CopilotExecutor.getAllAgents(),
+    },
+    resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
+  });
   void CopilotExecutor.getAvailableModelsWithSource()
     .then(async ({ models, source }) => {
       const healed = await scheduleManager.healTaskModelSelections(

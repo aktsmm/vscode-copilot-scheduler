@@ -1,12 +1,13 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { CreateTaskInput, ScheduledTask } from "../../types";
+import type { CreateTaskInput } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
   shouldUseCustomConfirmation,
+  toTaskSummary,
 } from "../shared";
 
 interface CreateTaskToolInput {
@@ -17,8 +18,15 @@ interface CreateTaskToolInput {
   promptSource?: string;
   promptPath?: string;
   agent?: string;
+  model?: string;
+  modelReasoningEffort?: string;
   enabled?: boolean;
   chatSession?: string;
+  autoMode?: boolean;
+  jitterSeconds?: number;
+  maxExecutionsPerDay?: number;
+  allowedTimeStart?: string;
+  allowedTimeEnd?: string;
 }
 
 function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
@@ -31,8 +39,15 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
       (input.promptSource as CreateTaskInput["promptSource"]) ?? "inline",
     promptPath: input.promptPath,
     agent: input.agent,
+    model: input.model,
+    modelReasoningEffort: input.modelReasoningEffort,
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
+    autoMode: input.autoMode,
+    jitterSeconds: input.jitterSeconds,
+    maxExecutionsPerDay: input.maxExecutionsPerDay,
+    allowedTimeStart: input.allowedTimeStart,
+    allowedTimeEnd: input.allowedTimeEnd,
   };
 }
 
@@ -50,6 +65,8 @@ export function createSchedulerCreateTaskTool(
         `- scope: ${input.scope || "(missing)"}`,
         `- promptSource: ${input.promptSource || "inline"}`,
         input.promptPath ? `- promptPath: \`${input.promptPath}\`` : undefined,
+        input.agent ? `- agent: ${input.agent}` : undefined,
+        input.model ? `- model: ${input.model}` : undefined,
         input.enabled === false
           ? "- initial state: disabled"
           : "- initial state: enabled",
@@ -97,15 +114,21 @@ export function createSchedulerCreateTaskTool(
       const payload: {
         ok: true;
         action: "create";
-        task: ScheduledTask;
+        promptTextOmitted: true;
+        task: Record<string, unknown>;
         warning?: string;
+        warnings?: string[];
       } = {
         ok: true,
         action: "create",
-        task: result.task,
+        promptTextOmitted: true,
+        task: toTaskSummary(result.task),
       };
       if (result.warning) {
         payload.warning = result.warning;
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        payload.warnings = result.warnings;
       }
       return buildJsonTextResult(payload);
     },

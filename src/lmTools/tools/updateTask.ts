@@ -1,17 +1,45 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { CreateTaskInput, ScheduledTask } from "../../types";
+import type { CreateTaskInput } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
   formatMutationFailure,
   shouldUseCustomConfirmation,
+  toTaskSummary,
 } from "../shared";
 
 interface UpdateTaskToolInput {
   id?: string;
   updates?: Partial<CreateTaskInput> & { enabled?: unknown };
+}
+
+/**
+ * `enabled` is recognized but not schema-exposed: letting it through keeps the
+ * dedicated `enabled_not_allowed` error from taskMutationService.
+ */
+const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
+  "name",
+  "cronExpression",
+  "prompt",
+  "promptSource",
+  "promptPath",
+  "agent",
+  "model",
+  "modelReasoningEffort",
+  "scope",
+  "chatSession",
+  "autoMode",
+  "jitterSeconds",
+  "maxExecutionsPerDay",
+  "allowedTimeStart",
+  "allowedTimeEnd",
+  "enabled",
+]);
+
+function findUnexpectedUpdateKeys(updates: object): string[] {
+  return Object.keys(updates).filter((key) => !RECOGNIZED_UPDATE_KEYS.has(key));
 }
 
 export function createSchedulerUpdateTaskTool(
@@ -62,6 +90,14 @@ export function createSchedulerUpdateTaskTool(
           message: "Missing required field: updates (object).",
         });
       }
+      const unexpected = findUnexpectedUpdateKeys(input.updates);
+      if (unexpected.length > 0) {
+        return buildJsonTextResult({
+          ok: false,
+          reason: "validation",
+          message: `Fields not allowed in 'updates': ${unexpected.join(", ")}. Remove them and retry.`,
+        });
+      }
       const result = await client.updateTask(input.id, input.updates);
       if (!result.ok) {
         return formatMutationFailure(result);
@@ -69,15 +105,21 @@ export function createSchedulerUpdateTaskTool(
       const payload: {
         ok: true;
         action: "update";
-        task: ScheduledTask;
+        promptTextOmitted: true;
+        task: Record<string, unknown>;
         warning?: string;
+        warnings?: string[];
       } = {
         ok: true,
         action: "update",
-        task: result.task,
+        promptTextOmitted: true,
+        task: toTaskSummary(result.task),
       };
       if (result.warning) {
         payload.warning = result.warning;
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        payload.warnings = result.warnings;
       }
       return buildJsonTextResult(payload);
     },

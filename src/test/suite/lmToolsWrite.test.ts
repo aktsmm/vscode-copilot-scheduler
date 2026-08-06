@@ -84,6 +84,23 @@ class FailingClient implements LmToolMutationClient {
   }
 }
 
+class WarningClient extends FakeClient {
+  private readonly warnings = ["first", "second"];
+
+  async updateTask(
+    id: string,
+    updates: Partial<CreateTaskInput>,
+  ): Promise<MutationResult> {
+    const base = await super.updateTask(id, updates);
+    assert.ok(base.ok);
+    return {
+      ...base,
+      warning: this.warnings.join("\n"),
+      warnings: this.warnings,
+    };
+  }
+}
+
 function fakeScheduleManager(task: ScheduledTask | undefined): ScheduleManager {
   return {
     getTask: (id: string) => (task?.id === id ? task : undefined),
@@ -387,6 +404,144 @@ suite("lmTools write wrappers", () => {
     assert.strictEqual(payload.ok, false);
     assert.strictEqual(payload.reason, "validation");
     assert.strictEqual(payload.message, "update failed");
+  });
+
+  test("create task forwards model and execution controls", async () => {
+    const client = new FakeClient();
+    const tool = createSchedulerCreateTaskTool(client);
+    const result = await invoke(tool, {
+      name: "Daily review",
+      cronExpression: "0 9 * * *",
+      prompt: "Review the workspace",
+      scope: "workspace",
+      model: "claude-sonnet-4",
+      modelReasoningEffort: "high",
+      autoMode: true,
+      jitterSeconds: 120,
+      maxExecutionsPerDay: 3,
+      allowedTimeStart: "09:00",
+      allowedTimeEnd: "18:00",
+    });
+    assert.strictEqual(parseJson(result).ok, true);
+    assert.strictEqual(client.createInput?.model, "claude-sonnet-4");
+    assert.strictEqual(client.createInput?.modelReasoningEffort, "high");
+    assert.strictEqual(client.createInput?.autoMode, true);
+    assert.strictEqual(client.createInput?.jitterSeconds, 120);
+    assert.strictEqual(client.createInput?.maxExecutionsPerDay, 3);
+    assert.strictEqual(client.createInput?.allowedTimeStart, "09:00");
+    assert.strictEqual(client.createInput?.allowedTimeEnd, "18:00");
+  });
+
+  test("create task prepareInvocation shows the requested model", async () => {
+    const tool = createSchedulerCreateTaskTool(new FakeClient());
+    const prepared = await withConfirmationMode("always", () =>
+      prepare(tool, {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review the workspace",
+        scope: "workspace",
+        model: "claude-sonnet-4",
+      }),
+    );
+    assert.match(confirmationMessageText(prepared), /claude-sonnet-4/);
+  });
+
+  test("update task forwards model and execution controls", async () => {
+    const client = new FakeClient();
+    const tool = createSchedulerUpdateTaskTool(client);
+    const result = await invoke(tool, {
+      id: "task-1",
+      updates: { model: "", scope: "global", maxExecutionsPerDay: 0 },
+    });
+    assert.strictEqual(parseJson(result).ok, true);
+    assert.deepStrictEqual(client.updateArgs, {
+      id: "task-1",
+      updates: { model: "", scope: "global", maxExecutionsPerDay: 0 },
+    });
+  });
+
+  test("update task rejects unknown fields in updates", async () => {
+    const client = new FakeClient();
+    const tool = createSchedulerUpdateTaskTool(client);
+    const result = await invoke(tool, {
+      id: "task-1",
+      updates: {
+        name: "Renamed",
+        workspacePath: "C:/elsewhere",
+      } as never,
+    });
+    const payload = parseJson(result);
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, "validation");
+    assert.match(String(payload.message), /workspacePath/);
+    assert.strictEqual(client.updateArgs, undefined);
+  });
+
+  test("update task still delegates enabled to the mutation client", async () => {
+    const client = new FakeClient();
+    const tool = createSchedulerUpdateTaskTool(client);
+    await invoke(tool, {
+      id: "task-1",
+      updates: { enabled: false } as never,
+    });
+    assert.deepStrictEqual(client.updateArgs?.updates, { enabled: false });
+  });
+
+  test("update task surfaces multiple warnings", async () => {
+    const client = new WarningClient();
+    const tool = createSchedulerUpdateTaskTool(client);
+    const payload = parseJson(
+      await invoke(tool, { id: "task-1", updates: { name: "Renamed" } }),
+    );
+    assert.strictEqual(payload.ok, true);
+    assert.deepStrictEqual(payload.warnings, ["first", "second"]);
+    assert.strictEqual(payload.warning, "first\nsecond");
+  });
+
+  test("mutation results omit prompt bodies", async () => {
+    const body = "y".repeat(4000);
+    const client = new FakeClient(fakeTask({ prompt: body }));
+
+    const created = parseJson(
+      await invoke(createSchedulerCreateTaskTool(client), {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: body,
+        scope: "workspace",
+      }),
+    );
+    const updated = parseJson(
+      await invoke(createSchedulerUpdateTaskTool(client), {
+        id: "task-1",
+        updates: { name: "Renamed" },
+      }),
+    );
+    const toggled = parseJson(
+      await invoke(createSchedulerSetTaskEnabledTool(client), {
+        id: "task-1",
+        enabled: false,
+      }),
+    );
+
+    for (const [label, payload] of [
+      ["create", created],
+      ["update", updated],
+      ["setEnabled", toggled],
+    ] as const) {
+      assert.strictEqual(payload.ok, true, `${label} should succeed`);
+      assert.strictEqual(
+        payload.promptTextOmitted,
+        true,
+        `${label} must advertise that the prompt body was dropped`,
+      );
+      const task = payload.task as Record<string, unknown>;
+      assert.strictEqual(
+        "prompt" in task,
+        false,
+        `${label} must not echo the prompt body back into the model context`,
+      );
+      assert.strictEqual(task.promptLength, body.length);
+    }
   });
 
   test("delete task prepareInvocation includes task name scope and workspace", async () => {

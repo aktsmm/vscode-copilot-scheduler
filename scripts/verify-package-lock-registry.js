@@ -19,8 +19,7 @@ function findInvalidResolvedUrls(lock) {
     try {
       const url = new URL(resolved);
       return (
-        url.protocol !== "https:" ||
-        !ALLOWED_REGISTRY_HOSTS.has(url.hostname)
+        url.protocol !== "https:" || !ALLOWED_REGISTRY_HOSTS.has(url.hostname)
       );
     } catch {
       return true;

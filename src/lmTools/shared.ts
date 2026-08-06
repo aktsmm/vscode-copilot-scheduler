@@ -90,39 +90,25 @@ export function buildJsonTextResult(
   return buildTextResult(JSON.stringify(payload, null, 2));
 }
 
-export function formatTaskSummary(task: ScheduledTask): string {
-  const workspace = task.workspacePath ?? "(none)";
-  const enabled = task.enabled ? "enabled" : "disabled";
-  const nextRun =
-    task.nextRun instanceof Date
-      ? task.nextRun.toISOString()
-      : typeof task.nextRun === "string"
-        ? task.nextRun
-        : undefined;
-  return [
-    `- id: ${task.id}`,
-    `  name: ${task.name}`,
-    `  scope: ${task.scope}`,
-    `  workspace: ${workspace}`,
-    `  cron: ${task.cronExpression}`,
-    `  status: ${enabled}`,
-    nextRun ? `  nextRun: ${nextRun}` : undefined,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
+const PROMPT_PREVIEW_MAX_CHARS = 160;
 
-export function formatMutationSuccess(
-  action: "create" | "update" | "enable" | "disable",
-  result: Extract<MutationResult, { ok: true }>,
-): vscode.LanguageModelToolResult {
-  const payload = {
-    ok: true,
-    action,
-    task: result.task,
-    warning: result.warning,
+/**
+ * Strip the prompt body from a task before it reaches the model: a `local` or
+ * `global` task stores a snapshot of the whole prompt file. The preview uses
+ * its own key so a truncated body can never be written back through an update.
+ */
+export function toTaskSummary(task: ScheduledTask): Record<string, unknown> {
+  const { prompt, ...rest } = task;
+  const text = typeof prompt === "string" ? prompt : "";
+  const collapsed = text.trim().replace(/\s+/gu, " ");
+  return {
+    ...rest,
+    promptLength: text.length,
+    promptPreview:
+      collapsed.length > PROMPT_PREVIEW_MAX_CHARS
+        ? `${collapsed.slice(0, PROMPT_PREVIEW_MAX_CHARS - 1)}…`
+        : collapsed,
   };
-  return buildJsonTextResult(payload);
 }
 
 export function formatMutationFailure(

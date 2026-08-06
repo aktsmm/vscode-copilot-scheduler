@@ -399,6 +399,114 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("LM write tool schemas expose model selection and stay closed for updates", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      contributes?: {
+        languageModelTools?: Array<{
+          name?: string;
+          inputSchema?: {
+            properties?: Record<string, Record<string, unknown>>;
+          };
+        }>;
+      };
+    };
+    const tools = manifest.contributes?.languageModelTools ?? [];
+    const toolByName = (name: string) =>
+      tools.find((tool) => tool.name === name);
+
+    const queryKinds = toolByName("scheduler_query")?.inputSchema?.properties
+      ?.kind?.enum as string[] | undefined;
+    assert.ok(queryKinds?.includes("list_models"));
+    assert.ok(queryKinds?.includes("list_agents"));
+
+    const createProperties =
+      toolByName("scheduler_create_task")?.inputSchema?.properties ?? {};
+    const updates = toolByName("scheduler_update_task")?.inputSchema?.properties
+      ?.updates as
+      | { additionalProperties?: boolean; properties?: Record<string, unknown> }
+      | undefined;
+
+    for (const key of [
+      "model",
+      "modelReasoningEffort",
+      "autoMode",
+      "jitterSeconds",
+      "maxExecutionsPerDay",
+      "allowedTimeStart",
+      "allowedTimeEnd",
+    ]) {
+      assert.ok(
+        createProperties[key],
+        `scheduler_create_task must expose '${key}' so agent mode can set it.`,
+      );
+      assert.ok(
+        updates?.properties?.[key],
+        `scheduler_update_task updates must expose '${key}'.`,
+      );
+    }
+    assert.ok(updates?.properties?.scope);
+    assert.strictEqual(
+      updates?.additionalProperties,
+      false,
+      "Keep 'updates' closed so unknown fields fail fast instead of being ignored.",
+    );
+    assert.strictEqual(
+      createProperties.modelName,
+      undefined,
+      "Derived model metadata must stay out of the schema; it is filled in by model resolution.",
+    );
+  });
+
+  test("LM tools receive the same filtered model catalog as the picker", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const source = fs.readFileSync(
+      path.join(root, "src", "extension.ts"),
+      "utf8",
+    );
+    const contract =
+      "Contract: list_models and model resolution must share one loader that applies filterPickerModelCatalog, so Chat only offers models the Webview picker also shows. Only the execution-time resolver in copilotExecutor may use the raw catalog.";
+
+    const loaderIndex = source.indexOf("const loadPickerModelCatalog");
+    assert.notStrictEqual(
+      loaderIndex,
+      -1,
+      `loadPickerModelCatalog not found. ${contract}`,
+    );
+    const callIndex = source.indexOf("registerLmTools(", loaderIndex);
+    assert.notStrictEqual(
+      callIndex,
+      -1,
+      `registerLmTools call not found after the loader. ${contract}`,
+    );
+
+    const loaderBlock = source.slice(loaderIndex, callIndex);
+    const call = source.slice(callIndex, source.indexOf("});", callIndex));
+
+    assert.match(
+      loaderBlock,
+      /filterPickerModelCatalog/,
+      `The loader no longer filters the catalog. ${contract}`,
+    );
+    assert.match(
+      call,
+      /listModels:\s*loadPickerModelCatalog/,
+      `list_models no longer uses the shared loader. ${contract}`,
+    );
+    assert.match(
+      call,
+      /createModelSelectionResolver\(loadPickerModelCatalog\)/,
+      `Model resolution no longer uses the shared loader. ${contract}`,
+    );
+    assert.strictEqual(
+      /getAvailableModelsWithSource/.test(call),
+      false,
+      `The raw catalog is being handed to the LM tools. ${contract}`,
+    );
+  });
+
   test("VSIX package ignore keeps local research and repro artifacts out", () => {
     const root = path.resolve(__dirname, "../../..");
     const ignoreLines = fs

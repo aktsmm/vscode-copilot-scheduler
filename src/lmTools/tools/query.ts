@@ -5,11 +5,24 @@ import {
   validateCronExpressions,
 } from "../../cronExpressions";
 import { getExecutionHistoryEntries } from "../../executionHistoryStore";
+import { sanitizeAbsolutePathDetails } from "../../errorSanitizer";
+import { getSupportedExperimentalReasoningEfforts } from "../../modelQualityExperiment";
 import type { ScheduleManager } from "../../scheduleManager";
-import type { ScheduledTask, TaskScope } from "../../types";
-import { buildJsonTextResult, buildTextResult } from "../shared";
+import type {
+  AgentInfo,
+  ModelInfo,
+  ScheduledTask,
+  TaskScope,
+} from "../../types";
+import { buildJsonTextResult, buildTextResult, toTaskSummary } from "../shared";
 
-type QueryKind = "list" | "get" | "history" | "preview_cron";
+type QueryKind =
+  | "list"
+  | "get"
+  | "history"
+  | "preview_cron"
+  | "list_models"
+  | "list_agents";
 
 interface QueryInput {
   kind?: QueryKind | string;
@@ -23,11 +36,25 @@ interface QueryInput {
   timezone?: string;
 }
 
+/**
+ * Read-only catalog access for discovery kinds. Injected so this module stays
+ * free of the heavyweight `CopilotExecutor` dependency graph.
+ */
+export interface SchedulerCatalogProvider {
+  listModels(): Promise<{
+    source: "api" | "fallback";
+    models: readonly ModelInfo[];
+  }>;
+  listAgents(): Promise<readonly AgentInfo[]>;
+}
+
 const VALID_KINDS: readonly QueryKind[] = [
   "list",
   "get",
   "history",
   "preview_cron",
+  "list_models",
+  "list_agents",
 ];
 
 function invalidKindResult(input: unknown): vscode.LanguageModelToolResult {
@@ -55,7 +82,26 @@ const ALLOWED_BY_KIND: Record<QueryKind, ReadonlySet<string>> = {
   get: new Set(["kind", "id"]),
   history: new Set(["kind", "taskId", "limit"]),
   preview_cron: new Set(["kind", "cronExpression", "count", "timezone"]),
+  list_models: new Set(["kind"]),
+  list_agents: new Set(["kind"]),
 };
+
+function catalogUnavailableResult(
+  kind: QueryKind,
+  detail?: unknown,
+): vscode.LanguageModelToolResult {
+  const reason =
+    detail === undefined
+      ? ""
+      : ` (${sanitizeAbsolutePathDetails(
+          detail instanceof Error ? detail.message : String(detail ?? ""),
+        )})`;
+  return buildJsonTextResult({
+    ok: false,
+    reason: "internal_error",
+    message: `kind='${kind}' is unavailable in this context${reason}. Create or update the task without specifying a model or agent.`,
+  });
+}
 
 function findUnexpectedFields(
   kind: QueryKind,
@@ -90,7 +136,9 @@ function handleList(
   return buildJsonTextResult({
     ok: true,
     count: filtered.length,
-    tasks: filtered,
+    promptTextOmitted: true,
+    hint: "Prompt bodies are omitted here. Use kind=get with a task id when you need the full prompt, and never write promptPreview back to a task.",
+    tasks: filtered.map(toTaskSummary),
   });
 }
 
@@ -185,8 +233,53 @@ function handlePreviewCron(input: QueryInput): vscode.LanguageModelToolResult {
   }
 }
 
+async function handleListModels(
+  catalogProvider: SchedulerCatalogProvider,
+): Promise<vscode.LanguageModelToolResult> {
+  const { source, models } = await catalogProvider.listModels();
+  return buildJsonTextResult({
+    ok: true,
+    source,
+    count: models.length,
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      vendor: model.vendor,
+      family: model.family,
+      version: model.version,
+      supportedReasoningEfforts: getSupportedExperimentalReasoningEfforts({
+        id: model.id,
+        name: model.name,
+        vendor: model.vendor,
+        family: model.family,
+      }),
+    })),
+  });
+}
+
+async function handleListAgents(
+  catalogProvider: SchedulerCatalogProvider,
+): Promise<vscode.LanguageModelToolResult> {
+  const agents = await catalogProvider.listAgents();
+  // `filePath` is intentionally omitted so absolute paths never reach the model.
+  const selectable = agents
+    .filter((agent: AgentInfo) => agent.userInvocable !== false)
+    .map((agent: AgentInfo) => ({
+      id: agent.id,
+      name: agent.name,
+      description: agent.description,
+      isCustom: agent.isCustom,
+    }));
+  return buildJsonTextResult({
+    ok: true,
+    count: selectable.length,
+    agents: selectable,
+  });
+}
+
 export function createSchedulerQueryTool(
   scheduleManager: ScheduleManager,
+  catalogProvider?: SchedulerCatalogProvider,
 ): vscode.LanguageModelTool<QueryInput> {
   return {
     async invoke(
@@ -217,6 +310,19 @@ export function createSchedulerQueryTool(
           return handleHistory(input);
         case "preview_cron":
           return handlePreviewCron(input);
+        case "list_models":
+        case "list_agents": {
+          if (!catalogProvider) {
+            return catalogUnavailableResult(kindStrict);
+          }
+          try {
+            return kindStrict === "list_models"
+              ? await handleListModels(catalogProvider)
+              : await handleListAgents(catalogProvider);
+          } catch (error) {
+            return catalogUnavailableResult(kindStrict, error);
+          }
+        }
         default:
           return buildTextResult("Unhandled query kind.");
       }

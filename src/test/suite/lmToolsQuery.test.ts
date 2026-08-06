@@ -2,13 +2,14 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 
 import { createSchedulerQueryTool } from "../../lmTools/tools/query";
+import type { SchedulerCatalogProvider } from "../../lmTools/tools/query";
 import {
   enqueueExecutionHistoryEntry,
   resetExecutionHistoryQueueForTests,
   setExecutionHistoryContextForTests,
 } from "../../executionHistoryStore";
 import type { ScheduleManager } from "../../scheduleManager";
-import type { ScheduledTask } from "../../types";
+import type { AgentInfo, ModelInfo, ScheduledTask } from "../../types";
 
 class FakeScheduleManager {
   constructor(private readonly seed: ScheduledTask[]) {}
@@ -67,6 +68,45 @@ function parseJson(result: vscode.LanguageModelToolResult): {
   return JSON.parse(textOf(result));
 }
 
+function fakeCatalogProvider(): SchedulerCatalogProvider {
+  const models: ModelInfo[] = [
+    { id: "", name: "Default", description: "", vendor: "" },
+    {
+      id: "gpt-5-codex",
+      name: "GPT-5-Codex",
+      description: "",
+      vendor: "copilot",
+      family: "gpt-5-codex",
+    },
+  ];
+  const agents: AgentInfo[] = [
+    {
+      id: "agent",
+      name: "Agent",
+      description: "Built-in agent mode",
+      isCustom: false,
+    },
+    {
+      id: "custom-reviewer",
+      name: "Reviewer",
+      description: "Custom agent",
+      isCustom: true,
+      filePath: "C:/secret/path/reviewer.agent.md",
+    },
+    {
+      id: "subagent-only",
+      name: "Subagent",
+      description: "Not user invocable",
+      isCustom: true,
+      userInvocable: false,
+    },
+  ];
+  return {
+    listModels: async () => ({ source: "api" as const, models }),
+    listAgents: async () => agents,
+  };
+}
+
 suite("lmTools scheduler_query", () => {
   teardown(() => {
     resetExecutionHistoryQueueForTests();
@@ -107,6 +147,36 @@ suite("lmTools scheduler_query", () => {
     const payload = parseJson(result);
     assert.strictEqual(payload.ok, true);
     assert.strictEqual(payload.count, 1);
+  });
+
+  test("kind=list omits prompt bodies but kind=get keeps them", async () => {
+    const body = "x".repeat(5000);
+    const manager = new FakeScheduleManager([
+      fakeTask({ id: "big", prompt: body }),
+    ]) as unknown as ScheduleManager;
+    const tool = createSchedulerQueryTool(manager);
+
+    const listed = parseJson(await invoke(tool, { kind: "list" }));
+    const tasks = listed.tasks as Array<Record<string, unknown>>;
+    assert.strictEqual(listed.promptTextOmitted, true);
+    assert.strictEqual(
+      "prompt" in tasks[0],
+      false,
+      "kind=list must not carry prompt bodies into the model context",
+    );
+    assert.strictEqual(tasks[0]?.promptLength, body.length);
+    assert.strictEqual(
+      String(tasks[0]?.promptPreview).length,
+      160,
+      "the preview must stay within the documented 160-character cap",
+    );
+
+    const fetched = parseJson(await invoke(tool, { kind: "get", id: "big" }));
+    assert.strictEqual(
+      (fetched.task as Record<string, unknown>).prompt,
+      body,
+      "kind=get must still return the full prompt so nothing is lost",
+    );
   });
 
   test("kind=get returns not_found for missing id", async () => {
@@ -241,6 +311,97 @@ suite("lmTools scheduler_query", () => {
     assert.deepStrictEqual(
       history.map((item) => item.taskId),
       ["history-2", "history-1"],
+    );
+  });
+
+  test("invalid kind message lists the discovery kinds", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+    );
+    const payload = parseJson(await invoke(tool, { kind: "bogus" }));
+    assert.strictEqual(payload.ok, false);
+    assert.match(String(payload.message), /list_models/);
+    assert.match(String(payload.message), /list_agents/);
+  });
+
+  test("kind=list_models returns ids and supported reasoning efforts", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      fakeCatalogProvider(),
+    );
+    const payload = parseJson(await invoke(tool, { kind: "list_models" }));
+    assert.strictEqual(payload.ok, true);
+    assert.strictEqual(payload.source, "api");
+    const models = payload.models as Array<Record<string, unknown>>;
+    assert.strictEqual(models.length, 2);
+    assert.strictEqual(models[1]?.id, "gpt-5-codex");
+    assert.ok(Array.isArray(models[1]?.supportedReasoningEfforts));
+  });
+
+  test("kind=list_agents hides file paths and subagent-only entries", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      fakeCatalogProvider(),
+    );
+    const payload = parseJson(await invoke(tool, { kind: "list_agents" }));
+    assert.strictEqual(payload.ok, true);
+    const agents = payload.agents as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      agents.map((agent) => agent.id),
+      ["agent", "custom-reviewer"],
+    );
+    assert.strictEqual(
+      agents.some((agent) => "filePath" in agent),
+      false,
+    );
+  });
+
+  test("discovery kinds reject unexpected fields", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      fakeCatalogProvider(),
+    );
+    const payload = parseJson(
+      await invoke(tool, { kind: "list_models", scope: "global" }),
+    );
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, "validation");
+  });
+
+  test("discovery kinds fail cleanly when no catalog is injected", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+    );
+    for (const kind of ["list_models", "list_agents"]) {
+      const payload = parseJson(await invoke(tool, { kind }));
+      assert.strictEqual(payload.ok, false, `${kind} should fail`);
+      assert.strictEqual(payload.reason, "internal_error");
+    }
+  });
+
+  test("discovery kinds convert catalog errors into a structured result", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      {
+        listModels: async () => {
+          throw new Error("catalog offline");
+        },
+        listAgents: async () => {
+          throw new Error("scan failed in C:/Users/someone/repo");
+        },
+      },
+    );
+    const models = parseJson(await invoke(tool, { kind: "list_models" }));
+    assert.strictEqual(models.ok, false);
+    assert.strictEqual(models.reason, "internal_error");
+    assert.match(String(models.message), /catalog offline/);
+
+    const agents = parseJson(await invoke(tool, { kind: "list_agents" }));
+    assert.strictEqual(agents.ok, false);
+    assert.strictEqual(
+      String(agents.message).includes("C:/Users/someone"),
+      false,
+      "absolute paths must be sanitized before reaching the model",
     );
   });
 });

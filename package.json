@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -339,9 +339,11 @@
                 "list",
                 "get",
                 "history",
-                "preview_cron"
+                "preview_cron",
+                "list_models",
+                "list_agents"
               ],
-              "description": "Which kind of read to perform."
+              "description": "Which kind of read to perform. Use list_models before setting 'model' on a task, and list_agents before setting 'agent'."
             },
             "scope": {
               "type": "string",
@@ -438,7 +440,22 @@
             },
             "agent": {
               "type": "string",
-              "description": "Agent to use (e.g. '@workspace', 'agent', 'ask', 'edit')."
+              "description": "Agent to use (e.g. '@workspace', 'agent', 'ask', 'edit'). Call scheduler_query with kind=list_agents to discover valid ids."
+            },
+            "model": {
+              "type": "string",
+              "description": "AI model id for this task. Use an 'id' returned by scheduler_query kind=list_models. Omit or pass an empty string to use the default model."
+            },
+            "modelReasoningEffort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "description": "Experimental reasoning effort. Only send a value listed in 'supportedReasoningEfforts' for the chosen model in scheduler_query kind=list_models; unsupported values are dropped with a warning."
             },
             "enabled": {
               "type": "boolean",
@@ -452,6 +469,29 @@
                 "continue"
               ],
               "description": "Per-task chat session override. 'default' uses the global setting."
+            },
+            "autoMode": {
+              "type": "boolean",
+              "description": "Prepend an autonomous-execution hint to the runtime prompt. Defaults to the copilotScheduler.autoModeDefault setting."
+            },
+            "jitterSeconds": {
+              "type": "number",
+              "description": "Max random delay in seconds before execution (0 = off). Spreads out runs to reduce rate-limit risk. Defaults to the copilotScheduler.jitterSeconds setting.",
+              "minimum": 0,
+              "maximum": 1800
+            },
+            "maxExecutionsPerDay": {
+              "type": "number",
+              "description": "Per-task execution cap per day (0 = unlimited).",
+              "minimum": 0
+            },
+            "allowedTimeStart": {
+              "type": "string",
+              "description": "Earliest local wall-clock time the task may run, as 'HH:mm'."
+            },
+            "allowedTimeEnd": {
+              "type": "string",
+              "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
             }
           },
           "required": [
@@ -482,6 +522,7 @@
             "updates": {
               "type": "object",
               "description": "Fields to change. Use scheduler_set_task_enabled to toggle enabled; passing enabled here returns an error.",
+              "additionalProperties": false,
               "properties": {
                 "name": {
                   "type": "string"
@@ -504,7 +545,31 @@
                   "type": "string"
                 },
                 "agent": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Agent to use. Call scheduler_query with kind=list_agents to discover valid ids."
+                },
+                "model": {
+                  "type": "string",
+                  "description": "AI model id. Use an 'id' returned by scheduler_query kind=list_models, or an empty string to go back to the default model."
+                },
+                "modelReasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ],
+                  "description": "Experimental reasoning effort. Only send a value listed in 'supportedReasoningEfforts' for the chosen model; unsupported values are dropped with a warning."
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "global",
+                    "workspace"
+                  ],
+                  "description": "Where the task lives. workspace requires an open folder."
                 },
                 "chatSession": {
                   "type": "string",
@@ -513,6 +578,29 @@
                     "new",
                     "continue"
                   ]
+                },
+                "autoMode": {
+                  "type": "boolean",
+                  "description": "Prepend an autonomous-execution hint to the runtime prompt."
+                },
+                "jitterSeconds": {
+                  "type": "number",
+                  "description": "Max random delay in seconds before execution (0 = off).",
+                  "minimum": 0,
+                  "maximum": 1800
+                },
+                "maxExecutionsPerDay": {
+                  "type": "number",
+                  "description": "Per-task execution cap per day (0 = unlimited).",
+                  "minimum": 0
+                },
+                "allowedTimeStart": {
+                  "type": "string",
+                  "description": "Earliest local wall-clock time the task may run, as 'HH:mm'."
+                },
+                "allowedTimeEnd": {
+                  "type": "string",
+                  "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
                 }
               }
             }

@@ -73,20 +73,25 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 
 In Copilot Chat agent mode, use the scheduler tools with `#` references:
 
-| Tool                          | Description                                                                                |
-| ----------------------------- | ------------------------------------------------------------------------------------------ |
-| `#scheduler_query`            | Read-only task query. Use `kind=list`, `kind=get`, `kind=history`, or `kind=preview_cron`. |
-| `#scheduler_create_task`      | Create a scheduled task.                                                                   |
-| `#scheduler_update_task`      | Update task fields. Use `#scheduler_set_task_enabled` for enable/disable changes.          |
-| `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.       |
-| `#scheduler_set_task_enabled` | Enable or disable a task.                                                                  |
+| Tool                          | Description                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `#scheduler_query`            | Read-only query. Use `kind=list`, `kind=get`, `kind=history`, `kind=preview_cron`, `kind=list_models`, or `kind=list_agents`. |
+| `#scheduler_create_task`      | Create a scheduled task, including its model, agent, and execution controls.                                                  |
+| `#scheduler_update_task`      | Update task fields, including `model`, `agent`, `scope`, and the execution controls. Use `#scheduler_set_task_enabled` for enable/disable changes. |
+| `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                          |
+| `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                     |
 
 For `kind=history`, the response includes `total`, returned `count`, `hasMore`, and newest-first `entries`. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
+
+`kind=list` returns task metadata with a short `promptPreview` and `promptLength` instead of the prompt body, because a `local` or `global` task stores a snapshot of the whole prompt file. The write tools return the same shape in their success payloads. Use `kind=get` when the full prompt is needed; a preview must never be written back to a task.
+
+`kind=list_models` returns the selectable model `id`s together with `supportedReasoningEfforts`, and `kind=list_agents` returns the selectable agent ids without exposing file paths. The model list is the same one the Copilot Scheduler view offers, so Chat can never pin a model you cannot see or change in the UI. Create/update accept `model` (plus optional `modelReasoningEffort`), `agent`, and the execution controls `autoMode`, `jitterSeconds`, `maxExecutionsPerDay`, `allowedTimeStart`, and `allowedTimeEnd`. A `model` id that is not in that list is rejected with the list of valid ids instead of silently falling back to the default model; passing an empty `model` clears the selection and returns the task to the default model. When the Language Model API is unavailable and only the built-in fallback catalog is known, the requested model is saved with a warning instead of being rejected.
 
 In agent mode, Copilot can also choose these tools from natural-language requests. Examples:
 
 - "Schedule a workspace task every weekday at 9:00 to summarize this repository."
 - "Change the daily summary task to run at 10:30."
+- "Use Claude Sonnet for the daily summary task."
 - "Pause the release reminder task until I turn it back on."
 - "Show my scheduled Copilot tasks before changing anything."
 

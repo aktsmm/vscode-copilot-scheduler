@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-08-07
+
+### Added
+
+- **Model selection from Copilot Chat**: `#scheduler_create_task` and `#scheduler_update_task` now accept `model` and `modelReasoningEffort`, so a scheduled task's AI model can be set without opening the Copilot Scheduler view.
+- **`#scheduler_query` discovery kinds**: `kind=list_models` returns the selectable model ids with their `supportedReasoningEfforts`, and `kind=list_agents` returns the selectable agents. Agent entries intentionally omit file paths. The model list is filtered exactly like the Copilot Scheduler view's model picker, so Chat cannot pin a model the user is unable to see or change in the UI.
+- **Execution controls in the write tools**: `autoMode`, `jitterSeconds`, `maxExecutionsPerDay`, `allowedTimeStart`, and `allowedTimeEnd` are now settable from Copilot Chat on create and update, and `scope` can now be changed via `#scheduler_update_task`.
+
+### Changed
+
+- `#scheduler_query` with `kind=list` no longer returns prompt bodies. Each task now carries `promptLength` and a short `promptPreview` instead, because a `local` or `global` task stores a snapshot of the entire prompt file and listing every task flooded the model context. `kind=get` still returns the full prompt, and the preview uses a separate key so a truncated body can never be written back through `#scheduler_update_task`.
+- The success payloads of `#scheduler_create_task`, `#scheduler_update_task`, and `#scheduler_set_task_enabled` drop the prompt body the same way and set `promptTextOmitted`, so enabling or renaming a task no longer echoes a whole prompt file back to the model.
+- A `model` id that does not exist in the live model catalog is now rejected with the list of valid ids instead of being saved and silently falling back to the default model at execution time. When the Language Model API is unavailable, the value is saved with a warning rather than blocked.
+- A resolved model is now persisted with its full selection (id, name, vendor, family, version) so startup healing no longer has to rediscover it, and an empty `model` explicitly clears the selection back to the default model.
+- Successful mutations can now return multiple warnings via a new `warnings` array; the existing `warning` string is kept and contains the same messages joined by newlines.
+
+### Fixed
+
+- `#scheduler_update_task` no longer silently ignores unknown fields inside `updates`; they are rejected with a validation error that names them.
+
 ## [1.2.1] - 2026-07-30
 
 ### Fixed
