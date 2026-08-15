@@ -1523,6 +1523,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const handler = source.slice(start, end);
 
     const expectedTokens = [
+      "getActivePromptFilePreview()",
       'preview.source !== "file"',
       "window.confirm(strings.confirmReplacePromptEdits",
       "promptTextInput.value = preview.prompt",
@@ -1532,6 +1533,332 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(
         sourceContainsToken(handler, token),
         `Expected token not found in latest prompt handler: ${token}`,
+      );
+    }
+  });
+
+  test("prompt file actions ignore previews for a non-selected template", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const resolverSource = extractBlockFromStartToken(
+      scriptSource,
+      "function getActivePromptFilePreview() {",
+    );
+
+    for (const token of [
+      "if (!editingTaskId) return null",
+      "getPromptFilePreview(getTaskById(editingTaskId))",
+      'selectedPath !== String(preview.promptPath || "")',
+      "return null",
+    ]) {
+      assert.ok(
+        sourceContainsToken(resolverSource, token),
+        `Expected token not found in active preview resolver: ${token}`,
+      );
+    }
+
+    const noticeSource = extractBlockFromStartToken(
+      scriptSource,
+      "function updatePromptFileNotice() {",
+    );
+    assert.ok(
+      sourceContainsToken(noticeSource, "getActivePromptFilePreview()"),
+      "Prompt file notice must resolve the preview through the selection-aware helper",
+    );
+
+    const openStart = scriptSource.indexOf(
+      'openPromptFileBtn.addEventListener("click", function () {',
+    );
+    assert.ok(openStart >= 0, "Open prompt file handler was not found");
+    const openHandler = scriptSource.slice(openStart, openStart + 600);
+    assert.ok(
+      sourceContainsToken(
+        openHandler,
+        "if (!preview || !preview.canOpenPromptFile) return",
+      ),
+      "Open prompt file must be blocked when the preview does not match the selection",
+    );
+  });
+
+  test("prompt field is read-only for file-backed prompt sources", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const noticeSource = extractBlockFromStartToken(
+      scriptSource,
+      "function updatePromptFileNotice() {",
+    );
+
+    const expectedTokens = [
+      'var isFileBackedSource = source === "local" || source === "global"',
+      "promptText.readOnly = isFileBackedSource",
+      'promptText.setAttribute("aria-readonly", "true")',
+      'promptText.removeAttribute("aria-readonly")',
+    ];
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(noticeSource, token),
+        `Expected token not found in prompt read-only flow: ${token}`,
+      );
+    }
+  });
+
+  test("editing form re-syncs the prompt field from the latest file preview", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const syncSource = extractBlockFromStartToken(
+      scriptSource,
+      "function syncEditingPromptFromPreview() {",
+    );
+
+    const expectedTokens = [
+      'source !== "local" && source !== "global"',
+      "if (templateLoadingPath) return",
+      "getActivePromptFilePreview()",
+      'preview.source !== "file"',
+      "if (promptTextInput.value !== preview.prompt)",
+      "promptTextInput.value = preview.prompt",
+      "setTemplatePromptBaseline(preview.prompt)",
+    ];
+    for (const token of expectedTokens) {
+      assert.ok(
+        sourceContainsToken(syncSource, token),
+        `Expected token not found in prompt preview sync flow: ${token}`,
+      );
+    }
+
+    assert.ok(
+      !sourceContainsToken(
+        syncSource,
+        "if (promptTextInput.value === preview.prompt) return",
+      ),
+      "Baseline must be re-anchored even when the textarea already matches the file",
+    );
+
+    assert.ok(
+      sourceContainsToken(scriptSource, "syncEditingPromptFromPreview();"),
+      "syncEditingPromptFromPreview is never called",
+    );
+  });
+
+  test("tabs, feedback banners, and cron controls expose ARIA semantics", () => {
+    const htmlSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+
+    for (const token of [
+      '<div class="tabs" role="tablist">',
+      'id="create-tab-button"',
+      'role="tab" aria-selected="true" aria-controls="create-tab"',
+      'id="list-tab-button"',
+      'role="tab" aria-selected="false" aria-controls="list-tab"',
+      'id="create-tab" class="tab-content active" role="tabpanel" aria-labelledby="create-tab-button"',
+      'id="list-tab" class="tab-content" role="tabpanel" aria-labelledby="list-tab-button"',
+      'id="form-error" class="feedback-banner feedback-banner-error" role="alert"',
+      'id="success-toast" class="feedback-banner feedback-banner-success" role="status" aria-live="polite"',
+      '<label for="cron-preset">',
+      '<label for="cron-expression">',
+    ]) {
+      assert.ok(
+        sourceContainsToken(htmlSource, token),
+        `Expected accessibility token not found in webview HTML: ${token}`,
+      );
+    }
+  });
+
+  test("switchTab syncs aria-selected and rescues focus from the hidden panel", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+
+    type StubElement = {
+      children: StubElement[];
+      classList: { add(name: string): void; remove(name: string): void };
+      setAttribute(name: string, value: string): void;
+      getAttribute(name: string): string | null;
+      contains(node: unknown): boolean;
+      focus(): void;
+      hasClass(name: string): boolean;
+    };
+
+    const state: { activeElement: StubElement | null } = {
+      activeElement: null,
+    };
+
+    const makeElement = (className = ""): StubElement => {
+      const classes = new Set(className.split(" ").filter(Boolean));
+      const attrs = new Map<string, string>();
+      const children: StubElement[] = [];
+      const element: StubElement = {
+        children,
+        classList: {
+          add: (name: string) => void classes.add(name),
+          remove: (name: string) => void classes.delete(name),
+        },
+        setAttribute: (name: string, value: string) =>
+          void attrs.set(name, value),
+        getAttribute: (name: string) => attrs.get(name) ?? null,
+        contains: (node: unknown) =>
+          node === element || children.indexOf(node as StubElement) >= 0,
+        focus: () => {
+          state.activeElement = element;
+        },
+        hasClass: (name: string) => classes.has(name),
+      };
+      return element;
+    };
+
+    const createBtn = makeElement("tab-button active");
+    const listBtn = makeElement("tab-button");
+    const createPanel = makeElement("tab-content active");
+    const listPanel = makeElement("tab-content");
+    const submitBtn = makeElement();
+    createPanel.children.push(submitBtn);
+
+    const documentStub = {
+      get activeElement() {
+        return state.activeElement;
+      },
+      querySelector(selector: string) {
+        if (selector === '.tab-button[data-tab="create"]') return createBtn;
+        if (selector === '.tab-button[data-tab="list"]') return listBtn;
+        return null;
+      },
+      querySelectorAll(selector: string) {
+        if (selector === ".tab-button") return [createBtn, listBtn];
+        if (selector === ".tab-content") return [createPanel, listPanel];
+        return [];
+      },
+      getElementById(id: string) {
+        if (id === "create-tab") return createPanel;
+        if (id === "list-tab") return listPanel;
+        return null;
+      },
+    };
+
+    const factory = new Function(
+      "document",
+      "scheduleLayoutRefresh",
+      [extractFunctionSource(source, "switchTab"), "return switchTab;"].join(
+        "\n",
+      ),
+    ) as (
+      doc: typeof documentStub,
+      refresh: () => void,
+    ) => (tabName: string) => void;
+    const switchTab = factory(documentStub, () => undefined);
+
+    submitBtn.focus();
+    switchTab("list");
+
+    assert.strictEqual(
+      state.activeElement,
+      listBtn,
+      "Focus must move to the target tab button when the focused panel is hidden",
+    );
+    assert.strictEqual(createBtn.getAttribute("aria-selected"), "false");
+    assert.strictEqual(listBtn.getAttribute("aria-selected"), "true");
+    assert.strictEqual(createPanel.hasClass("active"), false);
+    assert.strictEqual(listPanel.hasClass("active"), true);
+
+    state.activeElement = null;
+    switchTab("create");
+
+    assert.strictEqual(
+      state.activeElement,
+      null,
+      "switchTab must not steal focus when nothing inside a hidden panel was focused",
+    );
+    assert.strictEqual(createBtn.getAttribute("aria-selected"), "true");
+    assert.strictEqual(listBtn.getAttribute("aria-selected"), "false");
+  });
+
+  test("submit validation focuses and marks the offending field", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const failValidationSource = extractFunctionSource(
+      source,
+      "failValidation",
+    );
+
+    for (const token of [
+      "clearInvalidField()",
+      "showFormError(message)",
+      'fieldElement.setAttribute("aria-invalid", "true")',
+      'fieldElement.setAttribute("aria-describedby", "form-error")',
+      "fieldElement.focus()",
+    ]) {
+      assert.ok(
+        sourceContainsToken(failValidationSource, token),
+        `Expected token not found in failValidation: ${token}`,
+      );
+    }
+
+    const submitSource = extractBlockFromStartToken(
+      source,
+      'taskForm.addEventListener("submit", function (e) {',
+    );
+    for (const token of [
+      "failValidation(strings.taskNameRequired",
+      "failValidation(strings.templateRequired",
+      "failValidation(strings.promptRequired",
+      "cronExpression,",
+      "allowedTimeStartInput,",
+      "allowedTimeEndInput,",
+      "clearInvalidField();",
+    ]) {
+      assert.ok(
+        sourceContainsToken(submitSource, token),
+        `Expected token not found in submit validation flow: ${token}`,
+      );
+    }
+
+    assert.ok(
+      !sourceContainsToken(
+        submitSource,
+        "formErr.textContent = strings.taskNameRequired",
+      ),
+      "Validation errors must go through failValidation, not raw banner writes",
+    );
+  });
+
+  test("hiding a focusable container rescues keyboard focus", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const rescueSource = extractFunctionSource(source, "rescueFocusFrom");
+
+    for (const token of [
+      "var active = document.activeElement",
+      "!container.contains(active)",
+      "fallbackElement.focus()",
+      "active.blur()",
+    ]) {
+      assert.ok(
+        sourceContainsToken(rescueSource, token),
+        `Expected token not found in rescueFocusFrom: ${token}`,
+      );
+    }
+
+    for (const callSite of [
+      "rescueFocusFrom( templateSelectGroup,",
+      "rescueFocusFrom(el, friendlyFrequency)",
+      "rescueFocusFrom(modelVariantGroup, modelSelect)",
+      "rescueFocusFrom(templateSelectGroup, sourceElement)",
+    ]) {
+      assert.ok(
+        sourceContainsToken(source, callSite),
+        `Expected focus rescue call site not found: ${callSite}`,
       );
     }
   });

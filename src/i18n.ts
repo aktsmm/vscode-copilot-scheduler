@@ -103,8 +103,8 @@ export const messages = {
     t("File not readable", "ファイルを読み込めません"),
   promptFileExecutionNote: () =>
     t(
-      "This field shows the saved snapshot. At run time, an open editor buffer is used first; otherwise the latest saved prompt file is loaded.",
-      "この欄は保存済みスナップショットです。実行時は開いているエディターの内容を優先し、なければプロンプトファイルの最新の保存内容を読み込みます。",
+      "This field mirrors the prompt file and is read-only. At run time, an open editor buffer is used first; otherwise the latest saved prompt file is loaded.",
+      "この欄はプロンプトファイルの内容を表示する読み取り専用です。実行時は開いているエディターの内容を優先し、なければプロンプトファイルの最新の保存内容を読み込みます。",
     ),
   promptFileWillBecomeInline: () =>
     t(
@@ -113,8 +113,8 @@ export const messages = {
     ),
   promptFileNotLoadedNote: () =>
     t(
-      "Load a prompt file before saving this task.",
-      "このタスクを保存する前にプロンプトファイルを読み込んでください。",
+      "Pick the prompt file above to load its content before saving this task.",
+      "保存する前に、上のプロンプトファイル選択でファイルを選び直して内容を読み込んでください。",
     ),
   promptFileStaleHint: () =>
     t(

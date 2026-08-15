@@ -213,7 +213,7 @@ async function readAgentMetadata(
     };
   } catch (error) {
     logDebug(
-      `[CopilotScheduler] Failed to read agent frontmatter from ${filePath}: ${toSafeErrorDetails(error)}`,
+      `[CopilotScheduler] Failed to read agent frontmatter from ${path.basename(filePath)}: ${toSafeErrorDetails(error)}`,
     );
     return { invocationName: undefined, userInvocable: true };
   }

@@ -1590,6 +1590,12 @@ export class SchedulerWebview {
       min-height: 120px;
       resize: vertical;
     }
+
+    textarea[readonly] {
+      cursor: default;
+      opacity: 0.85;
+      border-style: dashed;
+    }
     
     input:focus,
     textarea:focus,
@@ -2061,12 +2067,12 @@ export class SchedulerWebview {
 </head>
 <body>
   <div class="page-shell">
-    <div class="tabs">
-      <button type="button" class="tab-button active" data-tab="create">${escapeHtml(strings.tabCreate)}</button>
-      <button type="button" class="tab-button" data-tab="list">${escapeHtml(strings.tabList)}</button>
+    <div class="tabs" role="tablist">
+      <button type="button" id="create-tab-button" class="tab-button active" data-tab="create" role="tab" aria-selected="true" aria-controls="create-tab">${escapeHtml(strings.tabCreate)}</button>
+      <button type="button" id="list-tab-button" class="tab-button" data-tab="list" role="tab" aria-selected="false" aria-controls="list-tab">${escapeHtml(strings.tabList)}</button>
     </div>
     
-    <div id="create-tab" class="tab-content active">
+    <div id="create-tab" class="tab-content active" role="tabpanel" aria-labelledby="create-tab-button" tabindex="-1">
       <div class="page-header">
         <div class="page-title-block">
           <h1>${escapeHtml(strings.tabCreate)}</h1>
@@ -2074,7 +2080,7 @@ export class SchedulerWebview {
         </div>
       </div>
       <form id="task-form" class="form-layout">
-        <div id="form-error" class="feedback-banner feedback-banner-error" style="display:none;"></div>
+        <div id="form-error" class="feedback-banner feedback-banner-error" role="alert" aria-atomic="true" style="display:none;"></div>
         <input type="hidden" id="edit-task-id" value="">
 
         <section class="surface form-section">
@@ -2138,13 +2144,14 @@ export class SchedulerWebview {
           </div>
           <div class="form-grid">
             <div class="form-group col-12">
-              <label>${escapeHtml(strings.labelSchedule)}</label>
+              <label for="cron-preset">${escapeHtml(strings.labelPreset)}</label>
               <div class="preset-select">
                 <select id="cron-preset">
                   <option value="">${escapeHtml(strings.labelCustom)}</option>
                   ${allPresets.map((p) => `<option value="${escapeHtmlAttr(p.expression)}">${escapeHtml(p.name)}</option>`).join("")}
                 </select>
               </div>
+              <label for="cron-expression">${escapeHtml(strings.labelCronExpression)}</label>
               <textarea id="cron-expression" placeholder="${escapeHtmlAttr(strings.placeholderCron)}" required rows="2"></textarea>
               <div class="cron-preview">
                 <strong>${escapeHtml(strings.labelFriendlyPreview)}:</strong>
@@ -2335,8 +2342,8 @@ export class SchedulerWebview {
       </form>
     </div>
     
-    <div id="list-tab" class="tab-content">
-      <div id="success-toast" class="feedback-banner feedback-banner-success" style="display:none;"></div>
+    <div id="list-tab" class="tab-content" role="tabpanel" aria-labelledby="list-tab-button" tabindex="-1">
+      <div id="success-toast" class="feedback-banner feedback-banner-success" role="status" aria-live="polite" aria-atomic="true" style="display:none;"></div>
       <div class="page-header">
         <div class="page-title-block">
           <h1>${escapeHtml(strings.tabList)}</h1>

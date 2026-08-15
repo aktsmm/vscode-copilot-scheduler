@@ -121,12 +121,3 @@ export function formatMutationFailure(
   };
   return buildJsonTextResult(payload);
 }
-
-/**
- * Return true if the given cron expression parses through the ScheduleManager.
- * Callers should invoke this before optimistic UI text so a bad expression is
- * surfaced with a helpful message rather than a generic 500-style error.
- */
-export function safeString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}

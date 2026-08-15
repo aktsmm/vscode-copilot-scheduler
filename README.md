@@ -73,13 +73,13 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 
 In Copilot Chat agent mode, use the scheduler tools with `#` references:
 
-| Tool                          | Description                                                                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `#scheduler_query`            | Read-only query. Use `kind=list`, `kind=get`, `kind=history`, `kind=preview_cron`, `kind=list_models`, or `kind=list_agents`. |
-| `#scheduler_create_task`      | Create a scheduled task, including its model, agent, and execution controls.                                                  |
+| Tool                          | Description                                                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `#scheduler_query`            | Read-only query. Use `kind=list`, `kind=get`, `kind=history`, `kind=preview_cron`, `kind=list_models`, or `kind=list_agents`.                      |
+| `#scheduler_create_task`      | Create a scheduled task, including its model, agent, and execution controls.                                                                       |
 | `#scheduler_update_task`      | Update task fields, including `model`, `agent`, `scope`, and the execution controls. Use `#scheduler_set_task_enabled` for enable/disable changes. |
-| `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                          |
-| `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                     |
+| `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                                               |
+| `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                                          |
 
 For `kind=history`, the response includes `total`, returned `count`, `hasMore`, and newest-first `entries`. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
 
@@ -169,9 +169,9 @@ Store prompt templates for reuse:
 
 - **Local**: `.github/prompts/*.md` in your workspace
 - **Global**: VS Code user prompts folder (or the folder set in `copilotScheduler.globalPromptsPath`)
-- The edit form shows the saved snapshot and states whether saving manual edits will convert the task to **Inline**. For file-backed tasks, use **Load latest saved file** to replace the form text explicitly or **Open prompt file** to edit the source file.
+- The edit form keeps the prompt field **read-only** while `Local`/`Global` is selected, and refreshes it with the current prompt file content when you reopen the form or when the file changes. Use **Open prompt file** to edit the source file. Switch the source to **Inline** if you want to hand-edit the text on the task itself.
 - The panel preview reads saved disk content only. At execution time, an open editor buffer is preferred; otherwise the latest saved file is read.
-- If you edit prompt text while `Local/Global` template source is selected (after template load completes), the task is automatically saved as **Inline** to keep execution consistent with the edited content.
+- A task only becomes **Inline** when you select the Inline source. Selecting a template keeps the task following that file.
 
 Global custom agents are auto-discovered from the VS Code user prompts/customization folder and `~/.copilot/agents` when `copilotScheduler.globalAgentsPath` is empty.
 

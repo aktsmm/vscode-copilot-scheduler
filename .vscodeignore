@@ -3,6 +3,7 @@
 src/**
 .gitignore
 .yarnrc
+.eslintrc.cjs
 vsc-extension-quickstart.md
 **/tsconfig.json
 **/.eslintrc.json
@@ -17,10 +18,12 @@ node_modules/**
 test-run-*.txt
 *-output.txt
 tmp_*
+tmp-*
 FULL_SPECIFICATION.md
 AGENTS.md
 DASHBOARD.md
 .github/**
+.orchestrator/**
 .playwright-mcp/**
 
 # Dev-only artifacts

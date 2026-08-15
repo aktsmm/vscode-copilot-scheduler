@@ -5,6 +5,27 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-15
+
+### Added
+
+- **Webview accessibility**: the panel tabs are now a real `tablist`/`tab`/`tabpanel` structure with `aria-selected`, form errors are announced through `role="alert"`, success toasts through `role="status"`, and the cron preset and cron expression controls have associated labels.
+
+### Changed
+
+- **File-backed prompts are no longer hand-editable in the panel**: when the prompt source is `Local` or `Global`, the edit form's prompt field is read-only and stays synchronized with the current prompt file. A task now becomes `Inline` only when the user explicitly selects the Inline source, instead of silently converting after a manual edit.
+
+### Fixed
+
+- Prompt-file metadata, **Load latest saved file**, and **Open prompt file** no longer describe or act on the task's previously stored prompt file while a different template is selected in the edit form.
+- Form validation now marks the offending field with `aria-invalid`, links it to the error banner, and moves focus to it instead of only showing a detached banner.
+- Switching panel tabs no longer leaves keyboard focus inside the panel that was just hidden.
+- Agent frontmatter read failures no longer log the absolute prompt-file path.
+
+### Internal
+
+- The VSIX content gate now asserts that required runtime entries are present, so it can no longer pass on an empty or truncated package listing, and it rejects additional dev-only folders.
+
 ## [1.3.0] - 2026-08-07
 
 ### Added

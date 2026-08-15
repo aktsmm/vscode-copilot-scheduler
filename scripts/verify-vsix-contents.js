@@ -9,10 +9,28 @@ const FORBIDDEN_PATTERNS = [
   /^extension\/output_sessions\//,
   /^extension\/session\//,
   /^extension\/\.github\//,
+  /^extension\/\.vscode\//,
+  /^extension\/\.vscode-test\//,
+  /^extension\/\.orchestrator\//,
+  /^extension\/\.playwright-mcp\//,
   /^extension\/scripts\//,
   /^extension\/src\//,
+  /^extension\/tmp[-_]/,
+  /^extension\/\.eslintrc\./,
   /^extension\/.*\.vsix$/,
   /^extension\/.*\.map$/,
+];
+
+// A forbidden-only check passes on an empty listing, so require the runtime files too.
+// vsce normalizes README/LICENSE casing and appends .txt to an extensionless LICENSE.
+const REQUIRED_ENTRIES = [
+  "extension/package.json",
+  "extension/package.nls.json",
+  "extension/package.nls.ja.json",
+  "extension/out/extension.js",
+  "extension/media/schedulerWebview.js",
+  "extension/README.md",
+  "extension/LICENSE.txt",
 ];
 
 function readUInt16(buffer, offset) {
@@ -64,20 +82,37 @@ function listZipEntries(filePath) {
 function verifyVsix(filePath) {
   const resolvedPath = path.resolve(filePath);
   const entries = listZipEntries(resolvedPath);
+  const lowerEntries = new Set(entries.map((entry) => entry.toLowerCase()));
+  let ok = true;
+
+  const missingEntries = REQUIRED_ENTRIES.filter(
+    (required) => !lowerEntries.has(required.toLowerCase()),
+  );
+  if (missingEntries.length > 0) {
+    console.error(`Required entries missing from ${resolvedPath}:`);
+    for (const entry of missingEntries) {
+      console.error(`- ${entry}`);
+    }
+    ok = false;
+  }
+
   const forbiddenEntries = entries.filter((entry) =>
     FORBIDDEN_PATTERNS.some((pattern) => pattern.test(entry.toLowerCase())),
   );
-
   if (forbiddenEntries.length > 0) {
     console.error(`Forbidden entries found in ${resolvedPath}:`);
     for (const entry of forbiddenEntries) {
       console.error(`- ${entry}`);
     }
+    ok = false;
+  }
+
+  if (!ok) {
     return false;
   }
 
   console.log(
-    `Verified ${path.basename(resolvedPath)}: ${entries.length} entries, no dev-only artifacts found.`,
+    `Verified ${path.basename(resolvedPath)}: ${entries.length} entries, ${REQUIRED_ENTRIES.length} required present, no dev-only artifacts found.`,
   );
   return true;
 }

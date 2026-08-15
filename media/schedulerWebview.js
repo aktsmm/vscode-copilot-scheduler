@@ -5,6 +5,7 @@
   var MAX_SANITIZE_INPUT_CHARS = 16000;
   var REDACTED_PLACEHOLDER = "[REDACTED]";
   var formErrorHideTimer = null;
+  var invalidFieldElement = null;
 
   // Initial data (JSON from inline script tag)
   var initialData = {};
@@ -183,6 +184,38 @@
     }
   }
 
+  function clearInvalidField() {
+    if (!invalidFieldElement) return;
+    invalidFieldElement.removeAttribute("aria-invalid");
+    invalidFieldElement.removeAttribute("aria-describedby");
+    invalidFieldElement = null;
+  }
+
+  // Hiding a container that owns focus strands keyboard users, so move focus first.
+  function rescueFocusFrom(container, fallbackElement) {
+    if (!container || !container.contains) return;
+    var active = document.activeElement;
+    if (!active || active === container || !container.contains(active)) return;
+    if (fallbackElement && typeof fallbackElement.focus === "function") {
+      fallbackElement.focus();
+    } else if (active.blur) {
+      active.blur();
+    }
+  }
+
+  // Point the user at the field that failed instead of only showing a banner.
+  function failValidation(message, fieldElement) {
+    clearInvalidField();
+    showFormError(message);
+    if (!fieldElement) return;
+    invalidFieldElement = fieldElement;
+    fieldElement.setAttribute("aria-invalid", "true");
+    fieldElement.setAttribute("aria-describedby", "form-error");
+    if (typeof fieldElement.focus === "function") {
+      fieldElement.focus();
+    }
+  }
+
   function clearPendingSubmitState() {
     pendingSubmit = false;
     if (submitBtn) submitBtn.disabled = !!templateLoadingPath;
@@ -227,6 +260,44 @@
       String(task.promptPath || "").trim()
       ? preview
       : null;
+  }
+
+  // A preview describes the task's stored prompt path, so it must be ignored
+  // while the form points at a different template.
+  function getActivePromptFilePreview() {
+    if (!editingTaskId) return null;
+    var preview = getPromptFilePreview(getTaskById(editingTaskId));
+    if (!preview) return null;
+    var selectedPath = templateSelect ? String(templateSelect.value || "") : "";
+    if (selectedPath && selectedPath !== String(preview.promptPath || "")) {
+      return null;
+    }
+    return preview;
+  }
+
+  function syncEditingPromptFromPreview() {
+    if (!editingTaskId || !promptTextInput) return;
+    var sourceInput = document.querySelector(
+      'input[name="prompt-source"]:checked',
+    );
+    var source = sourceInput ? String(sourceInput.value || "inline") : "inline";
+    if (source !== "local" && source !== "global") return;
+    if (templateLoadingPath) return;
+
+    var preview = getActivePromptFilePreview();
+    if (
+      !preview ||
+      preview.source !== "file" ||
+      typeof preview.prompt !== "string"
+    ) {
+      return;
+    }
+
+    if (promptTextInput.value !== preview.prompt) {
+      promptTextInput.value = preview.prompt;
+    }
+    // Always re-anchor the baseline: it may have been cleared by an error toast.
+    setTemplatePromptBaseline(preview.prompt);
   }
 
   function buildPromptFileMeta(preview) {
@@ -277,6 +348,15 @@
     }
 
     var source = String(sourceInput.value || "inline");
+    // File-backed prompts stay read-only so the task keeps following the file.
+    var isFileBackedSource = source === "local" || source === "global";
+    promptText.readOnly = isFileBackedSource;
+    if (isFileBackedSource) {
+      promptText.setAttribute("aria-readonly", "true");
+    } else {
+      promptText.removeAttribute("aria-readonly");
+    }
+
     if (source === "inline") {
       messageElement.textContent = "";
       metaElement.textContent = "";
@@ -305,8 +385,7 @@
       isWarning = true;
     }
 
-    var editingTask = editingTaskId ? getTaskById(editingTaskId) : null;
-    var preview = getPromptFilePreview(editingTask);
+    var preview = getActivePromptFilePreview();
     var meta = buildPromptFileMeta(preview);
     var canLoadLatest =
       !!preview &&
@@ -861,6 +940,7 @@
     modelVariantSelect.innerHTML =
       '<option value="">' + escapeHtml(placeholderText) + "</option>";
     if (modelVariantGroup) {
+      rescueFocusFrom(modelVariantGroup, modelSelect);
       modelVariantGroup.style.display = "none";
     }
     scheduleLayoutRefresh();
@@ -1147,18 +1227,32 @@
 
   // Tab switching function
   function switchTab(tabName) {
-    document.querySelectorAll(".tab-button").forEach(function (b) {
-      b.classList.remove("active");
-    });
-    document.querySelectorAll(".tab-content").forEach(function (c) {
-      c.classList.remove("active");
-    });
     var targetBtn = document.querySelector(
       '.tab-button[data-tab="' + tabName + '"]',
     );
     var targetContent = document.getElementById(tabName + "-tab");
-    if (targetBtn) targetBtn.classList.add("active");
+    var active = document.activeElement;
+    var focusWasInHiddenPanel = false;
+
+    document.querySelectorAll(".tab-button").forEach(function (b) {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
+    document.querySelectorAll(".tab-content").forEach(function (c) {
+      if (c !== targetContent && active && c.contains(active)) {
+        focusWasInHiddenPanel = true;
+      }
+      c.classList.remove("active");
+    });
+    if (targetBtn) {
+      targetBtn.classList.add("active");
+      targetBtn.setAttribute("aria-selected", "true");
+    }
     if (targetContent) targetContent.classList.add("active");
+    // Focus must not stay inside a panel that just became display:none.
+    if (focusWasInHiddenPanel && targetBtn) {
+      targetBtn.focus();
+    }
     scheduleLayoutRefresh();
   }
 
@@ -1263,8 +1357,7 @@
 
   if (loadLatestPromptBtn) {
     loadLatestPromptBtn.addEventListener("click", function () {
-      var task = editingTaskId ? getTaskById(editingTaskId) : null;
-      var preview = getPromptFilePreview(task);
+      var preview = getActivePromptFilePreview();
       if (
         !promptTextInput ||
         !preview ||
@@ -1290,6 +1383,8 @@
   if (openPromptFileBtn) {
     openPromptFileBtn.addEventListener("click", function () {
       if (!editingTaskId) return;
+      var preview = getActivePromptFilePreview();
+      if (!preview || !preview.canOpenPromptFile) return;
       vscode.postMessage({
         type: "openPromptFile",
         taskId: editingTaskId,
@@ -1507,19 +1602,13 @@
 
       var nameValue = (taskData.name || "").trim();
       if (!nameValue) {
-        if (formErr) {
-          formErr.textContent = strings.taskNameRequired || "";
-          formErr.style.display = "block";
-        }
+        failValidation(strings.taskNameRequired || "", taskNameEl);
         return;
       }
 
       var templateValue = (taskData.promptPath || "").trim();
       if (promptSourceValue !== "inline" && !templateValue) {
-        if (formErr) {
-          formErr.textContent = strings.templateRequired || "";
-          formErr.style.display = "block";
-        }
+        failValidation(strings.templateRequired || "", templateSelect);
         return;
       }
 
@@ -1528,31 +1617,24 @@
         templateValue &&
         templateLoadingPath === templateValue
       ) {
-        if (formErr) {
-          formErr.textContent =
-            strings.templateLoadingInProgress ||
-            strings.templateLoadError ||
-            "";
-          formErr.style.display = "block";
-        }
+        failValidation(
+          strings.templateLoadingInProgress || strings.templateLoadError || "",
+          templateSelect,
+        );
         return;
       }
 
       if (promptSourceValue !== "inline" && templatePromptBaseline === null) {
-        if (formErr) {
-          formErr.textContent =
-            strings.promptFileNotLoadedNote || strings.templateLoadError || "";
-          formErr.style.display = "block";
-        }
+        failValidation(
+          strings.promptFileNotLoadedNote || strings.templateLoadError || "",
+          templateSelect,
+        );
         return;
       }
 
       var promptValue = (taskData.prompt || "").trim();
       if (!promptValue) {
-        if (formErr) {
-          formErr.textContent = strings.promptRequired || "";
-          formErr.style.display = "block";
-        }
+        failValidation(strings.promptRequired || "", promptTextEl);
         return;
       }
 
@@ -1567,13 +1649,10 @@
 
       var cronValue = (taskData.cronExpression || "").trim();
       if (!cronValue) {
-        if (formErr) {
-          formErr.textContent =
-            strings.cronExpressionRequired ||
-            strings.invalidCronExpression ||
-            "";
-          formErr.style.display = "block";
-        }
+        failValidation(
+          strings.cronExpressionRequired || strings.invalidCronExpression || "",
+          cronExpression,
+        );
         return;
       }
 
@@ -1589,20 +1668,21 @@
         taskData.allowedTimeStart &&
         !isValidHHmm(taskData.allowedTimeStart)
       ) {
-        if (formErr) {
-          formErr.textContent = strings.invalidTimeWindowFormat || "";
-          formErr.style.display = "block";
-        }
+        failValidation(
+          strings.invalidTimeWindowFormat || "",
+          allowedTimeStartInput,
+        );
         return;
       }
       if (taskData.allowedTimeEnd && !isValidHHmm(taskData.allowedTimeEnd)) {
-        if (formErr) {
-          formErr.textContent = strings.invalidTimeWindowFormat || "";
-          formErr.style.display = "block";
-        }
+        failValidation(
+          strings.invalidTimeWindowFormat || "",
+          allowedTimeEndInput,
+        );
         return;
       }
 
+      clearInvalidField();
       pendingSubmit = true;
       if (submitBtn) submitBtn.disabled = true;
 
@@ -2504,6 +2584,7 @@
         if (el.style) el.style.display = "block";
       } else {
         if (el.classList) el.classList.remove("visible");
+        rescueFocusFrom(el, friendlyFrequency);
         if (el.style) el.style.display = "none";
       }
     }
@@ -2585,6 +2666,7 @@
   function resetForm() {
     if (taskForm) taskForm.reset();
     setEditingMode(null);
+    clearInvalidField();
     setTemplatePromptBaseline(null);
     clearTemplateLoading();
     pendingAgentValue = "";
@@ -2718,7 +2800,13 @@
     if (effectiveSource === "inline") {
       setTemplatePromptBaseline(null);
       clearTemplateLoading();
-      if (templateSelectGroup) templateSelectGroup.style.display = "none";
+      if (templateSelectGroup) {
+        rescueFocusFrom(
+          templateSelectGroup,
+          document.querySelector('input[name="prompt-source"]:checked'),
+        );
+        templateSelectGroup.style.display = "none";
+      }
       if (promptGroup) promptGroup.style.display = "block";
       if (!keepSelection && templateSelect) {
         templateSelect.value = "";
@@ -3029,6 +3117,7 @@
               promptFilePreviews[preview.taskId] = preview;
             });
             renderTaskList(tasks);
+            syncEditingPromptFromPreview();
             updatePromptFileNotice();
           }
           break;
@@ -3122,8 +3211,10 @@
               if (templateSelectGroup)
                 templateSelectGroup.style.display = "block";
             } else {
-              if (templateSelectGroup)
+              if (templateSelectGroup) {
+                rescueFocusFrom(templateSelectGroup, sourceElement);
                 templateSelectGroup.style.display = "none";
+              }
             }
           }
           break;
