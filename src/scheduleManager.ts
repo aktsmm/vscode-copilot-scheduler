@@ -200,6 +200,13 @@ function applyModelSelectionToTask(
   return true;
 }
 
+/** A due occurrence reserved on disk before it is executed. */
+interface TaskRunClaim {
+  taskId: string;
+  dueAt: Date;
+  nextRun: Date | undefined;
+}
+
 /**
  * Manages scheduled tasks including CRUD operations, cron parsing, and persistence
  */
@@ -230,6 +237,8 @@ export class ScheduleManager {
   private fileWriteQueue: Promise<void> = Promise.resolve();
 
   private static readonly FIRST_RUN_DELAY_MINUTES = 3;
+
+  private static readonly RUN_CLAIM_MAX_ATTEMPTS = 3;
 
   private static millisecondsUntilNextMinute(now: Date): number {
     const elapsedMsInMinute = now.getSeconds() * 1000 + now.getMilliseconds();
@@ -764,6 +773,9 @@ export class ScheduleManager {
       if (task.nextRun !== undefined) {
         task.nextRun = new Date(task.nextRun);
       }
+      if (task.lastFiredDueAt !== undefined) {
+        task.lastFiredDueAt = new Date(task.lastFiredDueAt);
+      }
 
       // Recovery: avoid keeping Invalid Date objects (would break JSON serialization).
       // When dates are corrupted/missing, heal them and persist once.
@@ -782,6 +794,10 @@ export class ScheduleManager {
       }
       if (task.nextRun && Number.isNaN(task.nextRun.getTime())) {
         task.nextRun = undefined;
+        needsSave = true;
+      }
+      if (task.lastFiredDueAt && Number.isNaN(task.lastFiredDueAt.getTime())) {
+        task.lastFiredDueAt = undefined;
         needsSave = true;
       }
 
@@ -1589,6 +1605,11 @@ export class ScheduleManager {
       }
     }
 
+    // A rescheduled task must not inherit the previous schedule's duplicate-run guard.
+    if (cronChanged || updates.runFirstInOneMinute) {
+      task.lastFiredDueAt = undefined;
+    }
+
     task.updatedAt = now;
 
     await this.saveTasks();
@@ -1865,7 +1886,7 @@ export class ScheduleManager {
 
     let needsSave = false;
     let executedCount = 0;
-    const dueExecutions: Array<Promise<void>> = [];
+    const claims: TaskRunClaim[] = [];
 
     for (const task of this.tasks.values()) {
       if (!task.enabled || !task.nextRun) {
@@ -1888,6 +1909,21 @@ export class ScheduleManager {
 
       // Check if due
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
+        // Another window may have already run this occurrence and rolled our
+        // in-memory state back, so never fire the same due time twice.
+        if (
+          task.lastFiredDueAt &&
+          !Number.isNaN(task.lastFiredDueAt.getTime()) &&
+          nextRunMinute.getTime() <= task.lastFiredDueAt.getTime()
+        ) {
+          logDebug(
+            `[CopilotScheduler] Due time already executed, skipping duplicate run: ${task.name}`,
+          );
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          needsSave = true;
+          continue;
+        }
+
         if (
           !isNowWithinAllowedTimeWindow(
             now,
@@ -1947,64 +1983,42 @@ export class ScheduleManager {
           continue;
         }
 
-        dueExecutions.push(
-          (async () => {
-            try {
-              const maxJitterSeconds =
-                task.jitterSeconds ?? defaultJitterSeconds;
-              await this.applyJitter(maxJitterSeconds);
-
-              const postJitterNow = new Date();
-              if (
-                !isNowWithinAllowedTimeWindow(
-                  postJitterNow,
-                  task.allowedTimeStart,
-                  task.allowedTimeEnd,
-                )
-              ) {
-                logDebug(
-                  `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
-                );
-                task.nextRun = this.getNextRunForTask(
-                  task.cronExpression,
-                  postJitterNow,
-                );
-                return;
-              }
-
-              if (this.onExecuteCallback) {
-                try {
-                  await this.onExecuteCallback(task);
-                  const executedAt = new Date();
-                  this.incrementDailyExecCountInMemory(executedAt);
-                  this.incrementTaskDailyExecCountInMemory(task.id, executedAt);
-                  executedCount++;
-                  task.lastRun = executedAt;
-                } catch (error) {
-                  const details = toSafeErrorDetails(error);
-                  logError("[CopilotScheduler] Task execution error:", {
-                    taskId: task.id,
-                    taskName: task.name,
-                    error: details,
-                  });
-                }
-              }
-
-              task.nextRun = this.getNextRunForTask(
-                task.cronExpression,
-                new Date(),
-              );
-            } finally {
-              this.finishTaskRun(task.id);
-            }
-          })(),
-        );
+        claims.push({
+          taskId: task.id,
+          dueAt: nextRunMinute,
+          nextRun: this.getNextRunForTask(task.cronExpression, now),
+        });
         needsSave = true;
       }
     }
 
-    if (dueExecutions.length > 0) {
-      await Promise.allSettled(dueExecutions);
+    if (claims.length > 0) {
+      // Reserve the occurrence on disk first: a conflicting save can roll the
+      // in-memory schedule back, and an unclaimed run would fire again next tick.
+      if (await this.persistRunClaims(claims)) {
+        needsSave = false;
+        await Promise.allSettled(
+          claims.map((claim) =>
+            this.executeClaimedTask(claim, defaultJitterSeconds).then(
+              (executed) => {
+                if (executed) {
+                  executedCount++;
+                  needsSave = true;
+                }
+              },
+            ),
+          ),
+        );
+      } else {
+        logDebug(
+          "[CopilotScheduler] Could not claim due tasks, retrying on the next tick.",
+        );
+        for (const claim of claims) {
+          this.finishTaskRun(claim.taskId);
+        }
+        // Persisting is unavailable right now, so skip the trailing save too.
+        return;
+      }
     }
 
     // Persist once per tick to reduce I/O overhead.
@@ -2021,6 +2035,131 @@ export class ScheduleManager {
 
     if (needsSave) {
       await this.saveTasks();
+    }
+  }
+
+  /**
+   * Persist the due occurrences before running them.
+   * Returns false when the claim could not be stored, leaving the schedule untouched
+   * so the next tick can retry.
+   */
+  private async persistRunClaims(claims: TaskRunClaim[]): Promise<boolean> {
+    const rollback = new Map<
+      string,
+      { nextRun: Date | undefined; lastFiredDueAt: Date | undefined }
+    >();
+    for (const claim of claims) {
+      const task = this.tasks.get(claim.taskId);
+      if (task) {
+        rollback.set(claim.taskId, {
+          nextRun: task.nextRun,
+          lastFiredDueAt: task.lastFiredDueAt,
+        });
+      }
+    }
+
+    for (
+      let attempt = 1;
+      attempt <= ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS;
+      attempt++
+    ) {
+      let applied = 0;
+      for (const claim of claims) {
+        // A conflicting save reloads the store, so re-resolve tasks on every attempt.
+        const task = this.tasks.get(claim.taskId);
+        if (!task) {
+          continue;
+        }
+        task.lastFiredDueAt = claim.dueAt;
+        task.nextRun = claim.nextRun;
+        applied++;
+      }
+      if (applied === 0) {
+        break;
+      }
+
+      try {
+        await this.saveTasks();
+        return true;
+      } catch (error) {
+        logDebug(
+          `[CopilotScheduler] Failed to claim due tasks (attempt ${attempt}/${ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS}):`,
+          toSafeErrorDetails(error),
+        );
+      }
+    }
+
+    for (const [taskId, previous] of rollback) {
+      const task = this.tasks.get(taskId);
+      if (!task) {
+        continue;
+      }
+      task.nextRun = previous.nextRun;
+      task.lastFiredDueAt = previous.lastFiredDueAt;
+    }
+    return false;
+  }
+
+  /**
+   * Run a claimed occurrence. nextRun is already advanced by the claim,
+   * so this only reports whether the task actually executed.
+   */
+  private async executeClaimedTask(
+    claim: TaskRunClaim,
+    defaultJitterSeconds: number,
+  ): Promise<boolean> {
+    try {
+      const claimedTask = this.tasks.get(claim.taskId);
+      if (!claimedTask) {
+        return false;
+      }
+
+      await this.applyJitter(claimedTask.jitterSeconds ?? defaultJitterSeconds);
+
+      // Re-resolve: a conflicting save may have replaced the task during jitter.
+      const task = this.tasks.get(claim.taskId);
+      if (!task) {
+        return false;
+      }
+
+      if (
+        !isNowWithinAllowedTimeWindow(
+          new Date(),
+          task.allowedTimeStart,
+          task.allowedTimeEnd,
+        )
+      ) {
+        logDebug(
+          `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
+        );
+        return false;
+      }
+
+      if (!this.onExecuteCallback) {
+        return false;
+      }
+
+      try {
+        await this.onExecuteCallback(task);
+      } catch (error) {
+        logError("[CopilotScheduler] Task execution error:", {
+          taskId: task.id,
+          taskName: task.name,
+          error: toSafeErrorDetails(error),
+        });
+        return false;
+      }
+
+      const executedAt = new Date();
+      this.incrementDailyExecCountInMemory(executedAt);
+      this.incrementTaskDailyExecCountInMemory(task.id, executedAt);
+      const latestTask = this.tasks.get(claim.taskId);
+      if (latestTask) {
+        latestTask.lastRun = executedAt;
+      }
+      return true;
+    } finally {
+      this.finishTaskRun(claim.taskId);
     }
   }
 

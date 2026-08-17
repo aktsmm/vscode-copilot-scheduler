@@ -15,6 +15,16 @@ function normalizePathForAssertion(p: string): string {
   return process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
 }
 
+function truncateToMinute(date: Date): Date {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+  );
+}
+
 class MockMemento implements vscode.Memento {
   private readonly store = new Map<string, unknown>();
 
@@ -2266,6 +2276,187 @@ suite("ScheduleManager RunNow Tests", () => {
       release();
       const manualResult = await manualRun;
       assert.strictEqual(manualResult.ok, true);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks persists the run claim before executing", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "claim-before-execute",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      task.nextRun = dueAt;
+
+      let persistedAtExecution:
+        | { lastFiredDueAt?: string; nextRun?: string }
+        | undefined;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        const stored = JSON.parse(
+          fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+        ) as Array<{
+          id: string;
+          lastFiredDueAt?: string;
+          nextRun?: string;
+        }>;
+        persistedAtExecution = stored.find((entry) => entry.id === task.id);
+      };
+
+      await (
+        manager as unknown as {
+          checkAndExecuteTasks?: () => Promise<void>;
+        }
+      ).checkAndExecuteTasks?.();
+
+      assert.ok(
+        persistedAtExecution,
+        "task should already be persisted when execution starts",
+      );
+      assert.strictEqual(
+        new Date(persistedAtExecution?.lastFiredDueAt ?? 0).getTime(),
+        dueAt.getTime(),
+      );
+      assert.ok(
+        new Date(persistedAtExecution?.nextRun ?? 0).getTime() >
+          dueAt.getTime(),
+        "nextRun should be advanced before execution",
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks does not re-run a due time that was already claimed", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "duplicate-run-guard",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      let executions = 0;
+      (
+        manager as unknown as {
+          onExecuteCallback?: (task: unknown) => Promise<void>;
+        }
+      ).onExecuteCallback = async () => {
+        executions++;
+      };
+
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      task.nextRun = dueAt;
+
+      const tick = async () =>
+        (
+          manager as unknown as {
+            checkAndExecuteTasks?: () => Promise<void>;
+          }
+        ).checkAndExecuteTasks?.();
+
+      await tick();
+      assert.strictEqual(executions, 1);
+
+      // Simulate the rollback a conflicting save from another window causes.
+      const current = manager.getTask(task.id);
+      assert.ok(current);
+      current.nextRun = dueAt;
+
+      await tick();
+      assert.strictEqual(executions, 1, "the same due time must not re-run");
+      assert.ok(
+        (current.nextRun as Date).getTime() > dueAt.getTime(),
+        "nextRun should be advanced past the already executed due time",
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("checkAndExecuteTasks skips execution when the run claim cannot be persisted", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "claim-failure",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      let executions = 0;
+      let saveAttempts = 0;
+      const internals = manager as unknown as {
+        onExecuteCallback?: (task: unknown) => Promise<void>;
+        saveTasks: () => Promise<void>;
+        checkAndExecuteTasks?: () => Promise<void>;
+      };
+      internals.onExecuteCallback = async () => {
+        executions++;
+      };
+      internals.saveTasks = async () => {
+        saveAttempts++;
+        throw new Error("store unavailable");
+      };
+
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      task.nextRun = dueAt;
+
+      await internals.checkAndExecuteTasks?.();
+
+      assert.strictEqual(executions, 0);
+      assert.strictEqual(saveAttempts, 3, "claim should be retried immediately");
+      assert.strictEqual((task.nextRun as Date).getTime(), dueAt.getTime());
+      assert.strictEqual(task.lastFiredDueAt, undefined);
     } finally {
       try {
         fs.rmSync(tmp, {

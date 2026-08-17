@@ -155,6 +155,12 @@ export interface ScheduledTask {
   /** Next scheduled execution time */
   nextRun?: Date;
 
+  /**
+   * Scheduled time of the most recently claimed automatic run.
+   * Persisted before execution so a rolled-back save cannot re-fire the same occurrence.
+   */
+  lastFiredDueAt?: Date;
+
   /** Creation timestamp */
   createdAt: Date;
 
