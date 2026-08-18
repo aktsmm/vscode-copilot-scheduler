@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Attachment paths are stored relative to the workspace folder or the global prompts folder; absolute paths, `..` traversal, and symlinks that leave the root are rejected. Paths are re-validated at execution time, not only when the task is saved.
-- Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` can never be attached.
+- Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` can never be attached. A path segment that ends with a dot or a space, or that contains a colon, is rejected as well, because Windows would open `.env.` and `secrets./x` as the denied target and a colon would address an alternate data stream.
+- The `scheduler_create_task` and `scheduler_update_task` confirmations list every attachment path and its source instead of only a count or a field name, so an attachment added by an agent cannot slip through unread. An update that clears the list says so explicitly.
 - Workspace-relative attachments are rejected for global-scoped tasks, because such a task runs in any window where the same relative path could resolve to a different file. For the same reason, a task that attaches workspace files cannot be moved to another workspace until its attachments are removed.
 - A task whose attachment cannot be resolved is recorded as `blocked` and is not executed, and a task with attachments never falls back to the legacy chat path that cannot carry them. The warning is shown once per attachment set, so a repeated failure stays quiet but changing the attachments makes the next failure visible again.
 

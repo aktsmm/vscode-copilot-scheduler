@@ -5,6 +5,7 @@ import type { CreateTaskInput } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  describeAttachmentsForConfirmation,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
@@ -52,6 +53,13 @@ export function createSchedulerUpdateTaskTool(
     ): Promise<vscode.PreparedToolInvocation> {
       const input = options.input ?? {};
       const updateKeys = input.updates ? Object.keys(input.updates) : [];
+      const attachmentDetail = Object.prototype.hasOwnProperty.call(
+        input.updates ?? {},
+        "attachments",
+      )
+        ? (describeAttachmentsForConfirmation(input.updates?.attachments) ??
+          "- attachments: all attachments will be removed")
+        : undefined;
       const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `Updating scheduler task: ${input.id ?? "(missing id)"}`,
       };
@@ -59,11 +67,16 @@ export function createSchedulerUpdateTaskTool(
         prepared.confirmationMessages = {
           title: "Update scheduler task",
           message: new vscode.MarkdownString(
-            `Copilot Chat wants to update task \`${input.id ?? "(missing)"}\`.\n\nFields to change: ${
-              updateKeys.length
-                ? updateKeys.map((k) => `\`${k}\``).join(", ")
-                : "(none)"
-            }`,
+            [
+              `Copilot Chat wants to update task \`${input.id ?? "(missing)"}\`.\n\nFields to change: ${
+                updateKeys.length
+                  ? updateKeys.map((k) => `\`${k}\``).join(", ")
+                  : "(none)"
+              }`,
+              attachmentDetail
+                ? `\n\nThe attachment list is replaced by:\n${attachmentDetail}`
+                : "",
+            ].join(""),
           ),
         };
       }

@@ -49,6 +49,56 @@ suite("Attachment Resolver", () => {
     );
   });
 
+  test("normalizeAttachmentPath rejects Windows name-normalization evasions", () => {
+    // Windows drops trailing dots and spaces when opening a file, so these
+    // reach a denied target while comparing as an allowed name.
+    for (const evasion of [
+      ".env.",
+      "config/.env..",
+      "certs/server.key.",
+      "secrets./tokens.md",
+      "secrets /tokens.md",
+      ".ssh./config",
+      "docs/a.md:hidden",
+      ".env:stream",
+      "docs:/a.md",
+    ]) {
+      assert.strictEqual(
+        normalizeAttachmentPath(evasion),
+        undefined,
+        `path must be rejected before it reaches the file system: ${evasion}`,
+      );
+    }
+
+    // A padded whole path is trimmed, so it lands on the real name and the
+    // denylist decides; either way it must never persist as an attachment.
+    for (const evasion of [
+      ".env.",
+      ".env ",
+      "certs/server.key.",
+      "certs/server.key ",
+      "secrets./tokens.md",
+      "docs/a.md:hidden",
+    ]) {
+      const normalized = normalizeAttachments(
+        [{ source: "local", path: evasion }],
+        "workspace",
+      );
+      assert.strictEqual(
+        normalized.attachments.length,
+        0,
+        `attachment must not be persisted: ${evasion}`,
+      );
+    }
+
+    assert.strictEqual(normalizeAttachmentPath("docs/a.md"), "docs/a.md");
+    assert.strictEqual(
+      normalizeAttachmentPath("  docs/my file.md  "),
+      "docs/my file.md",
+      "an inner space must stay allowed",
+    );
+  });
+
   test("normalizeAttachments rejects local attachments on global-scope tasks", () => {
     const result = normalizeAttachments(
       [{ source: "local", path: "docs/a.md" }],

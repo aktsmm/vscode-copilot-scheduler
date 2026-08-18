@@ -379,6 +379,68 @@ suite("lmTools write wrappers", () => {
     assert.match(message, /`cronExpression`/);
   });
 
+  test("attachment confirmations name every file that will be sent", async () => {
+    const createTool = createSchedulerCreateTaskTool(new FakeClient());
+    const createPrepared = await withConfirmationMode("always", () =>
+      prepare(createTool, {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review the workspace",
+        scope: "workspace",
+        attachments: [
+          { source: "local", path: ".github/instructions/style.md" },
+          { source: "global", path: "shared/notes.md" },
+        ],
+      }),
+    );
+    const createMessage = confirmationMessageText(createPrepared);
+    assert.match(createMessage, /attachments \(2\)/);
+    assert.match(createMessage, /local: `\.github\/instructions\/style\.md`/);
+    assert.match(createMessage, /global: `shared\/notes\.md`/);
+
+    const updateTool = createSchedulerUpdateTaskTool(new FakeClient());
+    const updatePrepared = await withConfirmationMode("always", () =>
+      prepare(updateTool, {
+        id: "task-1",
+        updates: {
+          attachments: [{ source: "local", path: "docs/secret-ish.md" }],
+        },
+      }),
+    );
+    const updateMessage = confirmationMessageText(updatePrepared);
+    assert.match(updateMessage, /attachment list is replaced/i);
+    assert.match(updateMessage, /local: `docs\/secret-ish\.md`/);
+
+    const clearPrepared = await withConfirmationMode("always", () =>
+      prepare(updateTool, { id: "task-1", updates: { attachments: [] } }),
+    );
+    assert.match(
+      confirmationMessageText(clearPrepared),
+      /all attachments will be removed/i,
+      "clearing the list must be stated, not silently shown as an empty change",
+    );
+
+    const hostilePrepared = await withConfirmationMode("always", () =>
+      prepare(updateTool, {
+        id: "task-1",
+        updates: {
+          attachments: [
+            { source: "local", path: "a.md`\n- local: `b.md" },
+          ] as unknown as CreateTaskInput["attachments"],
+        },
+      }),
+    );
+    const hostileMessage = confirmationMessageText(hostilePrepared);
+    assert.ok(
+      !/a\.md`/.test(hostileMessage),
+      "a model-supplied path must not close the code span and forge extra rows",
+    );
+    assert.ok(
+      !hostileMessage.includes("a.md`\n"),
+      "a model-supplied path must not inject line breaks into the confirmation",
+    );
+  });
+
   test("update task forwards updates to mutation client", async () => {
     const client = new FakeClient();
     const tool = createSchedulerUpdateTaskTool(client);

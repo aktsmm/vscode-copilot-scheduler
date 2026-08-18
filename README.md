@@ -194,6 +194,7 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 - **Only workspace-scoped tasks can attach workspace files.** A global task runs in any window, where the same relative path could point at a different file, so workspace attachments are rejected for them.
 - Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` are never attached.
 - **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once per attachment set, so a renamed file does not silently stop the schedule and changing the attachments makes the next failure visible again.
+- **Trust boundary**: the checks above are a path boundary, not a content-provenance boundary. Anything that can write inside the workspace folder can also place or link a file there, and the file is read at run time, so it is the content at that moment that is sent. Attach files only from workspaces you trust, the same way you would trust a prompt file that runs unattended.
 
 ## 📋 Requirements
 

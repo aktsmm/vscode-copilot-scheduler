@@ -4,7 +4,7 @@ import type {
   MutationDeleteResult,
   MutationResult,
 } from "../taskMutationService";
-import type { ScheduledTask } from "../types";
+import type { ScheduledTask, TaskAttachment } from "../types";
 
 const ENABLE_WRITE_TOOLS_CONFIG_KEY = "lmTools.enableWriteTools";
 const CONFIRMATION_MODE_CONFIG_KEY = "lmTools.confirmationMode";
@@ -82,6 +82,25 @@ export function buildTextResult(text: string): vscode.LanguageModelToolResult {
   return new vscode.LanguageModelToolResult([
     new vscode.LanguageModelTextPart(text),
   ]);
+}
+
+/**
+ * Attachment contents are sent to the model on every later unattended run, so
+ * the confirmation has to name the files, not just how many there are.
+ */
+export function describeAttachmentsForConfirmation(
+  attachments: TaskAttachment[] | undefined,
+): string | undefined {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return undefined;
+  }
+  const lines = attachments.map((item) => {
+    const source = item?.source === "global" ? "global" : "local";
+    const raw = typeof item?.path === "string" ? item.path : "";
+    const safe = raw.replace(/[`\r\n]/g, "");
+    return `  - ${source}: \`${safe || "(missing path)"}\``;
+  });
+  return [`- attachments (${attachments.length}):`, ...lines].join("\n");
 }
 
 export function buildJsonTextResult(

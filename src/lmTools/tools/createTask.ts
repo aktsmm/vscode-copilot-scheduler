@@ -5,6 +5,7 @@ import type { CreateTaskInput, TaskAttachment } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  describeAttachmentsForConfirmation,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
@@ -69,9 +70,7 @@ export function createSchedulerCreateTaskTool(
         input.promptPath ? `- promptPath: \`${input.promptPath}\`` : undefined,
         input.agent ? `- agent: ${input.agent}` : undefined,
         input.model ? `- model: ${input.model}` : undefined,
-        input.attachments && input.attachments.length > 0
-          ? `- attachments: ${input.attachments.length}`
-          : undefined,
+        describeAttachmentsForConfirmation(input.attachments),
         input.enabled === false
           ? "- initial state: disabled"
           : "- initial state: enabled",

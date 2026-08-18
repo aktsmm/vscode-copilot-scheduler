@@ -30,6 +30,13 @@ const DENIED_BASENAME_PATTERNS: RegExp[] = [
 
 const DENIED_PATH_SEGMENTS = new Set(["secrets", ".ssh"]);
 
+/**
+ * Windows drops trailing dots and spaces when opening a file, so `.env.` and
+ * `secrets./x` reach the denied target while comparing as something else.
+ * A colon would address an alternate data stream on the same file.
+ */
+const UNSAFE_SEGMENT_PATTERN = /[:]|[.\s]$/;
+
 export type AttachmentRejectionReason =
   | "invalidPath"
   | "absolutePath"
@@ -77,6 +84,9 @@ export function normalizeAttachmentPath(value: unknown): string | undefined {
 
   const segments = trimmed.split("/").filter((s) => s.length > 0 && s !== ".");
   if (segments.length === 0 || segments.some((s) => s === "..")) {
+    return undefined;
+  }
+  if (segments.some((s) => UNSAFE_SEGMENT_PATTERN.test(s))) {
     return undefined;
   }
 
