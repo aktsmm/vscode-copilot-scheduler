@@ -1074,6 +1074,81 @@ suite("Webview Test Prompt Wiring Tests", () => {
     });
   });
 
+  test("buildPromptExecutionOptions blocks the run when an attachment disappeared after save", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { getPromptBlockedReason, isPromptBlockedError } =
+      await import("../../promptExecutionErrors");
+    const buildPromptExecutionOptions =
+      __testOnly.buildPromptExecutionOptions as unknown as (
+        request: ScheduledTask,
+        localAttachmentRoots?: string[],
+      ) => { attachFilePaths?: string[] };
+
+    assert.ok(typeof buildPromptExecutionOptions === "function");
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-attach-block-"));
+    const attached = path.join(root, "team.instructions.md");
+    fs.writeFileSync(attached, "guidance", "utf8");
+
+    const task: ScheduledTask = {
+      id: "t-attach-block",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "workspace",
+      promptSource: "inline",
+      attachments: [{ source: "local", path: "team.instructions.md" }],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    try {
+      assert.deepStrictEqual(
+        buildPromptExecutionOptions(task, [root]).attachFilePaths,
+        [attached],
+        "an existing attachment must resolve to an absolute path at execution time",
+      );
+
+      fs.renameSync(attached, path.join(root, "renamed.instructions.md"));
+
+      assert.throws(
+        () => buildPromptExecutionOptions(task, [root]),
+        (error: unknown) =>
+          isPromptBlockedError(error) &&
+          getPromptBlockedReason(error) === "attachmentMissing" &&
+          String((error as Error).message).includes("team.instructions.md"),
+        "a missing attachment must fail closed instead of running without it",
+      );
+
+      assert.throws(
+        () => buildPromptExecutionOptions(task, []),
+        (error: unknown) =>
+          isPromptBlockedError(error) &&
+          getPromptBlockedReason(error) === "attachmentMissing",
+        "a local attachment with no local root must fail closed",
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a blocked attachment warns once per task and clears after a successful run", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    assert.ok(
+      /getPromptBlockedReason\(error\) === "attachmentMissing" &&\s*!attachmentBlockNotifiedTaskIds\.has\(task\.id\)\s*\)\s*\{\s*attachmentBlockNotifiedTaskIds\.add\(task\.id\);\s*void vscode\.window\.showWarningMessage\(/.test(
+        source,
+      ),
+      "the attachment warning must be guarded by attachmentBlockNotifiedTaskIds so a scheduled task cannot warn on every tick",
+    );
+    assert.ok(
+      source.includes("attachmentBlockNotifiedTaskIds.delete(task.id);"),
+      "a successful run must clear the notified flag so a later block warns again",
+    );
+  });
+
   test("resolveNotificationMode normalizes invalid values and keeps legacy silentStatus", async () => {
     const { __testOnly } = await import("../../extension");
     const resolveNotificationMode = __testOnly.resolveNotificationMode as

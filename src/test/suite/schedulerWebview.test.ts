@@ -491,6 +491,225 @@ suite("SchedulerWebview Attachment Root Tests", () => {
       "preferred workspace folder resolution must stay in workspaceRoots.ts",
     );
   });
+
+  test("attachment chips render, remove the picked row and honor the limit", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+
+    type StubElement = {
+      tagName: string;
+      className: string;
+      type?: string;
+      textContent: string;
+      innerHTML: string;
+      style: { display: string };
+      children: StubElement[];
+      attrs: Map<string, string>;
+      listeners: Map<string, Array<() => void>>;
+      setAttribute(name: string, value: string): void;
+      appendChild(child: StubElement): void;
+      addEventListener(event: string, handler: () => void): void;
+      click(): void;
+      focus(): void;
+    };
+
+    const focused: StubElement[] = [];
+    const makeElement = (tagName: string): StubElement => {
+      const element: StubElement = {
+        tagName,
+        className: "",
+        textContent: "",
+        innerHTML: "",
+        style: { display: "" },
+        children: [],
+        attrs: new Map<string, string>(),
+        listeners: new Map<string, Array<() => void>>(),
+        setAttribute: (name, value) => void element.attrs.set(name, value),
+        appendChild: (child) => {
+          element.children.push(child);
+        },
+        addEventListener: (event, handler) => {
+          const handlers = element.listeners.get(event) ?? [];
+          handlers.push(handler);
+          element.listeners.set(event, handlers);
+        },
+        click: () => {
+          for (const handler of element.listeners.get("click") ?? []) {
+            handler();
+          }
+        },
+        focus: () => void focused.push(element),
+      };
+      return element;
+    };
+
+    const attachmentList = makeElement("ul");
+    // The production code clears the list with innerHTML, which a plain object
+    // cannot observe, so drop the rendered rows when it is assigned.
+    Object.defineProperty(attachmentList, "innerHTML", {
+      get: () => "",
+      set: () => {
+        attachmentList.children.length = 0;
+      },
+    });
+    const attachmentEmpty = makeElement("p");
+    const attachmentStatus = makeElement("p");
+    const addAttachmentBtn = makeElement("button");
+
+    const documentStub = { createElement: makeElement };
+    const posted: Array<Record<string, unknown>> = [];
+    const formErrors: string[] = [];
+    const webviewStrings = {
+      actionOpenAttachment: "Open attachment",
+      actionRemoveAttachment: "Remove attachment",
+      attachmentAdded: "Attachment added",
+      attachmentRemoved: "Attachment removed",
+      attachmentLimitExceeded: "Too many attachments",
+    };
+
+    const snippet = [
+      extractFunctionSource(source, "attachmentKey"),
+      extractFunctionSource(source, "getAttachmentFileName"),
+      extractFunctionSource(source, "announceAttachmentStatus"),
+      extractFunctionSource(source, "renderAttachments"),
+      extractFunctionSource(source, "setAttachments"),
+      extractFunctionSource(source, "addAttachments"),
+      "return { setAttachments: setAttachments, addAttachments: addAttachments, getState: function () { return attachmentsState; } };",
+    ].join("\n");
+
+    const factory = new Function(
+      "document",
+      "attachmentList",
+      "attachmentEmpty",
+      "attachmentStatus",
+      "addAttachmentBtn",
+      "attachmentsState",
+      "maxAttachments",
+      "strings",
+      "vscode",
+      "showFormError",
+      "getCurrentScopeValue",
+      "editingTaskId",
+      snippet,
+    ) as (...args: unknown[]) => {
+      setAttachments(list: unknown): void;
+      addAttachments(list: unknown): void;
+      getState(): Array<{ source: string; path: string }>;
+    };
+
+    const api = factory(
+      documentStub,
+      attachmentList,
+      attachmentEmpty,
+      attachmentStatus,
+      addAttachmentBtn,
+      [],
+      3,
+      webviewStrings,
+      {
+        postMessage: (message: Record<string, unknown>) =>
+          void posted.push(message),
+      },
+      (message: string) => void formErrors.push(message),
+      () => "workspace",
+      "task-1",
+    );
+
+    api.setAttachments([
+      { source: "local", path: ".github/instructions/a.instructions.md" },
+      { source: "local", path: ".github/instructions/a.instructions.md" },
+      { source: "global", path: "prompts/b.prompt.md" },
+    ]);
+
+    assert.strictEqual(
+      attachmentList.children.length,
+      2,
+      "duplicate attachments must collapse into a single chip",
+    );
+    assert.strictEqual(attachmentEmpty.style.display, "none");
+
+    const firstChip = attachmentList.children[0];
+    const openBtn = firstChip.children[0];
+    assert.strictEqual(
+      openBtn.attrs.get("aria-label"),
+      "Open attachment: a.instructions.md",
+    );
+    assert.strictEqual(openBtn.children[0].textContent, "a.instructions.md");
+    assert.strictEqual(
+      openBtn.children[1].textContent,
+      ".github/instructions/a.instructions.md",
+      "the chip must show the full relative path next to the file name",
+    );
+
+    openBtn.click();
+    assert.deepStrictEqual(posted, [
+      {
+        type: "openAttachment",
+        attachment: {
+          source: "local",
+          path: ".github/instructions/a.instructions.md",
+        },
+        scope: "workspace",
+        taskId: "task-1",
+      },
+    ]);
+
+    const removeBtn = firstChip.children[1];
+    assert.strictEqual(
+      removeBtn.attrs.get("aria-label"),
+      "Remove attachment: a.instructions.md",
+    );
+    removeBtn.click();
+
+    assert.deepStrictEqual(
+      api.getState().map((item) => item.path),
+      ["prompts/b.prompt.md"],
+      "removing a chip must drop that entry, not the last one",
+    );
+    assert.strictEqual(attachmentList.children.length, 1);
+    assert.strictEqual(
+      attachmentStatus.textContent,
+      "Attachment removed: a.instructions.md",
+    );
+    assert.strictEqual(
+      focused[focused.length - 1],
+      addAttachmentBtn,
+      "focus must land on the add button after a chip is removed",
+    );
+
+    api.addAttachments([
+      { source: "local", path: "docs/c.md" },
+      { source: "global", path: "prompts/b.prompt.md" },
+    ]);
+    assert.strictEqual(
+      api.getState().length,
+      2,
+      "an already attached file must not be added twice",
+    );
+    assert.strictEqual(attachmentStatus.textContent, "Attachment added (1)");
+
+    api.addAttachments([
+      { source: "local", path: "docs/d.md" },
+      { source: "local", path: "docs/e.md" },
+    ]);
+    assert.strictEqual(
+      api.getState().length,
+      3,
+      "the attachment limit must cap the list",
+    );
+    assert.deepStrictEqual(formErrors, ["Too many attachments"]);
+
+    api.setAttachments([]);
+    assert.strictEqual(attachmentList.children.length, 0);
+    assert.strictEqual(
+      attachmentEmpty.style.display,
+      "block",
+      "the empty hint must reappear once the last chip is removed",
+    );
+  });
 });
 
 suite("SchedulerWebview Friendly Cron Builder Tests", () => {
