@@ -89,6 +89,8 @@ For `kind=history`, the response includes `total`, returned `count`, `hasMore`, 
 
 `kind=list_models` returns the selectable model `id`s together with `supportedReasoningEfforts`, and `kind=list_agents` returns the selectable agent ids without exposing file paths. The model list is the same one the Copilot Scheduler view offers, so Chat can never pin a model you cannot see or change in the UI. Create/update accept `model` (plus optional `modelReasoningEffort`), `agent`, and the execution controls `autoMode`, `jitterSeconds`, `maxExecutionsPerDay`, `allowedTimeStart`, and `allowedTimeEnd`. A `model` id that is not in that list is rejected with the list of valid ids instead of silently falling back to the default model; passing an empty `model` clears the selection and returns the task to the default model. When the Language Model API is unavailable and only the built-in fallback catalog is known, the requested model is saved with a warning instead of being rejected.
 
+Create/update also accept `attachments`: up to 10 entries of `{ source: "local" | "global", path }`, where the path is relative to the task's workspace folder or to the global prompts folder. Absolute paths, `..`, denied files, and `local` attachments on a global task are rejected instead of being saved.
+
 In agent mode, Copilot can also choose these tools from natural-language requests. Examples:
 
 - "Schedule a workspace task every weekday at 9:00 to summarize this repository."
@@ -183,7 +185,7 @@ Agent definitions are refreshed automatically when you create, edit, or delete w
 
 Only user-invocable agents appear in the picker. Agents with `user-invocable: false` in their frontmatter are subagent-only — they cannot be selected as a chat mode, so they are intentionally hidden. Agents without the field stay listed.
 
-## � Attachments
+## 📎 Attachments
 
 A task can carry up to 10 attachment files that are sent with the prompt, so instructions, prompt files, skills, or any other workspace file can be attached explicitly instead of being mentioned inside the prompt text.
 
@@ -193,7 +195,7 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 - Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` are never attached.
 - **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once so a renamed file does not silently stop the schedule.
 
-## �📋 Requirements
+## 📋 Requirements
 
 - VS Code 1.95.0 or higher
 - GitHub Copilot extension

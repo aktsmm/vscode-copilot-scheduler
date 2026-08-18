@@ -98,6 +98,8 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 `kind=list_models` は選択可能なモデルの `id` と `supportedReasoningEfforts` を返し、`kind=list_agents` はファイルパスを含めずに選択可能なエージェントを返します。モデル一覧は Copilot Scheduler ビューのモデル選択肢と同一なので、UI で見えない・変更できないモデルを Chat が設定することはありません。作成/更新では `model`（任意で `modelReasoningEffort`）、`agent`、実行制御の `autoMode` / `jitterSeconds` / `maxExecutionsPerDay` / `allowedTimeStart` / `allowedTimeEnd` を指定できます。この一覧にない `model` id は、無言で既定モデルにフォールバックせず有効な id 一覧付きでエラーになります。`model` に空文字を渡すと選択が解除され、既定モデルに戻ります。なお Language Model API が利用できず組込みの fallback カタログしか分からないときは、エラーにせず warning 付きで保存します。
 
+作成/更新では `attachments` も指定できます。`{ source: "local" | "global", path }` を最大 10 件まで渡せ、パスはタスクのワークスペースフォルダー基準またはグローバルプロンプトフォルダー基準の相対パスです。絶対パス、`..`、添付禁止ファイル、Global タスクへの `local` 添付は保存されずエラーになります。
+
 エージェントモードでは、Copilot が自然文の依頼からこれらのツールを選ぶこともできます。例:
 
 - 「このリポジトリの要約を毎週平日 9:00 に作るワークスペースタスクをスケジュール設定して」
@@ -186,7 +188,7 @@ Webview では、対応 family に対して Copilot Chat に近い思考の負�
 
 これは最近の Copilot custom agent / Copilot CLI のファイル配置に合わせた検出で、拡張機能が行うのは agent ファイルの発見だけです。プロンプトテンプレートは引き続き VS Code ユーザープロンプトフォルダまたは `copilotScheduler.globalPromptsPath` を使い、`~/.copilot/prompts` は既定探索しません。また、Copilot CLI セッション自体をこの拡張が管理するわけではありません。
 
-## � 添付ファイル
+## 📎 添付ファイル
 
 1 つのタスクに最大 10 件のファイルを添付できます。添付したファイルはプロンプトと一緒に送信されるので、instructions や skills をプロンプト本文で言及する代わりに、明示的に添付できます。
 
@@ -196,7 +198,7 @@ Webview では、対応 family に対して Copilot Chat に近い思考の負�
 - `.env*`、`*.pem`、`*.key`、`id_rsa*` や `secrets/`、`.ssh/` 配下のファイルは添付できません。
 - **実行時に添付ファイルが見つからない場合、添付なしで実行せずにタスクをスキップします。** 実行履歴に `blocked` として記録され、1 回だけ通知されるので、リネームに気付かずにスケジュールが止まり続けることを防ぎます。
 
-## �📋 要件
+## 📋 要件
 
 - VS Code 1.95.0 以上
 - GitHub Copilot 拡張機能

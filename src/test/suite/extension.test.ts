@@ -301,6 +301,66 @@ suite("Extension Test Suite", () => {
     assert.match(readmeJa, /同じ名前のタスク/);
   });
 
+  test("user-facing text files carry no replacement characters or lone surrogates", () => {
+    const root = path.resolve(__dirname, "../../..");
+    // These surfaces are read outside the editor (Marketplace page, UI strings),
+    // where a broken emoji is invisible to a compiler but visible to every user.
+    const files = [
+      "README.md",
+      "README_ja.md",
+      "CHANGELOG.md",
+      "package.json",
+      "package.nls.json",
+      "package.nls.ja.json",
+    ];
+
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(root, file), "utf8");
+      const lines = content.split(/\r?\n/);
+
+      for (let i = 0; i < lines.length; i++) {
+        assert.ok(
+          !lines[i].includes("\uFFFD"),
+          `${file}:${i + 1} contains a replacement character: ${lines[i].trim()}`,
+        );
+        assert.ok(
+          !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+            lines[i],
+          ),
+          `${file}:${i + 1} contains a lone surrogate: ${lines[i].trim()}`,
+        );
+      }
+    }
+  });
+
+  test("both READMEs document attachments with matching section markers", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+    const readmeJa = fs.readFileSync(path.join(root, "README_ja.md"), "utf8");
+
+    assert.ok(
+      readme.includes("## \u{1F4CE} Attachments"),
+      "README.md should keep the attachments section heading intact",
+    );
+    assert.ok(
+      readmeJa.includes("## \u{1F4CE} 添付ファイル"),
+      "README_ja.md should keep the attachments section heading intact",
+    );
+    for (const [file, content] of [
+      ["README.md", readme],
+      ["README_ja.md", readmeJa],
+    ] as const) {
+      assert.ok(
+        content.includes(".env*") && content.includes("secrets/"),
+        `${file} should document the attachment denylist`,
+      );
+      assert.ok(
+        content.includes("blocked"),
+        `${file} should document that an unresolvable attachment blocks the run`,
+      );
+    }
+  });
+
   test("LM write tool descriptions keep natural-language intent", () => {
     const root = path.resolve(__dirname, "../../..");
     const nls = JSON.parse(
@@ -1147,6 +1207,30 @@ suite("Webview Test Prompt Wiring Tests", () => {
       source.includes("attachmentBlockNotifiedTaskIds.delete(task.id);"),
       "a successful run must clear the notified flag so a later block warns again",
     );
+  });
+
+  test("every successful run records how many files it attached", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    const payloads = [
+      ...source.matchAll(/recordExecutionHistoryBestEffort\(\{([^}]*)\}\)/g),
+    ].map((match) => match[1]);
+
+    const successPayloads = payloads.filter((payload) =>
+      payload.includes('status: "success"'),
+    );
+
+    assert.ok(
+      successPayloads.length >= 2,
+      "both the scheduled and the manual success paths should write history",
+    );
+    for (const payload of successPayloads) {
+      assert.ok(
+        payload.includes("attachmentCount:"),
+        `a success history entry must record attachmentCount: ${payload.trim()}`,
+      );
+    }
   });
 
   test("resolveNotificationMode normalizes invalid values and keeps legacy silentStatus", async () => {

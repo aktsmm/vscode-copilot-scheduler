@@ -986,6 +986,7 @@ async function appendManualRunHistory(
       status: "success",
       executedAt: new Date().toISOString(),
       nextRunAt,
+      attachmentCount: latestTask.attachments?.length,
       ...promptMetadata,
     });
     return;
