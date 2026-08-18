@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-08-18
+
+### Added
+
+- **Attachments on scheduled tasks** ([#1](https://github.com/aktsmm/vscode-copilot-scheduler/issues/1)). A task can carry up to 10 files that are attached to the chat request through `workbench.action.chat.open`, so instructions, prompt files, skills, or any other workspace file can be attached explicitly instead of being mentioned inside the prompt text.
+- **Add attachment** opens a quick pick with a **Recommended** group (`AGENTS.md`, `.github/copilot-instructions.md`, `.github/prompts/`, `.github/instructions/`, `.github/skills/`) followed by the rest of the workspace, and **Browse...** opens the regular file dialog. Attached files appear as chips with separate open and remove buttons, and the task list shows an attachment count.
+- Attachments are also exposed through `scheduler_create_task` and `scheduler_update_task`, and the execution history records how many files were attached to a successful run.
+
+### Security
+
+- Attachment paths are stored relative to the workspace folder or the global prompts folder; absolute paths, `..` traversal, and symlinks that leave the root are rejected. Paths are re-validated at execution time, not only when the task is saved.
+- Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` can never be attached.
+- Workspace-relative attachments are rejected for global-scoped tasks, because such a task runs in any window where the same relative path could resolve to a different file.
+- A task whose attachment cannot be resolved is recorded as `blocked` and is not executed, and a task with attachments never falls back to the legacy chat path that cannot carry them.
+
 ## [1.4.1] - 2026-08-18
 
 ### Fixed

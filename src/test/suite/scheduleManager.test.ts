@@ -2290,6 +2290,164 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("createTask rejects a local attachment on a global-scope task", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      await assert.rejects(
+        () =>
+          manager.createTask({
+            name: "global-local-attachment",
+            prompt: "hello",
+            cronExpression: "*/5 * * * *",
+            scope: "global",
+            promptSource: "inline",
+            enabled: false,
+            attachments: [{ source: "local", path: "docs/a.md" }],
+          }),
+        /workspace|\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9/i,
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("createTask rejects attachments that escape the root or hit the denylist", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const base = {
+        name: "unsafe-attachment",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global" as const,
+        promptSource: "inline" as const,
+        enabled: false,
+      };
+
+      await assert.rejects(() =>
+        manager.createTask({
+          ...base,
+          attachments: [{ source: "global", path: "../outside.md" }],
+        }),
+      );
+      await assert.rejects(() =>
+        manager.createTask({
+          ...base,
+          attachments: [{ source: "global", path: ".env" }],
+        }),
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("updateTask rejects switching to global scope while local attachments remain", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const context = createMockContextWithGlobalTasks(tmp, [
+        {
+          id: "task-scope-switch",
+          name: "scope-switch-attachment",
+          prompt: "hello",
+          cronExpression: "*/5 * * * *",
+          enabled: false,
+          scope: "workspace",
+          workspacePath: tmp,
+          promptSource: "inline",
+          attachments: [{ source: "local", path: "docs/a.md" }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+      const manager = new ScheduleManager(context);
+
+      assert.deepStrictEqual(manager.getTask("task-scope-switch")?.attachments, [
+        { source: "local", path: "docs/a.md" },
+      ]);
+
+      await assert.rejects(() =>
+        manager.updateTask("task-scope-switch", { scope: "global" }),
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("loadTasks heals corrupted attachments", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const context = createMockContextWithGlobalTasks(tmp, [
+        {
+          id: "task-attachment-heal",
+          name: "heal",
+          prompt: "hello",
+          cronExpression: "*/5 * * * *",
+          enabled: false,
+          scope: "workspace",
+          promptSource: "inline",
+          attachments: [
+            { source: "local", path: "docs/a.md" },
+            { source: "local", path: "docs/a.md" },
+            { source: "bogus", path: "docs/b.md" },
+            { source: "local", path: "../escape.md" },
+            null,
+          ],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+
+      const manager = new ScheduleManager(context);
+      const task = manager.getTask("task-attachment-heal");
+
+      assert.ok(task);
+      assert.deepStrictEqual(task.attachments, [
+        { source: "local", path: "docs/a.md" },
+      ]);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("checkAndExecuteTasks persists the run claim before executing", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

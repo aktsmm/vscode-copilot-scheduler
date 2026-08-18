@@ -31,6 +31,8 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 🛠️ **Copilot Chat Tools** - Query, create, update, delete, and enable/disable scheduled tasks from agent mode using Language Model Tools
 
+📎 **Attachments** - Attach instructions, prompts, skills, or any workspace file to a task so they are sent with the prompt
+
 ## ⏰ Cron Expression Examples
 
 | Expression     | Description             |
@@ -181,7 +183,17 @@ Agent definitions are refreshed automatically when you create, edit, or delete w
 
 Only user-invocable agents appear in the picker. Agents with `user-invocable: false` in their frontmatter are subagent-only — they cannot be selected as a chat mode, so they are intentionally hidden. Agents without the field stay listed.
 
-## 📋 Requirements
+## � Attachments
+
+A task can carry up to 10 attachment files that are sent with the prompt, so instructions, prompt files, skills, or any other workspace file can be attached explicitly instead of being mentioned inside the prompt text.
+
+- **Add attachment** opens a quick pick with a **Recommended** group (`AGENTS.md`, `.github/copilot-instructions.md`, `.github/prompts/`, `.github/instructions/`, `.github/skills/`) followed by the rest of the workspace. **Browse...** opens the regular file dialog.
+- Attachments are stored relative to the workspace folder (`local`) or to the global prompts folder (`global`), never as absolute paths.
+- **Only workspace-scoped tasks can attach workspace files.** A global task runs in any window, where the same relative path could point at a different file, so workspace attachments are rejected for them.
+- Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` are never attached.
+- **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once so a renamed file does not silently stop the schedule.
+
+## �📋 Requirements
 
 - VS Code 1.95.0 or higher
 - GitHub Copilot extension

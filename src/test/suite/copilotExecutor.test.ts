@@ -271,6 +271,53 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     ]);
   });
 
+  test("chat.open args include attachFiles only when attachments exist", () => {
+    const withoutAttachments = __testOnly.buildChatOpenArgs(
+      "Review this",
+      "agent",
+      {},
+      undefined,
+      false,
+      [],
+    );
+    assert.ok(!("attachFiles" in withoutAttachments));
+
+    const attachments = [
+      vscode.Uri.file("/tmp/a.md"),
+      vscode.Uri.file("/tmp/b.md"),
+    ];
+    const withAttachments = __testOnly.buildChatOpenArgs(
+      "Review this",
+      "agent",
+      {},
+      undefined,
+      false,
+      attachments,
+    );
+    assert.deepStrictEqual(withAttachments.attachFiles, attachments);
+  });
+
+  test("attachment-bearing runs never fall back to the legacy chat path", async () => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/copilotExecutor.ts"),
+      "utf8",
+    );
+
+    assert.ok(
+      /if \(attachFiles\.length > 0\) \{[\s\S]*?createPromptBlockedError\(\s*messages\.attachmentsRequireChatOpen\(\),/.test(
+        source,
+      ),
+      "chat.open failure with attachments must block instead of using the legacy path",
+    );
+    assert.ok(
+      source.indexOf('if (chatSession === "new")') <
+        source.indexOf("let chatOpenResult = await this.tryOpenChatWithPrompt"),
+      "a new chat session must be created before chat.open attaches files",
+    );
+  });
+
   test("chat.open args include modelConfiguration for reasoning effort selections", () => {
     const args = __testOnly.buildChatOpenArgs(
       "Review this",
