@@ -31,8 +31,10 @@ import { validateTemplateLoadRequest } from "./templateValidation";
 import {
   getPromptTemplateDisplayName,
   isPromptTemplateMarkdownFile,
+  normalizeForCompare,
   resolveGlobalPromptsRoot,
 } from "./promptResolver";
+import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import {
@@ -48,6 +50,13 @@ import {
 
 type OutgoingWebviewMessage = { type: string; [key: string]: unknown };
 type WebviewScheduledTask = ScheduledTask & { scheduleSummary: string };
+
+/** A root an attachment path may be stored relative to. */
+interface AttachmentRoot {
+  source: TaskAttachment["source"];
+  label: string;
+  uri: vscode.Uri;
+}
 
 const FRIENDLY_INTERVAL_MINUTES = [
   1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
@@ -771,11 +780,16 @@ export class SchedulerWebview {
           message.scope,
           message.existing,
           message.browse === true,
+          message.taskId,
         );
         break;
 
       case "openAttachment":
-        await this.openAttachment(message.attachment, message.scope);
+        await this.openAttachment(
+          message.attachment,
+          message.scope,
+          message.taskId,
+        );
         break;
 
       case "webviewReady":
@@ -1028,6 +1042,7 @@ export class SchedulerWebview {
     scope: TaskScope,
     existing: TaskAttachment[],
     browse: boolean,
+    taskId: string | undefined,
   ): Promise<void> {
     const existingKeys = new Set(
       (Array.isArray(existing) ? existing : [])
@@ -1035,9 +1050,17 @@ export class SchedulerWebview {
         .map((item) => `${item.source}:${item.path.toLowerCase()}`),
     );
 
+    const roots = this.getAttachmentRoots(scope, taskId);
+    if (roots.length === 0) {
+      void vscode.window.showWarningMessage(
+        messages.pickAttachmentNoCandidates(),
+      );
+      return;
+    }
+
     const picked = browse
-      ? await this.pickAttachmentsWithOpenDialog(scope)
-      : await this.pickAttachmentsWithQuickPick(scope, existingKeys);
+      ? await this.pickAttachmentsWithOpenDialog(scope, roots)
+      : await this.pickAttachmentsWithQuickPick(roots, existingKeys, scope);
 
     const added = picked.filter(
       (item) => !existingKeys.has(`${item.source}:${item.path.toLowerCase()}`),
@@ -1050,10 +1073,11 @@ export class SchedulerWebview {
   }
 
   private static async pickAttachmentsWithQuickPick(
-    scope: TaskScope,
+    roots: AttachmentRoot[],
     existingKeys: Set<string>,
+    scope: TaskScope,
   ): Promise<TaskAttachment[]> {
-    const candidates = await this.collectAttachmentCandidates(scope);
+    const candidates = await this.collectAttachmentCandidates(roots, scope);
     const selectable = candidates.filter(
       (item) =>
         !item.attachment ||
@@ -1084,8 +1108,8 @@ export class SchedulerWebview {
 
   private static async pickAttachmentsWithOpenDialog(
     scope: TaskScope,
+    roots: AttachmentRoot[],
   ): Promise<TaskAttachment[]> {
-    const roots = this.getAttachmentRoots(scope);
     const defaultUri = roots[0]?.uri;
     const selected = await vscode.window.showOpenDialog({
       canSelectMany: true,
@@ -1112,21 +1136,27 @@ export class SchedulerWebview {
     return attachments;
   }
 
+  /**
+   * Roots the picker may offer. A workspace-scoped task binds to exactly one
+   * folder, so offering every folder would let the user pick a file that always
+   * fails to resolve at run time.
+   */
   private static getAttachmentRoots(
     scope: TaskScope,
-  ): Array<{
-    source: TaskAttachment["source"];
-    label: string;
-    uri: vscode.Uri;
-  }> {
-    const roots: Array<{
-      source: TaskAttachment["source"];
-      label: string;
-      uri: vscode.Uri;
-    }> = [];
+    taskId?: string,
+  ): AttachmentRoot[] {
+    const roots: AttachmentRoot[] = [];
 
     if (scope !== "global") {
-      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const boundPath = this.resolveBoundWorkspacePath(taskId);
+      const folder = boundPath
+        ? (vscode.workspace.workspaceFolders ?? []).find(
+            (candidate) =>
+              normalizeForCompare(candidate.uri.fsPath) ===
+              normalizeForCompare(boundPath),
+          )
+        : undefined;
+      if (folder) {
         roots.push({ source: "local", label: folder.name, uri: folder.uri });
       }
     }
@@ -1143,10 +1173,23 @@ export class SchedulerWebview {
     return roots;
   }
 
+  /** Workspace folder the edited task is bound to, or the one a new task would bind to. */
+  private static resolveBoundWorkspacePath(
+    taskId?: string,
+  ): string | undefined {
+    if (taskId) {
+      const task = this.currentTasks.find((item) => item.id === taskId);
+      if (task) {
+        return task.scope === "workspace" ? task.workspacePath : undefined;
+      }
+    }
+    return getPreferredWorkspaceRootPath();
+  }
+
   /** Convert an absolute path into a stored attachment, or undefined when out of bounds. */
   private static toAttachment(
     fsPath: string,
-    roots: ReturnType<typeof SchedulerWebview.getAttachmentRoots>,
+    roots: AttachmentRoot[],
   ): TaskAttachment | undefined {
     for (const root of roots) {
       const relative = path.relative(root.uri.fsPath, fsPath);
@@ -1160,9 +1203,9 @@ export class SchedulerWebview {
   }
 
   private static async collectAttachmentCandidates(
+    roots: AttachmentRoot[],
     scope: TaskScope,
   ): Promise<Array<vscode.QuickPickItem & { attachment?: TaskAttachment }>> {
-    const roots = this.getAttachmentRoots(scope);
     const items: Array<vscode.QuickPickItem & { attachment?: TaskAttachment }> =
       [];
     const seen = new Set<string>();
@@ -1297,13 +1340,14 @@ export class SchedulerWebview {
   private static async openAttachment(
     attachment: TaskAttachment,
     scope: TaskScope,
+    taskId?: string,
   ): Promise<void> {
     const normalized = normalizeAttachmentPath(attachment?.path);
     if (!normalized) {
       return;
     }
 
-    for (const root of this.getAttachmentRoots(scope)) {
+    for (const root of this.getAttachmentRoots(scope, taskId)) {
       if (root.source !== attachment.source) {
         continue;
       }

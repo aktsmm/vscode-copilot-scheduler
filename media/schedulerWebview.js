@@ -722,6 +722,7 @@
           type: "openAttachment",
           attachment: { source: item.source, path: item.path },
           scope: getCurrentScopeValue(),
+          taskId: editingTaskId || undefined,
         });
       });
 
@@ -1523,6 +1524,7 @@
         type: "pickAttachments",
         scope: getCurrentScopeValue(),
         existing: attachmentsState,
+        taskId: editingTaskId || undefined,
       });
     });
   }
@@ -1534,6 +1536,7 @@
         scope: getCurrentScopeValue(),
         existing: attachmentsState,
         browse: true,
+        taskId: editingTaskId || undefined,
       });
     });
   }

@@ -409,6 +409,90 @@ function loadWebviewCronSummaryFunction(): (expression: string) => string {
   return factory(strings, friendlyIntervalMinutes);
 }
 
+suite("SchedulerWebview Attachment Root Tests", () => {
+  const webviewSourcePath = path.resolve(
+    __dirname,
+    "../../../src/schedulerWebview.ts",
+  );
+
+  test("attachment picker offers only the folder the task binds to", () => {
+    const source = fs.readFileSync(webviewSourcePath, "utf8");
+
+    assert.ok(
+      sourceContainsToken(
+        source,
+        "const boundPath = this.resolveBoundWorkspacePath(taskId);",
+      ),
+      "getAttachmentRoots must resolve the bound workspace folder",
+    );
+    assert.ok(
+      !/for \(const folder of vscode\.workspace\.workspaceFolders \?\? \[\]\) \{\s*roots\.push/.test(
+        source,
+      ),
+      "the picker must not offer every workspace folder as a local root",
+    );
+    assert.ok(
+      sourceContainsToken(
+        source,
+        'return task.scope === "workspace" ? task.workspacePath : undefined;',
+      ),
+      "a global task must not expose a local attachment root",
+    );
+  });
+
+  test("attachment messages carry the edited task id", () => {
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../media/schedulerWebview.js",
+    );
+    const source = fs.readFileSync(scriptPath, "utf8");
+    const occurrences = source.match(/taskId: editingTaskId \|\| undefined/g);
+
+    assert.ok(
+      occurrences && occurrences.length >= 3,
+      "pick, browse, and open attachment messages must all send the task id",
+    );
+  });
+
+  test("preferred workspace resolution lives in a single module", () => {
+    const srcRoot = path.resolve(__dirname, "../../../src");
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "test") {
+            walk(full);
+          }
+          continue;
+        }
+        if (!entry.name.endsWith(".ts")) {
+          continue;
+        }
+        if (entry.name === "workspaceRoots.ts") {
+          continue;
+        }
+        if (
+          fs
+            .readFileSync(full, "utf8")
+            .includes("activeTextEditor?.document.uri")
+        ) {
+          offenders.push(entry.name);
+        }
+      }
+    };
+
+    walk(srcRoot);
+
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      "preferred workspace folder resolution must stay in workspaceRoots.ts",
+    );
+  });
+});
+
 suite("SchedulerWebview Friendly Cron Builder Tests", () => {
   test("strict interval builder keeps exact single-cron intervals", () => {
     const build = loadWebviewStrictIntervalCronFunction();

@@ -45,6 +45,7 @@ import {
   normalizeAttachments,
   type AttachmentRejection,
 } from "./attachmentResolver";
+import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { isPromptBlockedError } from "./promptExecutionErrors";
 
 // Node.js globals
@@ -1193,15 +1194,7 @@ export class ScheduleManager {
 
   /** Workspace folder a newly created workspace-scoped task is bound to. */
   getPreferredWorkspaceRootPath(): string | undefined {
-    const activeUri = vscode.window.activeTextEditor?.document.uri;
-    if (activeUri) {
-      const folder = vscode.workspace.getWorkspaceFolder(activeUri);
-      if (folder?.uri.fsPath) {
-        return folder.uri.fsPath;
-      }
-    }
-
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return getPreferredWorkspaceRootPath();
   }
 
   /**

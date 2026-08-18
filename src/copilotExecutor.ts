@@ -17,6 +17,7 @@ import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
 import { resolveGlobalAgentRoots } from "./promptResolver";
+import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
   createPromptBlockedError,
   isPromptBlockedError,
@@ -518,15 +519,7 @@ export class CopilotExecutor {
   }
 
   private getPreferredWorkspaceName(): string {
-    const activeUri = vscode.window.activeTextEditor?.document.uri;
-    if (activeUri) {
-      const folder = vscode.workspace.getWorkspaceFolder(activeUri);
-      if (folder?.name) {
-        return folder.name;
-      }
-    }
-
-    return vscode.workspace.workspaceFolders?.[0]?.name || "";
+    return getPreferredWorkspaceName();
   }
 
   /**

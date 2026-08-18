@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Attachments on scheduled tasks** ([#1](https://github.com/aktsmm/vscode-copilot-scheduler/issues/1)). A task can carry up to 10 files that are attached to the chat request through `workbench.action.chat.open`, so instructions, prompt files, skills, or any other workspace file can be attached explicitly instead of being mentioned inside the prompt text.
-- **Add attachment** opens a quick pick with a **Recommended** group (`AGENTS.md`, `.github/copilot-instructions.md`, `.github/prompts/`, `.github/instructions/`, `.github/skills/`) followed by the rest of the workspace, and **Browse...** opens the regular file dialog. Attached files appear as chips with separate open and remove buttons, and the task list shows an attachment count.
+- **Add attachment** opens a quick pick with a **Recommended** group (`AGENTS.md`, `.github/copilot-instructions.md`, `.github/prompts/`, `.github/instructions/`, `.github/skills/`) followed by the rest of the folder, and **Browse...** opens the regular file dialog. In a multi-root workspace the picker only offers the folder the task is actually bound to, so a picked file always resolves at run time. Attached files appear as chips with separate open and remove buttons, and the task list shows an attachment count.
 - Attachments are also exposed through `scheduler_create_task` and `scheduler_update_task`, and the execution history records how many files were attached to a successful run.
 - Duplicating a task copies its attachments, and **Test** in the edit form sends the attachments currently listed in the form.
 
@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` can never be attached.
 - Workspace-relative attachments are rejected for global-scoped tasks, because such a task runs in any window where the same relative path could resolve to a different file. For the same reason, a task that attaches workspace files cannot be moved to another workspace until its attachments are removed.
 - A task whose attachment cannot be resolved is recorded as `blocked` and is not executed, and a task with attachments never falls back to the legacy chat path that cannot carry them.
+
+### Internal
+
+- Preferred workspace folder resolution moved into `src/workspaceRoots.ts`. Task creation, the attachment picker, and the workspace-name placeholder previously each had their own copy, so they could disagree about which folder a task binds to; a test now fails if the logic is duplicated again.
 
 ## [1.4.1] - 2026-08-18
 

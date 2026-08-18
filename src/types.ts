@@ -433,8 +433,14 @@ export type WebviewToExtensionMessage =
       scope: TaskScope;
       existing: TaskAttachment[];
       browse?: boolean;
+      taskId?: string;
     }
-  | { type: "openAttachment"; attachment: TaskAttachment; scope: TaskScope }
+  | {
+      type: "openAttachment";
+      attachment: TaskAttachment;
+      scope: TaskScope;
+      taskId?: string;
+    }
   | { type: "webviewReady" };
 
 /**
