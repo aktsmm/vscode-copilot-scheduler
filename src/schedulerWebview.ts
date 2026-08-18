@@ -10,6 +10,7 @@ import type {
   ScheduledTask,
   CreateTaskInput,
   TaskAction,
+  TaskAttachment,
   AgentInfo,
   ModelInfo,
   PromptPreview,
@@ -34,6 +35,12 @@ import {
 } from "./promptResolver";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
+import {
+  MAX_TASK_ATTACHMENTS,
+  getAttachmentDisplayName,
+  isDeniedAttachmentPath,
+  normalizeAttachmentPath,
+} from "./attachmentResolver";
 import {
   buildModelPickerGroups,
   filterPickerModelCatalog,
@@ -73,6 +80,12 @@ export class SchedulerWebview {
   private static webviewReady = false;
   private static pendingMessages: OutgoingWebviewMessage[] = [];
   private static promptPreviews = new Map<string, PromptPreview>();
+
+  private static readonly MAX_ATTACHMENT_CANDIDATES = 1000;
+  private static readonly RECOMMENDED_ATTACHMENT_GLOB =
+    "{AGENTS.md,.github/copilot-instructions.md,.github/prompts/**/*.md,.github/instructions/**/*.md,.github/skills/**/*.md}";
+  private static readonly ATTACHMENT_EXCLUDE_GLOB =
+    "**/{node_modules,.git,out,dist,build,coverage,.vscode-test,.next,target}/**";
 
   private static getFormDefaults(): {
     defaultScope: TaskScope;
@@ -753,6 +766,18 @@ export class SchedulerWebview {
         this.onOpenPromptFileCallback?.(message.taskId);
         break;
 
+      case "pickAttachments":
+        await this.pickAttachments(
+          message.scope,
+          message.existing,
+          message.browse === true,
+        );
+        break;
+
+      case "openAttachment":
+        await this.openAttachment(message.attachment, message.scope);
+        break;
+
       case "webviewReady":
         this.webviewReady = true;
         // Flush any messages that were queued while the webview was not ready.
@@ -997,6 +1022,310 @@ export class SchedulerWebview {
   }
 
   /**
+   * Let the user pick files to attach, then push the result back to the webview.
+   */
+  private static async pickAttachments(
+    scope: TaskScope,
+    existing: TaskAttachment[],
+    browse: boolean,
+  ): Promise<void> {
+    const existingKeys = new Set(
+      (Array.isArray(existing) ? existing : [])
+        .filter((item) => item && typeof item.path === "string")
+        .map((item) => `${item.source}:${item.path.toLowerCase()}`),
+    );
+
+    const picked = browse
+      ? await this.pickAttachmentsWithOpenDialog(scope)
+      : await this.pickAttachmentsWithQuickPick(scope, existingKeys);
+
+    const added = picked.filter(
+      (item) => !existingKeys.has(`${item.source}:${item.path.toLowerCase()}`),
+    );
+    if (added.length === 0) {
+      return;
+    }
+
+    this.postMessage({ type: "attachmentsPicked", attachments: added });
+  }
+
+  private static async pickAttachmentsWithQuickPick(
+    scope: TaskScope,
+    existingKeys: Set<string>,
+  ): Promise<TaskAttachment[]> {
+    const candidates = await this.collectAttachmentCandidates(scope);
+    const selectable = candidates.filter(
+      (item) =>
+        !item.attachment ||
+        !existingKeys.has(
+          `${item.attachment.source}:${item.attachment.path.toLowerCase()}`,
+        ),
+    );
+
+    if (!selectable.some((item) => item.attachment)) {
+      void vscode.window.showInformationMessage(
+        messages.pickAttachmentNoCandidates(),
+      );
+      return [];
+    }
+
+    const selection = await vscode.window.showQuickPick(selectable, {
+      canPickMany: true,
+      matchOnDescription: true,
+      matchOnDetail: true,
+      title: messages.pickAttachmentTitle(),
+      placeHolder: messages.pickAttachmentTitle(),
+    });
+
+    return (selection ?? [])
+      .map((item) => item.attachment)
+      .filter((item): item is TaskAttachment => Boolean(item));
+  }
+
+  private static async pickAttachmentsWithOpenDialog(
+    scope: TaskScope,
+  ): Promise<TaskAttachment[]> {
+    const roots = this.getAttachmentRoots(scope);
+    const defaultUri = roots[0]?.uri;
+    const selected = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      canSelectFolders: false,
+      canSelectFiles: true,
+      defaultUri,
+      openLabel: messages.actionAddAttachment(),
+      title: messages.pickAttachmentTitle(),
+    });
+
+    const attachments: TaskAttachment[] = [];
+    for (const uri of selected ?? []) {
+      const attachment = this.toAttachment(uri.fsPath, roots);
+      if (attachment) {
+        attachments.push(attachment);
+      } else {
+        void vscode.window.showWarningMessage(
+          scope === "global"
+            ? messages.attachmentLocalOnGlobalScope()
+            : messages.attachmentOutsideRoot(path.basename(uri.fsPath)),
+        );
+      }
+    }
+    return attachments;
+  }
+
+  private static getAttachmentRoots(
+    scope: TaskScope,
+  ): Array<{
+    source: TaskAttachment["source"];
+    label: string;
+    uri: vscode.Uri;
+  }> {
+    const roots: Array<{
+      source: TaskAttachment["source"];
+      label: string;
+      uri: vscode.Uri;
+    }> = [];
+
+    if (scope !== "global") {
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        roots.push({ source: "local", label: folder.name, uri: folder.uri });
+      }
+    }
+
+    const globalPath = this.getGlobalPromptsPath();
+    if (globalPath) {
+      roots.push({
+        source: "global",
+        label: messages.pickAttachmentGlobalFiles(),
+        uri: vscode.Uri.file(globalPath),
+      });
+    }
+
+    return roots;
+  }
+
+  /** Convert an absolute path into a stored attachment, or undefined when out of bounds. */
+  private static toAttachment(
+    fsPath: string,
+    roots: ReturnType<typeof SchedulerWebview.getAttachmentRoots>,
+  ): TaskAttachment | undefined {
+    for (const root of roots) {
+      const relative = path.relative(root.uri.fsPath, fsPath);
+      const normalized = normalizeAttachmentPath(relative);
+      if (!normalized || isDeniedAttachmentPath(normalized)) {
+        continue;
+      }
+      return { source: root.source, path: normalized };
+    }
+    return undefined;
+  }
+
+  private static async collectAttachmentCandidates(
+    scope: TaskScope,
+  ): Promise<Array<vscode.QuickPickItem & { attachment?: TaskAttachment }>> {
+    const roots = this.getAttachmentRoots(scope);
+    const items: Array<vscode.QuickPickItem & { attachment?: TaskAttachment }> =
+      [];
+    const seen = new Set<string>();
+
+    const push = (
+      group: string,
+      fsPath: string,
+      isRecommended: boolean,
+    ): void => {
+      const attachment = this.toAttachment(fsPath, roots);
+      if (!attachment) {
+        return;
+      }
+      const key = `${attachment.source}:${attachment.path.toLowerCase()}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      items.push({
+        label: getAttachmentDisplayName(attachment),
+        description: attachment.path,
+        detail: isRecommended ? undefined : group,
+        attachment,
+      });
+    };
+
+    const recommended: Array<{ group: string; paths: string[] }> = [];
+    const others: Array<{ group: string; paths: string[] }> = [];
+
+    for (const root of roots) {
+      if (root.source === "local") {
+        recommended.push({
+          group: root.label,
+          paths: (
+            await vscode.workspace.findFiles(
+              new vscode.RelativePattern(
+                root.uri,
+                SchedulerWebview.RECOMMENDED_ATTACHMENT_GLOB,
+              ),
+              undefined,
+              SchedulerWebview.MAX_ATTACHMENT_CANDIDATES,
+            )
+          ).map((uri) => uri.fsPath),
+        });
+        others.push({
+          group: root.label,
+          paths: (
+            await vscode.workspace.findFiles(
+              new vscode.RelativePattern(root.uri, "**/*"),
+              SchedulerWebview.ATTACHMENT_EXCLUDE_GLOB,
+              SchedulerWebview.MAX_ATTACHMENT_CANDIDATES,
+            )
+          ).map((uri) => uri.fsPath),
+        });
+      } else {
+        others.push({
+          group: root.label,
+          paths: await this.collectFilesInDirectory(
+            root.uri,
+            SchedulerWebview.MAX_ATTACHMENT_CANDIDATES,
+          ),
+        });
+      }
+    }
+
+    const recommendedCount = recommended.reduce(
+      (total, entry) => total + entry.paths.length,
+      0,
+    );
+    if (recommendedCount > 0) {
+      items.push({
+        label: messages.pickAttachmentRecommended(),
+        kind: vscode.QuickPickItemKind.Separator,
+      });
+      for (const entry of recommended) {
+        for (const fsPath of entry.paths) {
+          push(entry.group, fsPath, true);
+        }
+      }
+    }
+
+    items.push({
+      label:
+        scope === "global"
+          ? messages.pickAttachmentGlobalFiles()
+          : messages.pickAttachmentWorkspaceFiles(),
+      kind: vscode.QuickPickItemKind.Separator,
+    });
+    for (const entry of others) {
+      for (const fsPath of entry.paths) {
+        push(entry.group, fsPath, false);
+      }
+    }
+
+    return items;
+  }
+
+  private static async collectFilesInDirectory(
+    dir: vscode.Uri,
+    limit: number,
+  ): Promise<string[]> {
+    const results: string[] = [];
+    const queue: vscode.Uri[] = [dir];
+
+    while (queue.length > 0 && results.length < limit) {
+      const current = queue.shift();
+      if (!current) {
+        break;
+      }
+      let entries: Array<[string, vscode.FileType]>;
+      try {
+        entries = await vscode.workspace.fs.readDirectory(current);
+      } catch {
+        continue;
+      }
+      for (const [name, fileType] of entries) {
+        if (results.length >= limit) {
+          break;
+        }
+        const child = vscode.Uri.joinPath(current, name);
+        if (fileType === vscode.FileType.Directory) {
+          queue.push(child);
+        } else if (fileType === vscode.FileType.File) {
+          results.push(child.fsPath);
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private static async openAttachment(
+    attachment: TaskAttachment,
+    scope: TaskScope,
+  ): Promise<void> {
+    const normalized = normalizeAttachmentPath(attachment?.path);
+    if (!normalized) {
+      return;
+    }
+
+    for (const root of this.getAttachmentRoots(scope)) {
+      if (root.source !== attachment.source) {
+        continue;
+      }
+      const target = vscode.Uri.joinPath(root.uri, ...normalized.split("/"));
+      const resolved = this.toAttachment(target.fsPath, [root]);
+      if (!resolved) {
+        continue;
+      }
+      try {
+        await vscode.window.showTextDocument(target, { preview: true });
+        return;
+      } catch {
+        // Try the next root; the file may live in another workspace folder.
+      }
+    }
+
+    void vscode.window.showWarningMessage(
+      messages.attachmentsMissingAtExecution(normalized),
+    );
+  }
+
+  /**
    * Get global prompts path
    */
   private static getGlobalPromptsPath(): string | undefined {
@@ -1173,6 +1502,20 @@ export class SchedulerWebview {
       promptFileStaleHint: messages.promptFileStaleHint(),
       actionLoadLatestPrompt: messages.actionLoadLatestPrompt(),
       actionOpenPromptFile: messages.actionOpenPromptFile(),
+      labelAttachments: messages.labelAttachments(),
+      labelAttachmentsNote: messages.labelAttachmentsNote(),
+      labelNoAttachments: messages.labelNoAttachments(),
+      actionAddAttachment: messages.actionAddAttachment(),
+      actionBrowseAttachment: messages.actionBrowseAttachment(),
+      actionOpenAttachment: messages.actionOpenAttachment(),
+      actionRemoveAttachment: messages.actionRemoveAttachment(),
+      attachmentAdded: messages.attachmentAdded(),
+      attachmentRemoved: messages.attachmentRemoved(),
+      attachmentMissingLabel: messages.attachmentMissingLabel(),
+      attachmentAlreadyAdded: messages.attachmentAlreadyAdded(),
+      attachmentLocalOnGlobalScope: messages.attachmentLocalOnGlobalScope(),
+      attachmentLimitExceeded:
+        messages.attachmentLimitExceeded(MAX_TASK_ATTACHMENTS),
       confirmReplacePromptEdits: messages.confirmReplacePromptEdits(),
       labelPrompt: messages.labelPrompt(),
       labelSchedule: messages.labelSchedule(),
@@ -1356,6 +1699,7 @@ export class SchedulerWebview {
       defaultChatSession,
       defaultChatSessionNote,
       defaultJitterSeconds,
+      maxAttachments: MAX_TASK_ATTACHMENTS,
       locale: isJa ? "ja-JP" : "en-US",
       strings,
     };
@@ -1961,6 +2305,78 @@ export class SchedulerWebview {
       align-items: center;
     }
 
+    .attachment-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .attachment-list {
+      list-style: none;
+      margin: 0 0 8px 0;
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .attachment-item {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 10px;
+      background-color: var(--vscode-editorWidget-background);
+      overflow: hidden;
+    }
+
+    .attachment-item.is-missing {
+      border-color: var(--vscode-inputValidation-warningBorder);
+    }
+
+    .attachment-open,
+    .attachment-remove {
+      background: none;
+      border: none;
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      font: inherit;
+      padding: 4px 8px;
+    }
+
+    .attachment-open {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      text-align: left;
+    }
+
+    .attachment-open:hover,
+    .attachment-remove:hover {
+      background-color: var(--vscode-list-hoverBackground);
+    }
+
+    .attachment-open:focus-visible,
+    .attachment-remove:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+
+    .attachment-name {
+      font-weight: 600;
+    }
+
+    .attachment-path,
+    .attachment-warning {
+      opacity: 0.75;
+      font-size: 0.85em;
+    }
+
+    .attachment-warning {
+      color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+    }
+
     .template-row select {
       flex: 1;
       min-width: 0;
@@ -2134,6 +2550,18 @@ export class SchedulerWebview {
                   <button type="button" class="btn-secondary" id="open-prompt-file-btn" style="display:none;">${escapeHtml(strings.actionOpenPromptFile)}</button>
                 </div>
               </div>
+            </div>
+
+            <div class="form-group col-12" id="attachments-group">
+              <label id="attachments-label">${escapeHtml(strings.labelAttachments)}</label>
+              <div class="attachment-actions">
+                <button type="button" class="btn-secondary" id="add-attachment-btn">${escapeHtml(strings.actionAddAttachment)}</button>
+                <button type="button" class="btn-secondary" id="browse-attachment-btn">${escapeHtml(strings.actionBrowseAttachment)}</button>
+              </div>
+              <ul id="attachment-list" class="attachment-list" aria-labelledby="attachments-label"></ul>
+              <p id="attachment-empty" class="note">${escapeHtml(strings.labelNoAttachments)}</p>
+              <p id="attachment-status" class="note" role="status" aria-live="polite" aria-atomic="true"></p>
+              <p class="note">${escapeHtml(strings.labelAttachmentsNote)}</p>
             </div>
           </div>
         </section>

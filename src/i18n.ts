@@ -251,6 +251,35 @@ export const messages = {
       "Copilot Chat could not be opened, so the task was not executed. Tasks with attachments are never sent without their attachments.",
       "Copilot Chat を開けなかったため、タスクを実行しませんでした。添付ファイル付きのタスクは、添付なしでは送信しません。",
     ),
+  labelAttachments: () => t("Attachments", "添付ファイル"),
+  labelAttachmentsNote: () =>
+    t(
+      "Attached files are sent with the prompt. If a file is missing when the task runs, the task is skipped instead of running without it.",
+      "添付ファイルはプロンプトと一緒に送信されます。実行時にファイルが見つからない場合、添付なしで実行せずにタスクをスキップします。",
+    ),
+  labelNoAttachments: () => t("No attachments", "添付ファイルはありません"),
+  actionAddAttachment: () => t("Add attachment", "添付を追加"),
+  actionBrowseAttachment: () => t("Browse...", "参照..."),
+  actionOpenAttachment: () => t("Open attachment", "添付ファイルを開く"),
+  actionRemoveAttachment: () => t("Remove attachment", "添付ファイルを削除"),
+  attachmentMissingLabel: () => t("File not found", "ファイルが見つかりません"),
+  attachmentAdded: () => t("Attachment added", "添付ファイルを追加しました"),
+  attachmentRemoved: () =>
+    t("Attachment removed", "添付ファイルを削除しました"),
+  attachmentAlreadyAdded: () =>
+    t("That file is already attached", "そのファイルは既に添付されています"),
+  pickAttachmentTitle: () =>
+    t("Select files to attach", "添付するファイルを選択"),
+  pickAttachmentRecommended: () => t("Recommended", "おすすめ"),
+  pickAttachmentWorkspaceFiles: () =>
+    t("Workspace files", "ワークスペースのファイル"),
+  pickAttachmentGlobalFiles: () =>
+    t("Global prompts folder", "グローバルプロンプトフォルダー"),
+  pickAttachmentNoCandidates: () =>
+    t(
+      "No attachable files were found",
+      "添付できるファイルが見つかりませんでした",
+    ),
 
   // ==================== Prompts ====================
   enterTaskName: () => t("Enter task name", "タスク名を入力"),

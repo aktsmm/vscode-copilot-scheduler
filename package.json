@@ -492,6 +492,32 @@
             "allowedTimeEnd": {
               "type": "string",
               "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
+            },
+            "attachments": {
+              "type": "array",
+              "description": "Files attached to the chat request when the task runs. Every attachment must resolve at run time or the task is skipped. Only workspace-scoped tasks may use source 'local'.",
+              "maxItems": 10,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "local",
+                      "global"
+                    ],
+                    "description": "'local' resolves against the task's workspace folder, 'global' against the global prompts folder."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Path relative to the source root, e.g. '.github/instructions/style.instructions.md'. Absolute paths and '..' are rejected."
+                  }
+                },
+                "required": [
+                  "source",
+                  "path"
+                ]
+              }
             }
           },
           "required": [
@@ -601,6 +627,32 @@
                 "allowedTimeEnd": {
                   "type": "string",
                   "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
+                },
+                "attachments": {
+                  "type": "array",
+                  "description": "Replaces the whole attachment list. Every attachment must resolve at run time or the task is skipped. Only workspace-scoped tasks may use source 'local'.",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "local",
+                          "global"
+                        ],
+                        "description": "'local' resolves against the task's workspace folder, 'global' against the global prompts folder."
+                      },
+                      "path": {
+                        "type": "string",
+                        "description": "Path relative to the source root. Absolute paths and '..' are rejected."
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "path"
+                    ]
+                  }
                 }
               }
             }

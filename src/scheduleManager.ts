@@ -1191,7 +1191,8 @@ export class ScheduleManager {
     return `task_${timestamp}_${random}`;
   }
 
-  private getPreferredWorkspaceRootPath(): string | undefined {
+  /** Workspace folder a newly created workspace-scoped task is bound to. */
+  getPreferredWorkspaceRootPath(): string | undefined {
     const activeUri = vscode.window.activeTextEditor?.document.uri;
     if (activeUri) {
       const folder = vscode.workspace.getWorkspaceFolder(activeUri);

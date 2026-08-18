@@ -606,6 +606,8 @@ let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
+/** Tasks already reported as blocked by a missing attachment, to avoid repeating the warning every run. */
+const attachmentBlockNotifiedTaskIds = new Set<string>();
 
 const PROMPT_PREVIEW_DEBOUNCE_MS = 300;
 const pendingPromptPreviewPaths = new Set<string>();
@@ -1320,6 +1322,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     }
 
     await syncPromptSnapshotAfterRun(task);
+    attachmentBlockNotifiedTaskIds.delete(task.id);
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
@@ -1339,6 +1342,17 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     }
   } catch (error) {
     if (isPromptBlockedError(error)) {
+      // A scheduled task that silently stops is worse than a noisy one, but the
+      // warning must not repeat on every tick.
+      if (
+        getPromptBlockedReason(error) === "attachmentMissing" &&
+        !attachmentBlockNotifiedTaskIds.has(task.id)
+      ) {
+        attachmentBlockNotifiedTaskIds.add(task.id);
+        void vscode.window.showWarningMessage(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       // Manual runs record their own history entry via appendManualRunHistory.
       if (trigger === "auto") {
         const nextRunDate = getNotificationNextRun(task, new Date());

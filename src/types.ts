@@ -432,6 +432,7 @@ export type WebviewToExtensionMessage =
       type: "pickAttachments";
       scope: TaskScope;
       existing: TaskAttachment[];
+      browse?: boolean;
     }
   | { type: "openAttachment"; attachment: TaskAttachment; scope: TaskScope }
   | { type: "webviewReady" };

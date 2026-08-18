@@ -649,6 +649,155 @@
   var promptTextInput = document.getElementById("prompt-text");
   var loadLatestPromptBtn = document.getElementById("load-latest-prompt-btn");
   var openPromptFileBtn = document.getElementById("open-prompt-file-btn");
+  var attachmentList = document.getElementById("attachment-list");
+  var attachmentEmpty = document.getElementById("attachment-empty");
+  var addAttachmentBtn = document.getElementById("add-attachment-btn");
+  var browseAttachmentBtn = document.getElementById("browse-attachment-btn");
+  var attachmentStatus = document.getElementById("attachment-status");
+  var attachmentsState = [];
+  var maxAttachments =
+    typeof initialData.maxAttachments === "number" &&
+    initialData.maxAttachments > 0
+      ? initialData.maxAttachments
+      : 10;
+
+  function announceAttachmentStatus(text) {
+    if (!attachmentStatus) return;
+    attachmentStatus.textContent = String(text || "");
+  }
+
+  function getCurrentScopeValue() {
+    var checked = document.querySelector('input[name="scope"]:checked');
+    return checked ? checked.value : "workspace";
+  }
+
+  function attachmentKey(item) {
+    return item && item.source && item.path
+      ? item.source + ":" + String(item.path).toLowerCase()
+      : "";
+  }
+
+  function serializeAttachments(list) {
+    if (!Array.isArray(list)) return "";
+    return list
+      .map(function (item) {
+        return attachmentKey(item);
+      })
+      .filter(Boolean)
+      .join("|");
+  }
+
+  function getAttachmentFileName(item) {
+    var value = item && item.path ? String(item.path) : "";
+    var parts = value.split("/");
+    return parts[parts.length - 1] || value;
+  }
+
+  function renderAttachments() {
+    if (!attachmentList) return;
+    attachmentList.innerHTML = "";
+
+    attachmentsState.forEach(function (item, index) {
+      var name = getAttachmentFileName(item);
+      var row = document.createElement("li");
+      row.className = "attachment-item";
+
+      var openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "attachment-open";
+      openBtn.setAttribute(
+        "aria-label",
+        (strings.actionOpenAttachment || "Open attachment") + ": " + name,
+      );
+      var nameEl = document.createElement("span");
+      nameEl.className = "attachment-name";
+      nameEl.textContent = name;
+      var pathEl = document.createElement("span");
+      pathEl.className = "attachment-path";
+      pathEl.textContent = item.path;
+      openBtn.appendChild(nameEl);
+      openBtn.appendChild(pathEl);
+      openBtn.addEventListener("click", function () {
+        vscode.postMessage({
+          type: "openAttachment",
+          attachment: { source: item.source, path: item.path },
+          scope: getCurrentScopeValue(),
+        });
+      });
+
+      var removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "attachment-remove";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.setAttribute(
+        "aria-label",
+        (strings.actionRemoveAttachment || "Remove attachment") + ": " + name,
+      );
+      removeBtn.addEventListener("click", function () {
+        attachmentsState.splice(index, 1);
+        renderAttachments();
+        announceAttachmentStatus(
+          (strings.attachmentRemoved || "Attachment removed") + ": " + name,
+        );
+        if (addAttachmentBtn) addAttachmentBtn.focus();
+      });
+
+      row.appendChild(openBtn);
+      row.appendChild(removeBtn);
+      attachmentList.appendChild(row);
+    });
+
+    if (attachmentEmpty) {
+      attachmentEmpty.style.display =
+        attachmentsState.length > 0 ? "none" : "block";
+    }
+  }
+
+  function setAttachments(list) {
+    var seen = {};
+    attachmentsState = (Array.isArray(list) ? list : [])
+      .filter(function (item) {
+        var key = attachmentKey(item);
+        if (!key || seen[key]) return false;
+        seen[key] = true;
+        return true;
+      })
+      .map(function (item) {
+        return { source: item.source, path: String(item.path) };
+      });
+    renderAttachments();
+  }
+
+  function addAttachments(list) {
+    var seen = {};
+    attachmentsState.forEach(function (item) {
+      seen[attachmentKey(item)] = true;
+    });
+
+    var added = 0;
+    var rejectedForLimit = false;
+    (Array.isArray(list) ? list : []).forEach(function (item) {
+      var key = attachmentKey(item);
+      if (!key || seen[key]) return;
+      if (attachmentsState.length >= maxAttachments) {
+        rejectedForLimit = true;
+        return;
+      }
+      seen[key] = true;
+      attachmentsState.push({ source: item.source, path: String(item.path) });
+      added++;
+    });
+
+    renderAttachments();
+    if (rejectedForLimit) {
+      showFormError(strings.attachmentLimitExceeded || "");
+    } else if (added > 0) {
+      announceAttachmentStatus(
+        (strings.attachmentAdded || "Attachment added") + " (" + added + ")",
+      );
+    }
+  }
+
   var autoModeInput = document.getElementById("auto-mode");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
@@ -748,6 +897,7 @@
       ),
       allowedTimeStart: String(source.allowedTimeStart || "").trim(),
       allowedTimeEnd: String(source.allowedTimeEnd || "").trim(),
+      attachments: serializeAttachments(source.attachments),
     };
   }
 
@@ -1276,6 +1426,18 @@
       pendingAgentValue = "";
     });
   }
+  // Global tasks run in any window, so workspace-relative attachments are rejected on save.
+  document.addEventListener("change", function (e) {
+    var target = e.target;
+    if (!target || target.name !== "scope" || !target.checked) return;
+    if (target.value !== "global") return;
+    var hasLocal = attachmentsState.some(function (item) {
+      return item && item.source === "local";
+    });
+    if (hasLocal) {
+      showFormError(strings.attachmentLocalOnGlobalScope || "", 10000);
+    }
+  });
   if (modelSelect) {
     modelSelect.addEventListener("change", function () {
       clearUnavailableModelOptions(modelSelect);
@@ -1353,6 +1515,27 @@
 
   if (promptTextInput) {
     promptTextInput.addEventListener("input", updatePromptFileNotice);
+  }
+
+  if (addAttachmentBtn) {
+    addAttachmentBtn.addEventListener("click", function () {
+      vscode.postMessage({
+        type: "pickAttachments",
+        scope: getCurrentScopeValue(),
+        existing: attachmentsState,
+      });
+    });
+  }
+
+  if (browseAttachmentBtn) {
+    browseAttachmentBtn.addEventListener("click", function () {
+      vscode.postMessage({
+        type: "pickAttachments",
+        scope: getCurrentScopeValue(),
+        existing: attachmentsState,
+        browse: true,
+      });
+    });
   }
 
   if (loadLatestPromptBtn) {
@@ -1597,6 +1780,9 @@
           isAllowedTimeWindowEnabled && allowedTimeEndInput
             ? String(allowedTimeEndInput.value || "").trim()
             : "",
+        attachments: attachmentsState.map(function (item) {
+          return { source: item.source, path: item.path };
+        }),
         enabled: editingTaskId ? editingTaskEnabled : true,
       };
 
@@ -2150,6 +2336,15 @@
         '<span class="scope-badge">' +
         escapeHtml(scopeLabel) +
         "</span>" +
+        (Array.isArray(task.attachments) && task.attachments.length > 0
+          ? '<span class="scope-badge">' +
+            escapeHtml(
+              (strings.labelAttachments || "Attachments") +
+                ": " +
+                task.attachments.length,
+            ) +
+            "</span>"
+          : "") +
         "</div>" +
         "</div>" +
         '<div class="task-next-run">' +
@@ -2680,6 +2875,8 @@
     updateModelOptions(null);
     updateModelSelectionStatus();
     applyPromptSource("inline");
+    setAttachments([]);
+    announceAttachmentStatus("");
     if (friendlyFrequency) friendlyFrequency.value = "";
     if (jitterSecondsInput)
       jitterSecondsInput.value = String(defaultJitterSeconds);
@@ -2878,6 +3075,8 @@
     if (taskNameEl) taskNameEl.value = task.name || "";
     if (promptTextEl)
       promptTextEl.value = typeof task.prompt === "string" ? task.prompt : "";
+    setAttachments(task.attachments);
+    announceAttachmentStatus("");
     if (cronExpression) cronExpression.value = task.cronExpression || "";
     if (cronPreset) cronPreset.value = "";
     if (friendlyFrequency) friendlyFrequency.value = "";
@@ -3075,6 +3274,9 @@
 
     try {
       switch (message.type) {
+        case "attachmentsPicked":
+          addAttachments(message.attachments);
+          break;
         case "updateTasks":
           if (Array.isArray(message.workspacePaths)) {
             workspacePaths = message.workspacePaths.filter(Boolean);

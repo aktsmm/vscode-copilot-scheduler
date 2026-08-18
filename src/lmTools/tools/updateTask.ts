@@ -35,6 +35,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "maxExecutionsPerDay",
   "allowedTimeStart",
   "allowedTimeEnd",
+  "attachments",
   "enabled",
 ]);
 

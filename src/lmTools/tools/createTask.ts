@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { CreateTaskInput } from "../../types";
+import type { CreateTaskInput, TaskAttachment } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
@@ -27,6 +27,7 @@ interface CreateTaskToolInput {
   maxExecutionsPerDay?: number;
   allowedTimeStart?: string;
   allowedTimeEnd?: string;
+  attachments?: TaskAttachment[];
 }
 
 function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
@@ -48,6 +49,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     maxExecutionsPerDay: input.maxExecutionsPerDay,
     allowedTimeStart: input.allowedTimeStart,
     allowedTimeEnd: input.allowedTimeEnd,
+    attachments: input.attachments,
   };
 }
 
@@ -67,6 +69,9 @@ export function createSchedulerCreateTaskTool(
         input.promptPath ? `- promptPath: \`${input.promptPath}\`` : undefined,
         input.agent ? `- agent: ${input.agent}` : undefined,
         input.model ? `- model: ${input.model}` : undefined,
+        input.attachments && input.attachments.length > 0
+          ? `- attachments: ${input.attachments.length}`
+          : undefined,
         input.enabled === false
           ? "- initial state: disabled"
           : "- initial state: enabled",

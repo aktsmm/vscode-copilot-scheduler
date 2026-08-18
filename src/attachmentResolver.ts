@@ -91,7 +91,9 @@ export function isDeniedAttachmentPath(value: string): boolean {
     return true;
   }
 
-  if (segments.slice(0, -1).some((s) => DENIED_PATH_SEGMENTS.has(s.toLowerCase()))) {
+  if (
+    segments.slice(0, -1).some((s) => DENIED_PATH_SEGMENTS.has(s.toLowerCase()))
+  ) {
     return true;
   }
 
