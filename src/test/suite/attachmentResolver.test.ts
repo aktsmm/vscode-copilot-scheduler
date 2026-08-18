@@ -26,7 +26,10 @@ suite("Attachment Resolver", () => {
     assert.strictEqual(normalizeAttachmentPath("  docs/a.md  "), "docs/a.md");
     assert.strictEqual(normalizeAttachmentPath("../secret.md"), undefined);
     assert.strictEqual(normalizeAttachmentPath("docs/../../x.md"), undefined);
-    assert.strictEqual(normalizeAttachmentPath("C:/Windows/win.ini"), undefined);
+    assert.strictEqual(
+      normalizeAttachmentPath("C:/Windows/win.ini"),
+      undefined,
+    );
     assert.strictEqual(normalizeAttachmentPath("/etc/passwd"), undefined);
     assert.strictEqual(normalizeAttachmentPath(""), undefined);
     assert.strictEqual(normalizeAttachmentPath(42), undefined);
@@ -41,7 +44,9 @@ suite("Attachment Resolver", () => {
     assert.ok(isDeniedAttachmentPath("secrets/tokens.md"));
     assert.ok(isDeniedAttachmentPath(".ssh/config"));
     assert.ok(!isDeniedAttachmentPath("docs/readme.md"));
-    assert.ok(!isDeniedAttachmentPath(".github/instructions/a.instructions.md"));
+    assert.ok(
+      !isDeniedAttachmentPath(".github/instructions/a.instructions.md"),
+    );
   });
 
   test("normalizeAttachments rejects local attachments on global-scope tasks", () => {

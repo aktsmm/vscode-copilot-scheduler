@@ -236,6 +236,11 @@ export const messages = {
       "Workspace files can only be attached to workspace-scoped tasks. Change the task scope to Workspace, or attach a file from the global prompts folder.",
       "ワークスペースのファイルは、スコープが Workspace のタスクにのみ添付できます。タスクのスコープを Workspace に変更するか、グローバルプロンプトフォルダーのファイルを添付してください。",
     ),
+  attachmentBlocksWorkspaceMove: () =>
+    t(
+      "This task attaches workspace files, so moving it to another workspace would attach different files. Remove the attachments first.",
+      "このタスクはワークスペースのファイルを添付しているため、別のワークスペースへ移動すると別のファイルを添付してしまいます。先に添付ファイルを削除してください。",
+    ),
   attachmentLimitExceeded: (max: number) =>
     t(
       `Up to ${max} attachments can be added to a task`,

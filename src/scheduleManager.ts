@@ -1781,6 +1781,7 @@ export class ScheduleManager {
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,
+      attachments: original.attachments,
       autoMode: original.autoMode,
       chatSession: original.chatSession,
       jitterSeconds: original.jitterSeconds,
@@ -1830,6 +1831,20 @@ export class ScheduleManager {
     const workspaceRoot = this.getPreferredWorkspaceRootPath();
     if (!workspaceRoot) {
       throw new Error(messages.noWorkspaceOpen());
+    }
+
+    // The same relative path in another workspace resolves to a different file.
+    const movesToAnotherWorkspace =
+      !task.workspacePath ||
+      normalizeForCompare(task.workspacePath) !==
+        normalizeForCompare(workspaceRoot);
+    if (
+      movesToAnotherWorkspace &&
+      (task.attachments ?? []).some(
+        (attachment) => attachment.source === "local",
+      )
+    ) {
+      throw new Error(messages.attachmentBlocksWorkspaceMove());
     }
 
     task.workspacePath = workspaceRoot;

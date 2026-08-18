@@ -1934,6 +1934,9 @@
         modelReasoningEffort: currentModelSelection
           ? currentModelSelection.modelReasoningEffort || ""
           : "",
+        attachments: attachmentsState.map(function (item) {
+          return { source: item.source, path: item.path };
+        }),
       });
     });
   }

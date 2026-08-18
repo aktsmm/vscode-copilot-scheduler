@@ -2381,9 +2381,10 @@ suite("ScheduleManager RunNow Tests", () => {
       ]);
       const manager = new ScheduleManager(context);
 
-      assert.deepStrictEqual(manager.getTask("task-scope-switch")?.attachments, [
-        { source: "local", path: "docs/a.md" },
-      ]);
+      assert.deepStrictEqual(
+        manager.getTask("task-scope-switch")?.attachments,
+        [{ source: "local", path: "docs/a.md" }],
+      );
 
       await assert.rejects(() =>
         manager.updateTask("task-scope-switch", { scope: "global" }),
@@ -2434,6 +2435,99 @@ suite("ScheduleManager RunNow Tests", () => {
       assert.deepStrictEqual(task.attachments, [
         { source: "local", path: "docs/a.md" },
       ]);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("duplicateTask carries attachments to the copy", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const context = createMockContextWithGlobalTasks(tmp, [
+        {
+          id: "task-duplicate-attachment",
+          name: "duplicate-attachment",
+          prompt: "hello",
+          cronExpression: "*/5 * * * *",
+          enabled: false,
+          scope: "global",
+          promptSource: "inline",
+          attachments: [{ source: "global", path: "shared/notes.md" }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+      const manager = new ScheduleManager(context);
+
+      const duplicated = await manager.duplicateTask(
+        "task-duplicate-attachment",
+      );
+
+      assert.ok(duplicated);
+      assert.deepStrictEqual(duplicated.attachments, [
+        { source: "global", path: "shared/notes.md" },
+      ]);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("moveTaskToCurrentWorkspace refuses to move local attachments to another workspace", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const now = new Date().toISOString();
+      const context = createMockContextWithGlobalTasks(tmp, [
+        {
+          id: "task-move-attachment",
+          name: "move-attachment",
+          prompt: "hello",
+          cronExpression: "*/5 * * * *",
+          enabled: false,
+          scope: "workspace",
+          workspacePath: path.join(tmp, "other-workspace"),
+          promptSource: "inline",
+          attachments: [{ source: "local", path: "docs/a.md" }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+      const manager = new ScheduleManager(context);
+      (
+        manager as unknown as {
+          getPreferredWorkspaceRootPath: () => string | undefined;
+        }
+      ).getPreferredWorkspaceRootPath = () =>
+        path.join(tmp, "current-workspace");
+
+      await assert.rejects(
+        () => manager.moveTaskToCurrentWorkspace("task-move-attachment"),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.attachmentBlocksWorkspaceMove(),
+      );
+      assert.strictEqual(
+        manager.getTask("task-move-attachment")?.workspacePath,
+        path.join(tmp, "other-workspace"),
+      );
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -2612,7 +2706,11 @@ suite("ScheduleManager RunNow Tests", () => {
       await internals.checkAndExecuteTasks?.();
 
       assert.strictEqual(executions, 0);
-      assert.strictEqual(saveAttempts, 3, "claim should be retried immediately");
+      assert.strictEqual(
+        saveAttempts,
+        3,
+        "claim should be retried immediately",
+      );
       assert.strictEqual((task.nextRun as Date).getTime(), dueAt.getTime());
       assert.strictEqual(task.lastFiredDueAt, undefined);
     } finally {
