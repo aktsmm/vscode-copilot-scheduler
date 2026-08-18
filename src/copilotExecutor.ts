@@ -18,6 +18,10 @@ import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
 import { resolveGlobalAgentRoots } from "./promptResolver";
 import {
+  createPromptBlockedError,
+  isPromptBlockedError,
+} from "./promptExecutionErrors";
+import {
   areModelSelectionsEqual,
   findBestMatchingModel,
   hasModelSelection,
@@ -38,7 +42,8 @@ const DELAY_AFTER_MODEL_SELECT_MS = 100;
 const DELAY_AFTER_TYPE_NEW_SESSION_MS = 50;
 const DELAY_AFTER_TYPE_CONTINUE_SESSION_MS = 10;
 const DELAY_NEW_SESSION_MS = 200;
-const COMMAND_DELAY_FACTOR_DEFAULT = 0.8;
+/** Chat may still be warming up when the first chat.open ladder fails. */
+const DELAY_ATTACHMENT_RETRY_MS = 750;const COMMAND_DELAY_FACTOR_DEFAULT = 0.8;
 const COMMAND_DELAY_FACTOR_MIN = 0.1;
 const COMMAND_DELAY_FACTOR_MAX = 2;
 
@@ -408,6 +413,7 @@ function buildChatOpenArgs(
   selection: NormalizedModelSelection,
   modelSelector?: Record<string, string>,
   omitModelConfiguration = false,
+  attachFiles?: vscode.Uri[],
 ): Record<string, unknown> {
   const args: Record<string, unknown> = {
     query: chatOpenPrompt,
@@ -416,6 +422,9 @@ function buildChatOpenArgs(
   };
   if (modelSelector && Object.keys(modelSelector).length > 0) {
     args.modelSelector = modelSelector;
+  }
+  if (attachFiles && attachFiles.length > 0) {
+    args.attachFiles = attachFiles;
   }
   // NOTE: The actual reasoning-effort knob is applied out-of-band by
   // applyExperimentalModelQualitySelection(), which writes the Copilot Chat
@@ -566,18 +575,45 @@ export class CopilotExecutor {
     );
 
     try {
-      // Try to create new session if configured
+      // Attachments are added by chat.open itself, so a new session must be
+      // started before it, never after.
       if (chatSession === "new") {
         await this.tryCreateNewChatSession(delayFactor);
       }
 
-      const chatOpenResult = await this.tryOpenChatWithPrompt(
+      const attachFiles = (options?.attachFilePaths ?? []).map((p) =>
+        vscode.Uri.file(p),
+      );
+
+      let chatOpenResult = await this.tryOpenChatWithPrompt(
         routing.chatOpenPrompt,
         routing.chatOpenMode,
         resolved.selection,
         resolved.matched,
+        attachFiles,
       );
+      if (!chatOpenResult.opened && attachFiles.length > 0) {
+        // Chat may still be warming up; retry once before refusing to run.
+        await this.delay(
+          this.getAdjustedDelayMs(DELAY_ATTACHMENT_RETRY_MS, delayFactor),
+        );
+        chatOpenResult = await this.tryOpenChatWithPrompt(
+          routing.chatOpenPrompt,
+          routing.chatOpenMode,
+          resolved.selection,
+          resolved.matched,
+          attachFiles,
+        );
+      }
       if (!chatOpenResult.opened) {
+        if (attachFiles.length > 0) {
+          // The legacy path cannot carry attachments, and silently sending the
+          // prompt without them would look like a successful run.
+          throw createPromptBlockedError(
+            messages.attachmentsRequireChatOpen(),
+            "attachmentsRequireChatOpen",
+          );
+        }
         logDebug(
           `[CopilotScheduler] Falling back to legacy chat commands after chat.open failure`,
         );
@@ -594,7 +630,9 @@ export class CopilotExecutor {
       // user-facing notification for execution failures — callers should
       // avoid showing a second notification for the same error).
       const action = await vscode.window.showWarningMessage(
-        messages.autoExecuteFailed(),
+        isPromptBlockedError(error) && error instanceof Error
+          ? error.message
+          : messages.autoExecuteFailed(),
         messages.actionCopyPrompt(),
         messages.actionCancel(),
       );
@@ -613,6 +651,7 @@ export class CopilotExecutor {
     mode: string | undefined,
     resolvedSelection: NormalizedModelSelection,
     resolvedModel: ModelInfo | undefined,
+    attachFiles: vscode.Uri[],
   ): Promise<{
     opened: boolean;
     resolvedSelection: NormalizedModelSelection;
@@ -621,11 +660,18 @@ export class CopilotExecutor {
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
-          `[CopilotScheduler] Trying workbench.action.chat.open mode=${mode ?? "(none)"} with model selector: ${JSON.stringify(selector)}, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}`,
+          `[CopilotScheduler] Trying workbench.action.chat.open mode=${mode ?? "(none)"} with model selector: ${JSON.stringify(selector)}, reasoningEffort=${resolvedSelection.modelReasoningEffort || "default"}, attachments=${attachFiles.length}`,
         );
         await vscode.commands.executeCommand(
           "workbench.action.chat.open",
-          buildChatOpenArgs(chatOpenPrompt, mode, resolvedSelection, selector),
+          buildChatOpenArgs(
+            chatOpenPrompt,
+            mode,
+            resolvedSelection,
+            selector,
+            false,
+            attachFiles,
+          ),
         );
         return {
           opened: true,
@@ -645,7 +691,14 @@ export class CopilotExecutor {
       );
       await vscode.commands.executeCommand(
         "workbench.action.chat.open",
-        buildChatOpenArgs(chatOpenPrompt, mode, resolvedSelection),
+        buildChatOpenArgs(
+          chatOpenPrompt,
+          mode,
+          resolvedSelection,
+          undefined,
+          false,
+          attachFiles,
+        ),
       );
       return {
         opened: true,
@@ -678,6 +731,7 @@ export class CopilotExecutor {
               resolvedSelection,
               selector,
               true,
+              attachFiles,
             ),
           );
           return {
@@ -704,6 +758,7 @@ export class CopilotExecutor {
             resolvedSelection,
             undefined,
             true,
+            attachFiles,
           ),
         );
         return {

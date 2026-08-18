@@ -18,6 +18,22 @@ export type TaskScope = "global" | "workspace";
 export type PromptSource = "inline" | "local" | "global";
 
 /**
+ * Root an attachment path is stored relative to.
+ * - "local": the task's workspace folder
+ * - "global": the resolved global prompts root
+ */
+export type AttachmentSource = "local" | "global";
+
+/**
+ * A file attached to the chat request when the task runs.
+ * Paths are always relative to the source root; absolute paths are never stored.
+ */
+export interface TaskAttachment {
+  source: AttachmentSource;
+  path: string;
+}
+
+/**
  * Latest prompt-file state pushed to the Webview for a file-backed task.
  * Display only: receiving a preview never rewrites the stored snapshot.
  */
@@ -131,6 +147,9 @@ export interface ScheduledTask {
   /** Path to prompt file (when promptSource is not "inline") */
   promptPath?: string;
 
+  /** Files attached to the chat request at execution time. */
+  attachments?: TaskAttachment[];
+
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
@@ -220,6 +239,9 @@ export interface CreateTaskInput {
 
   /** Path to prompt file */
   promptPath?: string;
+
+  /** Files attached to the chat request at execution time. */
+  attachments?: TaskAttachment[];
 
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
@@ -311,6 +333,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
+
+  /** Files attached to the chat request, in their stored (relative) form. */
+  attachments?: TaskAttachment[];
 }
 
 /**
@@ -380,6 +405,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
 
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
+
+  /** Absolute paths of attachment files, already resolved and validated. */
+  attachFilePaths?: string[];
 }
 
 /**
@@ -400,6 +428,12 @@ export type WebviewToExtensionMessage =
   | { type: "requestPromptPreview"; taskId: string }
   | { type: "openPromptFile"; taskId: string }
   | { type: "loadPromptTemplate"; path: string; source: "local" | "global" }
+  | {
+      type: "pickAttachments";
+      scope: TaskScope;
+      existing: TaskAttachment[];
+    }
+  | { type: "openAttachment"; attachment: TaskAttachment; scope: TaskScope }
   | { type: "webviewReady" };
 
 /**

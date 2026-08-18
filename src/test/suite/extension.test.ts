@@ -1035,8 +1035,8 @@ suite("Webview Test Prompt Wiring Tests", () => {
   test("buildPromptExecutionOptions keeps structured model selection fields", async () => {
     const { __testOnly } = await import("../../extension");
     const buildPromptExecutionOptions =
-      __testOnly.buildPromptExecutionOptions as
-        | ((request: ScheduledTask) => Record<string, string | undefined>)
+      __testOnly.buildPromptExecutionOptions as unknown as
+        | ((request: ScheduledTask) => Record<string, unknown>)
         | undefined;
 
     assert.ok(typeof buildPromptExecutionOptions === "function");
@@ -1070,6 +1070,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelFamily: "gpt-5.4",
       modelVersion: "high",
       modelReasoningEffort: "high",
+      attachFilePaths: undefined,
     });
   });
 

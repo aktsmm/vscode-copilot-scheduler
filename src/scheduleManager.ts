@@ -9,6 +9,7 @@ import * as path from "path";
 import type {
   ScheduledTask,
   CreateTaskInput,
+  TaskAttachment,
   TaskScope,
   ModelInfo,
   ModelSelectionFields,
@@ -39,6 +40,11 @@ import {
   resolveGlobalPromptsRoot,
   resolveLocalPromptPath,
 } from "./promptResolver";
+import {
+  MAX_TASK_ATTACHMENTS,
+  normalizeAttachments,
+  type AttachmentRejection,
+} from "./attachmentResolver";
 import { isPromptBlockedError } from "./promptExecutionErrors";
 
 // Node.js globals
@@ -181,6 +187,34 @@ export const __testOnly = {
   isNowWithinAllowedTimeWindow,
   splitCronExpressions,
 };
+
+function describeAttachmentRejection(rejection: AttachmentRejection): string {
+  switch (rejection.reason) {
+    case "localOnGlobalScope":
+      return messages.attachmentLocalOnGlobalScope();
+    case "denied":
+      return messages.attachmentDenied(rejection.path);
+    case "tooMany":
+      return messages.attachmentLimitExceeded(MAX_TASK_ATTACHMENTS);
+    case "absolutePath":
+    case "traversal":
+      return messages.attachmentOutsideRoot(rejection.path);
+    default:
+      return messages.attachmentInvalidPath(rejection.path);
+  }
+}
+
+function normalizeAttachmentsOrThrow(
+  value: unknown,
+  scope: TaskScope,
+): TaskAttachment[] {
+  const result = normalizeAttachments(value, scope);
+  const rejection = result.rejected[0];
+  if (rejection) {
+    throw new Error(describeAttachmentRejection(rejection));
+  }
+  return result.attachments;
+}
 
 function applyModelSelectionToTask(
   target: ModelSelectionFields,
@@ -932,6 +966,20 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (task.attachments !== undefined) {
+        const normalizedAttachments = normalizeAttachments(
+          task.attachments,
+          task.scope,
+        );
+        if (normalizedAttachments.changed) {
+          needsSave = true;
+        }
+        task.attachments =
+          normalizedAttachments.attachments.length > 0
+            ? normalizedAttachments.attachments
+            : undefined;
+      }
+
       // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),
       // disable it to prevent runaway execution loops.
       try {
@@ -1308,6 +1356,11 @@ export class ScheduleManager {
       throw new Error(messages.noWorkspaceOpen());
     }
 
+    const attachments = normalizeAttachmentsOrThrow(
+      input.attachments,
+      effectiveScope,
+    );
+
     // Calculate next run (disabled tasks must not keep nextRun)
     let nextRun: Date | undefined;
     if (enabled) {
@@ -1334,6 +1387,7 @@ export class ScheduleManager {
       workspacePath: effectiveScope === "workspace" ? workspaceRoot : undefined,
       promptSource: input.promptSource || "inline",
       promptPath: input.promptPath,
+      attachments: attachments.length > 0 ? attachments : undefined,
       autoMode:
         input.autoMode !== undefined
           ? Boolean(input.autoMode)
@@ -1555,6 +1609,20 @@ export class ScheduleManager {
     }
     if (updates.promptPath !== undefined) {
       task.promptPath = updates.promptPath;
+    }
+    // Re-validate on every edit: switching to global scope invalidates local attachments.
+    if (
+      updates.attachments !== undefined ||
+      (task.attachments?.length ?? 0) > 0
+    ) {
+      const nextAttachments = normalizeAttachmentsOrThrow(
+        updates.attachments !== undefined
+          ? updates.attachments
+          : task.attachments,
+        task.scope,
+      );
+      task.attachments =
+        nextAttachments.length > 0 ? nextAttachments : undefined;
     }
     if (updates.autoMode !== undefined) {
       task.autoMode = Boolean(updates.autoMode);

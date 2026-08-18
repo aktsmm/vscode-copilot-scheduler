@@ -42,6 +42,8 @@ export type ExecutionHistoryEntry = {
   promptResolvedAt?: string;
   /** Why the stored snapshot was used instead of the file. */
   promptFallbackReason?: string;
+  /** Number of files attached to the executed request. */
+  attachmentCount?: number;
 };
 
 type StoreContext = Pick<vscode.ExtensionContext, "globalState">;
@@ -197,6 +199,12 @@ function normalizeExecutionHistoryEntry(
   const promptPathDisplay = entry.promptPathDisplay?.trim()
     ? sanitizeAbsolutePathDetails(entry.promptPathDisplay.trim())
     : undefined;
+  const attachmentCount =
+    typeof entry.attachmentCount === "number" &&
+    Number.isInteger(entry.attachmentCount) &&
+    entry.attachmentCount > 0
+      ? entry.attachmentCount
+      : undefined;
 
   return {
     taskId: entry.taskId,
@@ -215,6 +223,7 @@ function normalizeExecutionHistoryEntry(
     promptHash,
     promptResolvedAt,
     promptFallbackReason,
+    attachmentCount,
   };
 }
 

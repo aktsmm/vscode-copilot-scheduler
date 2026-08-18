@@ -215,6 +215,43 @@ export const messages = {
       "時間帯の形式が不正です。HH:mm（例: 22:00）で入力してください",
     ),
 
+  // ==================== Attachments ====================
+  attachmentInvalidPath: (attachmentPath: string) =>
+    t(
+      `Invalid attachment path: ${attachmentPath}`,
+      `添付ファイルのパスが不正です: ${attachmentPath}`,
+    ),
+  attachmentOutsideRoot: (attachmentPath: string) =>
+    t(
+      `Attachments must stay inside the workspace or the global prompts folder: ${attachmentPath}`,
+      `添付ファイルはワークスペースまたはグローバルプロンプトフォルダー内にある必要があります: ${attachmentPath}`,
+    ),
+  attachmentDenied: (attachmentPath: string) =>
+    t(
+      `This file cannot be attached for safety reasons: ${attachmentPath}`,
+      `このファイルは安全のため添付できません: ${attachmentPath}`,
+    ),
+  attachmentLocalOnGlobalScope: () =>
+    t(
+      "Workspace files can only be attached to workspace-scoped tasks. Change the task scope to Workspace, or attach a file from the global prompts folder.",
+      "ワークスペースのファイルは、スコープが Workspace のタスクにのみ添付できます。タスクのスコープを Workspace に変更するか、グローバルプロンプトフォルダーのファイルを添付してください。",
+    ),
+  attachmentLimitExceeded: (max: number) =>
+    t(
+      `Up to ${max} attachments can be added to a task`,
+      `1つのタスクに添付できるファイルは最大 ${max} 件です`,
+    ),
+  attachmentsMissingAtExecution: (names: string) =>
+    t(
+      `Attachment not found, so the task was not executed: ${names}`,
+      `添付ファイルが見つからないため、タスクを実行しませんでした: ${names}`,
+    ),
+  attachmentsRequireChatOpen: () =>
+    t(
+      "Copilot Chat could not be opened, so the task was not executed. Tasks with attachments are never sent without their attachments.",
+      "Copilot Chat を開けなかったため、タスクを実行しませんでした。添付ファイル付きのタスクは、添付なしでは送信しません。",
+    ),
+
   // ==================== Prompts ====================
   enterTaskName: () => t("Enter task name", "タスク名を入力"),
   enterPrompt: () =>

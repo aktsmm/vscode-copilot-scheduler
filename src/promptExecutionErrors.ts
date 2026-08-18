@@ -11,7 +11,9 @@ export const PROMPT_BLOCKED_EXECUTION_ERROR_FLAG =
 export type PromptBlockedReason =
   | "noPromptPath"
   | "pathUnresolved"
-  | "readFailed";
+  | "readFailed"
+  | "attachmentMissing"
+  | "attachmentsRequireChatOpen";
 
 export function createPromptBlockedError(
   message: string,

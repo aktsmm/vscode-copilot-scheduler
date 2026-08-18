@@ -49,10 +49,16 @@ import {
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
 import { createModelSelectionResolver } from "./taskMutationService";
+import {
+  getAttachmentDisplayName,
+  resolveAttachments,
+} from "./attachmentResolver";
 import type {
   ScheduledTask,
   CreateTaskInput,
+  ExecuteOptions,
   TaskAction,
+  TaskAttachment,
   PromptPreview,
   PromptSource,
   PromptExecutionRequest,
@@ -155,8 +161,9 @@ function isEmptyPromptTemplateError(error: unknown): boolean {
 }
 
 function buildPromptExecutionOptions(
-  request: PromptExecutionRequest,
-): PromptExecutionOptions {
+  request: PromptExecutionOptions,
+  localAttachmentRoots: string[] = getWorkspaceFolderPaths(),
+): ExecuteOptions {
   return {
     agent: request.agent,
     chatSession: request.chatSession,
@@ -166,7 +173,42 @@ function buildPromptExecutionOptions(
     modelFamily: request.modelFamily,
     modelVersion: request.modelVersion,
     modelReasoningEffort: request.modelReasoningEffort,
+    attachFilePaths: resolveAttachmentPathsOrThrow(
+      request.attachments,
+      localAttachmentRoots,
+    ),
   };
+}
+
+/**
+ * Resolve attachments against the real roots right before execution.
+ * Fail-closed: a task whose attachment cannot be resolved is never sent without it.
+ */
+function resolveAttachmentPathsOrThrow(
+  attachments: TaskAttachment[] | undefined,
+  localRoots: string[],
+): string[] | undefined {
+  if (!attachments || attachments.length === 0) {
+    return undefined;
+  }
+
+  const { resolved, missing } = resolveAttachments(attachments, {
+    localRoots,
+    globalRoot: getGlobalPromptsRoot(),
+  });
+
+  if (missing.length > 0) {
+    const names = missing
+      .map((item) => getAttachmentDisplayName(item) || item?.path || "")
+      .filter((name) => name.length > 0)
+      .join(", ");
+    throw createPromptBlockedError(
+      messages.attachmentsMissingAtExecution(names),
+      "attachmentMissing",
+    );
+  }
+
+  return resolved.map((item) => item.fsPath);
 }
 
 async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
@@ -1269,7 +1311,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     try {
       await copilotExecutor.executePrompt(
         resolved.prompt,
-        buildPromptExecutionOptions(resolved),
+        buildPromptExecutionOptions(resolved, getTaskAttachmentRoots(task)),
       );
     } catch (error) {
       // executePrompt displays its own warning on failure.
@@ -1289,6 +1331,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         status: "success",
         executedAt: new Date().toISOString(),
         nextRunAt: nextRunDate?.toISOString(),
+        attachmentCount: task.attachments?.length,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
@@ -1765,6 +1808,7 @@ async function resolvePromptExecution(
     modelFamily: task.modelFamily,
     modelVersion: task.modelVersion,
     modelReasoningEffort: task.modelReasoningEffort,
+    attachments: task.attachments,
   };
 }
 
@@ -1800,6 +1844,14 @@ function getWorkspaceFolderPaths(): string[] {
 function getGlobalPromptsRoot(): string | undefined {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
   return resolveGlobalPromptsRoot(config.get<string>("globalPromptsPath", ""));
+}
+
+/** Roots a task's "local" attachments may resolve against. */
+function getTaskAttachmentRoots(task: ScheduledTask): string[] {
+  if (task.scope === "workspace" && task.workspacePath) {
+    return [task.workspacePath];
+  }
+  return [];
 }
 
 /**
