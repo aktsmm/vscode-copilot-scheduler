@@ -193,7 +193,7 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 - Attachments are stored relative to the workspace folder (`local`) or to the global prompts folder (`global`), never as absolute paths.
 - **Only workspace-scoped tasks can attach workspace files.** A global task runs in any window, where the same relative path could point at a different file, so workspace attachments are rejected for them.
 - Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` are never attached.
-- **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once so a renamed file does not silently stop the schedule.
+- **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once per attachment set, so a renamed file does not silently stop the schedule and changing the attachments makes the next failure visible again.
 
 ## 📋 Requirements
 

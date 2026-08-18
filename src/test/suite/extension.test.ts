@@ -1193,20 +1193,140 @@ suite("Webview Test Prompt Wiring Tests", () => {
     }
   });
 
-  test("a blocked attachment warns once per task and clears after a successful run", () => {
+  test("a blocked attachment warns once per attachment set and clears after a successful run", () => {
     const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
     const source = fs.readFileSync(sourcePath, "utf8");
 
     assert.ok(
-      /getPromptBlockedReason\(error\) === "attachmentMissing" &&\s*!attachmentBlockNotifiedTaskIds\.has\(task\.id\)\s*\)\s*\{\s*attachmentBlockNotifiedTaskIds\.add\(task\.id\);\s*void vscode\.window\.showWarningMessage\(/.test(
+      /getPromptBlockedReason\(error\) === "attachmentMissing" &&\s*attachmentBlockNotifications\.get\(task\.id\) !== attachmentSignature\s*\)\s*\{\s*attachmentBlockNotifications\.set\(task\.id, attachmentSignature\);\s*void vscode\.window\.showWarningMessage\(/.test(
         source,
       ),
-      "the attachment warning must be guarded by attachmentBlockNotifiedTaskIds so a scheduled task cannot warn on every tick",
+      "the attachment warning must be keyed by the failing attachment set so a scheduled task cannot warn on every tick",
     );
     assert.ok(
-      source.includes("attachmentBlockNotifiedTaskIds.delete(task.id);"),
-      "a successful run must clear the notified flag so a later block warns again",
+      source.includes("attachmentBlockNotifications.delete(task.id);"),
+      "a successful run must clear the notification so a later block warns again",
     );
+  });
+
+  test("editing a blocked task's attachments makes the next failure audible again", async () => {
+    const { __testOnly } = await import("../../extension");
+    const getAttachmentSignature =
+      __testOnly.getAttachmentSignature as unknown as (
+        task: ScheduledTask,
+      ) => string;
+    const notifications =
+      __testOnly.attachmentBlockNotifications as unknown as Map<string, string>;
+
+    const base: ScheduledTask = {
+      id: "t-attach-signature",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "workspace",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    assert.strictEqual(getAttachmentSignature(base), "");
+    assert.strictEqual(
+      getAttachmentSignature({
+        ...base,
+        attachments: [
+          { source: "local", path: "a.md" },
+          { source: "global", path: "b.md" },
+        ],
+      }),
+      "local:a.md|global:b.md",
+    );
+
+    const broken = {
+      ...base,
+      attachments: [{ source: "local" as const, path: "gone.md" }],
+    };
+    const repaired = {
+      ...base,
+      attachments: [{ source: "local" as const, path: "other.md" }],
+    };
+
+    notifications.delete(base.id);
+    try {
+      const shouldWarn = (task: ScheduledTask): boolean =>
+        notifications.get(task.id) !== getAttachmentSignature(task);
+
+      assert.strictEqual(shouldWarn(broken), true);
+      notifications.set(broken.id, getAttachmentSignature(broken));
+      assert.strictEqual(
+        shouldWarn(broken),
+        false,
+        "the same broken attachment set must not warn twice",
+      );
+      assert.strictEqual(
+        shouldWarn(repaired),
+        true,
+        "a changed attachment set must warn again instead of failing silently",
+      );
+    } finally {
+      notifications.delete(base.id);
+    }
+  });
+
+  test("runtime caches drop tasks that no longer exist", async () => {
+    const { __testOnly } = await import("../../extension");
+    const prune = __testOnly.pruneRuntimeCachesForRemovedTasks as unknown as (
+      taskIds: Set<string>,
+    ) => void;
+    const notifications =
+      __testOnly.attachmentBlockNotifications as unknown as Map<string, string>;
+
+    notifications.set("t-kept", "local:a.md");
+    notifications.set("t-deleted", "local:b.md");
+    try {
+      prune(new Set(["t-kept"]));
+
+      assert.strictEqual(notifications.get("t-kept"), "local:a.md");
+      assert.strictEqual(
+        notifications.has("t-deleted"),
+        false,
+        "a deleted task must not keep leaking its notification state",
+      );
+    } finally {
+      notifications.delete("t-kept");
+      notifications.delete("t-deleted");
+    }
+  });
+
+  test("the tasks-changed hook prunes runtime caches before refreshing the webview", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+
+    assert.ok(
+      /addOnTasksChangedCallback\(\(\) => \{\s*const tasks = scheduleManager\.getAllTasks\(\);\s*pruneRuntimeCachesForRemovedTasks\(/.test(
+        source,
+      ),
+      "task deletions must prune per-task runtime caches",
+    );
+  });
+
+  test("deactivate clears every per-task runtime cache", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const start = source.indexOf("export function deactivate(): void {");
+    assert.ok(start >= 0, "deactivate not found");
+    const body = source.slice(start, source.indexOf("\n}", start));
+
+    for (const cache of [
+      "manualRunInFlightTaskIds",
+      "attachmentBlockNotifications",
+      "lastPromptResolutionByTaskId",
+    ]) {
+      assert.ok(
+        body.includes(`${cache}.clear();`),
+        `deactivate must clear ${cache} so a reactivated host does not inherit stale per-task state`,
+      );
+    }
   });
 
   test("every successful run records how many files it attached", () => {

@@ -606,8 +606,32 @@ let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
-/** Tasks already reported as blocked by a missing attachment, to avoid repeating the warning every run. */
-const attachmentBlockNotifiedTaskIds = new Set<string>();
+/**
+ * Attachment sets already reported as blocked, so the warning is not repeated
+ * every tick. Keyed by task id and valued by the attachment set that failed, so
+ * editing the attachments makes the next failure audible again.
+ */
+const attachmentBlockNotifications = new Map<string, string>();
+
+function getAttachmentSignature(task: ScheduledTask): string {
+  return (task.attachments ?? [])
+    .map((item) => `${item.source}:${item.path}`)
+    .join("|");
+}
+
+/** Drop per-task runtime caches for tasks that no longer exist. */
+function pruneRuntimeCachesForRemovedTasks(taskIds: Set<string>): void {
+  for (const id of [...attachmentBlockNotifications.keys()]) {
+    if (!taskIds.has(id)) {
+      attachmentBlockNotifications.delete(id);
+    }
+  }
+  for (const id of [...lastPromptResolutionByTaskId.keys()]) {
+    if (!taskIds.has(id)) {
+      lastPromptResolutionByTaskId.delete(id);
+    }
+  }
+}
 
 const PROMPT_PREVIEW_DEBOUNCE_MS = 300;
 const pendingPromptPreviewPaths = new Set<string>();
@@ -1112,7 +1136,9 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     });
   scheduleManager.addOnTasksChangedCallback(() => {
-    SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
+    const tasks = scheduleManager.getAllTasks();
+    pruneRuntimeCachesForRemovedTasks(new Set(tasks.map((task) => task.id)));
+    SchedulerWebview.updateTasks(tasks);
   });
 
   // Register TreeView
@@ -1292,6 +1318,8 @@ export function deactivate(): void {
   SchedulerWebview.dispose();
   extensionContextRef = undefined;
   manualRunInFlightTaskIds.clear();
+  attachmentBlockNotifications.clear();
+  lastPromptResolutionByTaskId.clear();
   resetExecutionHistoryQueueForTests();
   setExecutionHistoryContextForTests(undefined);
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
@@ -1323,7 +1351,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     }
 
     await syncPromptSnapshotAfterRun(task);
-    attachmentBlockNotifiedTaskIds.delete(task.id);
+    attachmentBlockNotifications.delete(task.id);
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
@@ -1345,11 +1373,12 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     if (isPromptBlockedError(error)) {
       // A scheduled task that silently stops is worse than a noisy one, but the
       // warning must not repeat on every tick.
+      const attachmentSignature = getAttachmentSignature(task);
       if (
         getPromptBlockedReason(error) === "attachmentMissing" &&
-        !attachmentBlockNotifiedTaskIds.has(task.id)
+        attachmentBlockNotifications.get(task.id) !== attachmentSignature
       ) {
-        attachmentBlockNotifiedTaskIds.add(task.id);
+        attachmentBlockNotifications.set(task.id, attachmentSignature);
         void vscode.window.showWarningMessage(
           error instanceof Error ? error.message : String(error),
         );
@@ -1848,6 +1877,9 @@ export const __testOnly = {
   confirmManualRunIfWorkspaceMismatch,
   setExtensionContextForTests,
   resetExecutionHistoryQueueForTests,
+  getAttachmentSignature,
+  pruneRuntimeCachesForRemovedTasks,
+  attachmentBlockNotifications,
 };
 
 function getWorkspaceFolderPaths(): string[] {
