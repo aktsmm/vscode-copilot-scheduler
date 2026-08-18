@@ -1887,6 +1887,7 @@ export class ScheduleManager {
     let needsSave = false;
     let executedCount = 0;
     const claims: TaskRunClaim[] = [];
+    const runResults = new Map<string, Date>();
 
     for (const task of this.tasks.values()) {
       if (!task.enabled || !task.nextRun) {
@@ -2000,10 +2001,10 @@ export class ScheduleManager {
         await Promise.allSettled(
           claims.map((claim) =>
             this.executeClaimedTask(claim, defaultJitterSeconds).then(
-              (executed) => {
-                if (executed) {
+              (executedAt) => {
+                if (executedAt) {
                   executedCount++;
-                  needsSave = true;
+                  runResults.set(claim.taskId, executedAt);
                 }
               },
             ),
@@ -2033,8 +2034,18 @@ export class ScheduleManager {
       }
     }
 
-    if (needsSave) {
-      await this.saveTasks();
+    if (runResults.size > 0) {
+      await this.persistRunResults(runResults);
+    } else if (needsSave) {
+      try {
+        await this.saveTasks();
+      } catch (error) {
+        // A conflicting save reloads the store; the next tick re-evaluates it.
+        logDebug(
+          "[CopilotScheduler] Failed to persist schedule updates:",
+          toSafeErrorDetails(error),
+        );
+      }
     }
   }
 
@@ -2101,17 +2112,52 @@ export class ScheduleManager {
   }
 
   /**
+   * Persist the results of executed runs, re-applying them when a conflicting
+   * save reloads the store, so lastRun is not rolled back by another window.
+   */
+  private async persistRunResults(results: Map<string, Date>): Promise<void> {
+    for (
+      let attempt = 1;
+      attempt <= ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS;
+      attempt++
+    ) {
+      let applied = 0;
+      for (const [taskId, executedAt] of results) {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+          continue;
+        }
+        task.lastRun = executedAt;
+        applied++;
+      }
+      if (applied === 0) {
+        return;
+      }
+
+      try {
+        await this.saveTasks();
+        return;
+      } catch (error) {
+        logDebug(
+          `[CopilotScheduler] Failed to persist run results (attempt ${attempt}/${ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS}):`,
+          toSafeErrorDetails(error),
+        );
+      }
+    }
+  }
+
+  /**
    * Run a claimed occurrence. nextRun is already advanced by the claim,
-   * so this only reports whether the task actually executed.
+   * so this only reports when the task actually executed.
    */
   private async executeClaimedTask(
     claim: TaskRunClaim,
     defaultJitterSeconds: number,
-  ): Promise<boolean> {
+  ): Promise<Date | undefined> {
     try {
       const claimedTask = this.tasks.get(claim.taskId);
       if (!claimedTask) {
-        return false;
+        return undefined;
       }
 
       await this.applyJitter(claimedTask.jitterSeconds ?? defaultJitterSeconds);
@@ -2119,7 +2165,7 @@ export class ScheduleManager {
       // Re-resolve: a conflicting save may have replaced the task during jitter.
       const task = this.tasks.get(claim.taskId);
       if (!task) {
-        return false;
+        return undefined;
       }
 
       if (
@@ -2132,11 +2178,11 @@ export class ScheduleManager {
         logDebug(
           `[CopilotScheduler] Outside allowed time window after jitter, skipping task: ${task.name}`,
         );
-        return false;
+        return undefined;
       }
 
       if (!this.onExecuteCallback) {
-        return false;
+        return undefined;
       }
 
       try {
@@ -2147,7 +2193,7 @@ export class ScheduleManager {
           taskName: task.name,
           error: toSafeErrorDetails(error),
         });
-        return false;
+        return undefined;
       }
 
       const executedAt = new Date();
@@ -2157,7 +2203,7 @@ export class ScheduleManager {
       if (latestTask) {
         latestTask.lastRun = executedAt;
       }
-      return true;
+      return executedAt;
     } finally {
       this.finishTaskRun(claim.taskId);
     }

@@ -5,6 +5,14 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-08-18
+
+### Fixed
+
+- **A scheduled task no longer runs twice when several VS Code windows are open** ([#2](https://github.com/aktsmm/vscode-copilot-scheduler/issues/2)). A due occurrence is now reserved on disk before it runs, and a task records the due time it last fired, so a save that conflicts with another window can no longer roll the schedule back and let the next tick fire the same occurrence again.
+- The last-run time of an executed task is re-applied and saved again when a conflicting save reloads the task store, instead of being rolled back to its pre-execution value.
+- A task-store conflict during a scheduler tick is now reported as a debug message instead of failing the whole tick with `Scheduler tick failed`.
+
 ## [1.4.0] - 2026-08-15
 
 ### Added

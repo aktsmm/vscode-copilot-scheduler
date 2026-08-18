@@ -2471,6 +2471,67 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("checkAndExecuteTasks retries persisting run results after a conflicting save", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "run-result-retry",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+
+      const internals = manager as unknown as {
+        onExecuteCallback?: (task: unknown) => Promise<void>;
+        saveTasks: (options?: unknown) => Promise<void>;
+        checkAndExecuteTasks?: () => Promise<void>;
+      };
+      const originalSaveTasks = internals.saveTasks.bind(manager);
+      let failNextSave = false;
+      let failures = 0;
+      internals.saveTasks = async (options?: unknown) => {
+        if (failNextSave) {
+          failNextSave = false;
+          failures++;
+          throw new Error("conflicting save");
+        }
+        return originalSaveTasks(options);
+      };
+      internals.onExecuteCallback = async () => {
+        failNextSave = true;
+      };
+
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60 * 1000));
+
+      await internals.checkAndExecuteTasks?.();
+
+      assert.strictEqual(failures, 1);
+      const stored = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; lastRun?: string }>;
+      const persisted = stored.find((entry) => entry.id === task.id);
+      assert.ok(
+        persisted?.lastRun,
+        "lastRun should be persisted by the retry after a failed save",
+      );
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("runTaskNowDetailed returns executionFailed when callback throws", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
