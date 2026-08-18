@@ -117,12 +117,31 @@ function verifyVsix(filePath) {
   return true;
 }
 
-const vsixPaths = process.argv.slice(2);
-if (vsixPaths.length === 0) {
-  console.error(
-    "Usage: node scripts/verify-vsix-contents.js <path-to.vsix> [...]",
+/** The VSIX this repository builds for the current manifest version. */
+function findDefaultVsixPaths() {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"),
   );
-  process.exit(2);
+  const fileName = `${manifest.name}-${manifest.version}.vsix`;
+  const candidates = [
+    path.resolve(__dirname, "..", "artifacts", "vsix", fileName),
+    path.resolve(__dirname, "..", fileName),
+  ];
+  return candidates.filter((candidate) => fs.existsSync(candidate));
+}
+
+let vsixPaths = process.argv.slice(2);
+if (vsixPaths.length === 0) {
+  vsixPaths = findDefaultVsixPaths();
+  if (vsixPaths.length === 0) {
+    console.error(
+      "Usage: node scripts/verify-vsix-contents.js [path-to.vsix ...]",
+    );
+    console.error(
+      "No argument was given and no VSIX for the current version was found in artifacts/vsix/ or the repository root. Run `npx @vscode/vsce package` first.",
+    );
+    process.exit(2);
+  }
 }
 
 let ok = true;

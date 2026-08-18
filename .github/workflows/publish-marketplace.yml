@@ -66,6 +66,9 @@ jobs:
       - name: Verify package-lock registry hygiene
         run: node scripts/verify-package-lock-registry.js
 
+      - name: Lint
+        run: npm run lint
+
       - name: Compile extension
         run: npm run compile
 

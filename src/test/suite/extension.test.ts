@@ -254,6 +254,33 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("the publish workflow runs every release gate", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/publish-marketplace.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+
+    // The tag push is the only release path, so a gate missing here never runs
+    // before the artifact reaches the Marketplace.
+    for (const gate of [
+      "node scripts/verify-package-lock-registry.js",
+      "npm run lint",
+      "npm test",
+      "npm run verify:vsix",
+    ]) {
+      assert.ok(
+        workflow.includes(gate),
+        `publish workflow should run the release gate: ${gate}`,
+      );
+    }
+    assert.ok(
+      workflow.includes("Validate tag matches package version"),
+      "publish workflow should refuse a tag that does not match package.json",
+    );
+  });
+
   test("README command tables stay aligned with contributed commands", () => {
     const root = path.resolve(__dirname, "../../..");
     const packageJson = JSON.parse(
