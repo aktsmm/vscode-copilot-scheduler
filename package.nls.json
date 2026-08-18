@@ -32,7 +32,7 @@
   "config.language.auto": "Auto-detect from VS Code",
   "config.language.en": "English",
   "config.language.ja": "Japanese",
-  "config.timezone": "Timezone for cron scheduling (e.g., 'Asia/Tokyo'). Leave empty for system default.",
+  "config.timezone": "Timezone for cron scheduling, the allowed time window and the daily execution counters (e.g., 'Asia/Tokyo'). Leave empty for system default.",
   "config.chatSession": "Default chat session behavior. Tasks can override this.",
   "config.chatSession.new": "Create new chat session for each execution (more isolated, usually slower)",
   "config.chatSession.continue": "Continue in existing chat session (usually faster)",

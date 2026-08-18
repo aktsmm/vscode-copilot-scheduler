@@ -153,6 +153,87 @@ suite("ScheduleManager Time Window Helper Tests", () => {
     assert.strictEqual(isWithin!(morning, "22:00", "07:00"), true);
     assert.strictEqual(isWithin!(noon, "22:00", "07:00"), false);
   });
+
+  test("the allowed time window reads the scheduler timezone, not the machine clock", () => {
+    const isWithin = __testOnly.isNowWithinAllowedTimeWindow as (
+      now: Date,
+      start?: string,
+      end?: string,
+      timeZone?: string,
+    ) => boolean;
+
+    // 2026-03-01T02:00Z is 11:00 in Tokyo and 21:00 the previous day in New York.
+    const instant = new Date("2026-03-01T02:00:00Z");
+
+    assert.strictEqual(isWithin(instant, "09:00", "18:00", "Asia/Tokyo"), true);
+    assert.strictEqual(
+      isWithin(instant, "09:00", "18:00", "America/New_York"),
+      false,
+    );
+    assert.strictEqual(
+      isWithin(instant, "20:00", "23:00", "America/New_York"),
+      true,
+    );
+    assert.strictEqual(
+      isWithin(instant, "09:00", "18:00", "Not/AZone"),
+      isWithin(instant, "09:00", "18:00"),
+      "an invalid timezone must fall back to local time instead of throwing",
+    );
+  });
+
+  test("the scheduler wall clock resolves the day and minute of the configured zone", () => {
+    const wallClock = __testOnly.getZonedWallClock as (
+      date: Date,
+      timeZone?: string,
+    ) => { dateKey: string; minutes: number };
+
+    const instant = new Date("2026-03-01T02:00:00Z");
+
+    assert.deepStrictEqual(wallClock(instant, "Asia/Tokyo"), {
+      dateKey: "2026-03-01",
+      minutes: 11 * 60,
+    });
+    assert.deepStrictEqual(wallClock(instant, "America/New_York"), {
+      dateKey: "2026-02-28",
+      minutes: 21 * 60,
+    });
+    assert.deepStrictEqual(wallClock(instant, "UTC"), {
+      dateKey: "2026-03-01",
+      minutes: 2 * 60,
+    });
+
+    const midnight = new Date("2026-03-01T15:00:00Z");
+    assert.strictEqual(
+      wallClock(midnight, "Asia/Tokyo").minutes,
+      0,
+      "midnight must be minute 0, not minute 1440",
+    );
+    assert.strictEqual(wallClock(midnight, "Asia/Tokyo").dateKey, "2026-03-02");
+
+    assert.deepStrictEqual(
+      wallClock(instant, "Not/AZone"),
+      wallClock(instant),
+      "an invalid timezone must fall back to local time",
+    );
+  });
+
+  test("daily counters use the scheduler date key instead of the machine date", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/scheduleManager.ts"),
+      "utf8",
+    );
+    const classStart = source.indexOf("export class ScheduleManager");
+    assert.ok(classStart >= 0, "ScheduleManager class not found");
+
+    assert.ok(
+      !source.slice(classStart).includes("getLocalDateKey("),
+      "daily counters inside ScheduleManager must go through getSchedulerDateKey so the counter day matches the cron timezone",
+    );
+    assert.ok(
+      source.includes("return getZonedWallClock(date, this.getTimeZone())"),
+      "getSchedulerDateKey must resolve the day in the configured timezone",
+    );
+  });
 });
 
 suite("ScheduleManager Minimum Interval Tests", () => {

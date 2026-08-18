@@ -103,6 +103,60 @@ function getLocalDateKey(date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Wall-clock date and minute-of-day in the scheduler timezone.
+ * Cron already runs on that timezone, so the daily counters and the allowed
+ * time window have to read the same clock or they mean a different day and a
+ * different hour than the schedule they gate. An invalid timezone falls back to
+ * local time (U9).
+ */
+function getZonedWallClock(
+  date: Date,
+  timeZone?: string,
+): { dateKey: string; minutes: number } {
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(date);
+      const get = (type: Intl.DateTimeFormatPartTypes): string =>
+        parts.find((part) => part.type === type)?.value ?? "";
+      const year = get("year");
+      const month = get("month");
+      const day = get("day");
+      const hour = Number(get("hour"));
+      const minute = Number(get("minute"));
+      if (
+        year &&
+        month &&
+        day &&
+        Number.isInteger(hour) &&
+        Number.isInteger(minute)
+      ) {
+        return {
+          dateKey: `${year}-${month}-${day}`,
+          minutes: hour * 60 + minute,
+        };
+      }
+    } catch {
+      logDebug(
+        `[CopilotScheduler] Invalid timezone "${timeZone}", falling back to local time`,
+      );
+    }
+  }
+
+  return {
+    dateKey: getLocalDateKey(date),
+    minutes: date.getHours() * 60 + date.getMinutes(),
+  };
+}
+
 function toSafeErrorDetails(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   const sanitized = sanitizeAbsolutePathDetails(
@@ -148,6 +202,7 @@ function isNowWithinAllowedTimeWindow(
   now: Date,
   start?: string,
   end?: string,
+  timeZone?: string,
 ): boolean {
   const startNormalized = normalizeTimeWindowHHMM(start);
   const endNormalized = normalizeTimeWindowHHMM(end);
@@ -155,7 +210,7 @@ function isNowWithinAllowedTimeWindow(
     return true;
   }
 
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowMinutes = getZonedWallClock(now, timeZone).minutes;
   const startMinutes = startNormalized
     ? timeWindowToMinutes(startNormalized)
     : undefined;
@@ -186,6 +241,7 @@ export const __testOnly = {
   toSafeErrorDetails,
   normalizeTimeWindowHHMM,
   isNowWithinAllowedTimeWindow,
+  getZonedWallClock,
   splitCronExpressions,
 };
 
@@ -377,7 +433,7 @@ export class ScheduleManager {
    * Load daily execution count from globalState
    */
   private loadDailyExecCount(): void {
-    const today = getLocalDateKey();
+    const today = this.getSchedulerDateKey();
     const savedDate = this.context.globalState.get<string>(
       DAILY_EXEC_DATE_KEY,
       "",
@@ -415,7 +471,7 @@ export class ScheduleManager {
   }
 
   private loadDailyTaskExecCounts(): void {
-    const today = getLocalDateKey();
+    const today = this.getSchedulerDateKey();
     const savedDate = this.context.globalState.get<string>(
       DAILY_TASK_EXEC_DATE_KEY,
       "",
@@ -466,7 +522,7 @@ export class ScheduleManager {
   }
 
   private ensureDailyCountersDate(date = new Date()): void {
-    const today = getLocalDateKey(date);
+    const today = this.getSchedulerDateKey(date);
     if (this.dailyExecDate !== today) {
       this.dailyExecCount = 0;
       this.dailyExecDate = today;
@@ -516,7 +572,7 @@ export class ScheduleManager {
 
   private async persistDailyExecCount(): Promise<void> {
     this.ensureDailyCountersDate();
-    const today = this.dailyExecDate || getLocalDateKey();
+    const today = this.dailyExecDate || this.getSchedulerDateKey();
     await this.context.globalState.update(
       DAILY_EXEC_COUNT_KEY,
       this.dailyExecCount,
@@ -1204,6 +1260,11 @@ export class ScheduleManager {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const tz = config.get<string>("timezone", "");
     return tz || undefined;
+  }
+
+  /** Calendar day the schedule runs on, used by the daily counters. */
+  private getSchedulerDateKey(date = new Date()): string {
+    return getZonedWallClock(date, this.getTimeZone()).dateKey;
   }
 
   private getManualRunNextRunPolicy(): ManualRunNextRunPolicy {
@@ -2007,6 +2068,7 @@ export class ScheduleManager {
             now,
             task.allowedTimeStart,
             task.allowedTimeEnd,
+            this.getTimeZone(),
           )
         ) {
           logDebug(
@@ -2031,7 +2093,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Daily limit (${maxDailyLimit}) reached, skipping task: ${task.name}`,
           );
-          const todayKey = getLocalDateKey();
+          const todayKey = this.getSchedulerDateKey();
           if (this.dailyLimitNotifiedDate !== todayKey) {
             this.dailyLimitNotifiedDate = todayKey;
             void this.context.globalState
@@ -2250,6 +2312,7 @@ export class ScheduleManager {
           new Date(),
           task.allowedTimeStart,
           task.allowedTimeEnd,
+          this.getTimeZone(),
         )
       ) {
         logDebug(

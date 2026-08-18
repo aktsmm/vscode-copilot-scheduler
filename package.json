@@ -487,11 +487,11 @@
             },
             "allowedTimeStart": {
               "type": "string",
-              "description": "Earliest local wall-clock time the task may run, as 'HH:mm'."
+              "description": "Earliest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
             },
             "allowedTimeEnd": {
               "type": "string",
-              "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
+              "description": "Latest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
             },
             "attachments": {
               "type": "array",
@@ -622,11 +622,11 @@
                 },
                 "allowedTimeStart": {
                   "type": "string",
-                  "description": "Earliest local wall-clock time the task may run, as 'HH:mm'."
+                  "description": "Earliest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
                 },
                 "allowedTimeEnd": {
                   "type": "string",
-                  "description": "Latest local wall-clock time the task may run, as 'HH:mm'."
+                  "description": "Latest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
                 },
                 "attachments": {
                   "type": "array",

@@ -32,7 +32,7 @@
   "config.language.auto": "VS Codeから自動検出",
   "config.language.en": "英語",
   "config.language.ja": "日本語",
-  "config.timezone": "cronスケジューリングのタイムゾーン（例: 'Asia/Tokyo'）。空白でシステムデフォルト。",
+  "config.timezone": "cron スケジューリング、実行可能時間帯、1 日の実行回数カウントに使うタイムゾーン（例: 'Asia/Tokyo'）。空欄でシステム既定。",
   "config.chatSession": "チャットセッションの既定動作。タスクごとに上書きできます。",
   "config.chatSession.new": "実行ごとに新しいチャットセッションを作成（分離しやすいが通常は遅め）",
   "config.chatSession.continue": "既存のチャットセッションを継続（通常は高速）",

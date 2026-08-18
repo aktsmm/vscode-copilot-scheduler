@@ -114,7 +114,7 @@ Task snapshots and revision metadata are written through same-directory temporar
 | `copilotScheduler.enabled`                  | `true`            | Enable/disable scheduled execution                                                                                                                                                                                                                             |
 | `copilotScheduler.defaultScope`             | `workspace`       | Default scope                                                                                                                                                                                                                                                  |
 | `copilotScheduler.language`                 | `auto`            | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.                                                                                                                                        |
-| `copilotScheduler.timezone`                 | `""`              | Timezone for scheduling                                                                                                                                                                                                                                        |
+| `copilotScheduler.timezone`                 | `""`              | Timezone for scheduling, the allowed time window and the daily run counters                                                                                                                                                                                     |
 | `copilotScheduler.jitterSeconds`            | `600`             | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                      |
 | `copilotScheduler.manualRunNextRunPolicy`   | `advance`         | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                       |
 | `copilotScheduler.chatSession`              | `new`             | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                       |
@@ -134,7 +134,7 @@ Task snapshots and revision metadata are written through same-directory temporar
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
 
-Task-level controls (`Chat Session`, `Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form.
+Task-level controls (`Chat Session`, `Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form. `Max Runs/Day` and `Allowed Time Window` are evaluated on the same clock as the schedule: `copilotScheduler.timezone` when it is set, otherwise the machine's local time.
 
 The Webview previews Copilot Chat-like thinking effort options for supported model families. If it fails, choose `Default`.
 

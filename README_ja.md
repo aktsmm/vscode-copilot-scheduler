@@ -123,7 +123,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.enabled`                  | `true`            | スケジュール実行の有効/無効                                                                                                                                                                                                                                              |
 | `copilotScheduler.defaultScope`             | `workspace`       | デフォルトスコープ                                                                                                                                                                                                                                                       |
 | `copilotScheduler.language`                 | `auto`            | UI 言語 (auto/en/ja)。拡張の Webview/Tree に適用。設定説明文の反映にはウィンドウ再読み込みが必要な場合があります。                                                                                                                                                       |
-| `copilotScheduler.timezone`                 | `""`              | スケジュール用タイムゾーン                                                                                                                                                                                                                                               |
+| `copilotScheduler.timezone`                 | `""`              | スケジュール、実行可能時間帯、1 日の実行回数カウントに使うタイムゾーン                                                                                                                                                                                                   |
 | `copilotScheduler.jitterSeconds`            | `600`             | タスク実行前に入れるランダム遅延の最大秒数 (0〜1800、0=無効、タスクごとに上書き可)                                                                                                                                                                                       |
 | `copilotScheduler.manualRunNextRunPolicy`   | `advance`         | `Run Now` 後の次回実行計算: `advance`（既存 nextRun から進める）/ `fromNow`（現在時刻から再計算）                                                                                                                                                                        |
 | `copilotScheduler.chatSession`              | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
@@ -143,7 +143,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 
 AI が適用した編集を遅延後に自動で保持するには、VS Code 設定 `chat.editing.autoAcceptDelay` を設定してください（`0` = 無効、`1-100` = 秒、推奨: `5`）。
 
-タスク単位の運用制御（「チャットセッション」「上限/日」「実行許可時間帯」）は Webview の作成/編集フォームで設定できます。
+タスク単位の運用制御（「チャットセッション」「上限/日」「実行許可時間帯」）は Webview の作成/編集フォームで設定できます。「上限/日」と「実行許可時間帯」はスケジュールと同じ時計で判定します。`copilotScheduler.timezone` を設定していればそのタイムゾーン、未設定ならマシンのローカル時刻です。
 
 Webview では、対応 family に対して Copilot Chat に近い思考の負荷候補をプレビュー表示します。失敗するときは「既定」を選んでください。
 

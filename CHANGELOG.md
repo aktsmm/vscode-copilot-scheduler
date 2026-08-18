@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workspace-relative attachments are rejected for global-scoped tasks, because such a task runs in any window where the same relative path could resolve to a different file. For the same reason, a task that attaches workspace files cannot be moved to another workspace until its attachments are removed.
 - A task whose attachment cannot be resolved is recorded as `blocked` and is not executed, and a task with attachments never falls back to the legacy chat path that cannot carry them. The warning is shown once per attachment set, so a repeated failure stays quiet but changing the attachments makes the next failure visible again.
 
+### Fixed
+
+- **`copilotScheduler.timezone` now also governs the allowed time window and the daily run counters.** Only cron used the configured timezone, so a task limited to `09:00`-`18:00` was gated by the machine clock while it was scheduled by another zone, and `Max Runs/Day` reset at the machine's midnight rather than the schedule's. An invalid timezone still falls back to local time.
+
 ### Internal
 
 - Preferred workspace folder resolution moved into `src/workspaceRoots.ts`. Task creation, the attachment picker, and the workspace-name placeholder previously each had their own copy, so they could disagree about which folder a task binds to; a test now fails if the logic is duplicated again.
