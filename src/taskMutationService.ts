@@ -154,6 +154,19 @@ function mergeModelSelection(
   return merged;
 }
 
+function buildEffectiveModelSelection(
+  current: ModelSelectionFields,
+  updates: ModelSelectionFields,
+): ModelSelectionFields {
+  if (typeof updates.model === "string" && updates.model.trim().length > 0) {
+    const requested = mergeModelSelection({}, updates);
+    requested.modelReasoningEffort =
+      updates.modelReasoningEffort ?? current.modelReasoningEffort;
+    return requested;
+  }
+  return mergeModelSelection(current, updates);
+}
+
 type ModelResolutionOutcome =
   | {
       ok: true;
@@ -323,7 +336,7 @@ export function createLmToolMutationClient(
         const modelOutcome = await resolveModelFieldsForMutation(
           resolveModelSelection,
           input,
-          input,
+          mergeModelSelection({}, input),
         );
         if (!modelOutcome.ok) {
           return {
@@ -374,7 +387,7 @@ export function createLmToolMutationClient(
         const modelOutcome = await resolveModelFieldsForMutation(
           resolveModelSelection,
           updates,
-          mergeModelSelection(existing, updates),
+          buildEffectiveModelSelection(existing, updates),
         );
         if (!modelOutcome.ok) {
           return {

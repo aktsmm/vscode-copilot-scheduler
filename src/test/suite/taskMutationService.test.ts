@@ -271,6 +271,32 @@ suite("taskMutationService lmToolClient", () => {
 });
 
 suite("taskMutationService model resolution", () => {
+  test("createTask passes only model selection fields to the resolver", async () => {
+    const fake = new FakeScheduleManager();
+    const delegate = catalogResolver([fakeModel()]);
+    let requestedKeys: string[] = [];
+    const resolver: ModelSelectionResolver = (requested) => {
+      requestedKeys = Object.keys(requested).sort();
+      return delegate(requested);
+    };
+    const c = client(fake, resolver);
+
+    const result = await c.createTask({
+      ...baseInput(),
+      model: "claude-sonnet-4",
+    });
+
+    assertOk(result);
+    assert.deepStrictEqual(requestedKeys, [
+      "model",
+      "modelFamily",
+      "modelName",
+      "modelReasoningEffort",
+      "modelVendor",
+      "modelVersion",
+    ]);
+  });
+
   test("createTask expands a bare model id into the full selection", async () => {
     const fake = new FakeScheduleManager();
     const c = client(fake, catalogResolver([fakeModel()]));
@@ -359,6 +385,72 @@ suite("taskMutationService model resolution", () => {
     assertOk(result);
     assert.strictEqual(fake.lastUpdates?.model, "claude-sonnet-4");
     assert.strictEqual(fake.lastUpdates?.modelName, "Claude Sonnet 4");
+  });
+
+  test("updateTask switches the full selection when only the model id changes", async () => {
+    const oldModel = fakeModel();
+    const newModel = fakeModel({
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      family: "gpt-5.6-sol",
+      version: "2026-08-01",
+    });
+    const fake = new FakeScheduleManager();
+    const c = client(fake, catalogResolver([oldModel, newModel]));
+    const created = await c.createTask({
+      ...baseInput(),
+      model: oldModel.id,
+    });
+    assertOk(created);
+
+    const result = await c.updateTask(created.task.id, {
+      model: newModel.id,
+    });
+
+    assertOk(result);
+    assert.deepStrictEqual(
+      {
+        model: result.task.model,
+        modelName: result.task.modelName,
+        modelVendor: result.task.modelVendor,
+        modelFamily: result.task.modelFamily,
+        modelVersion: result.task.modelVersion,
+      },
+      {
+        model: newModel.id,
+        modelName: newModel.name,
+        modelVendor: newModel.vendor,
+        modelFamily: newModel.family,
+        modelVersion: newModel.version,
+      },
+    );
+  });
+
+  test("updateTask clears an inherited reasoning effort unsupported by the new model", async () => {
+    const oldModel = fakeModel();
+    const newModel = fakeModel({
+      id: "gpt-4o",
+      name: "GPT-4o",
+      family: "gpt-4o",
+      version: "2026-08-01",
+    });
+    const fake = new FakeScheduleManager();
+    const c = client(fake, catalogResolver([oldModel, newModel]));
+    const created = await c.createTask({
+      ...baseInput(),
+      model: oldModel.id,
+      modelReasoningEffort: "high",
+    });
+    assertOk(created);
+
+    const result = await c.updateTask(created.task.id, {
+      model: newModel.id,
+    });
+
+    assertOk(result);
+    assert.strictEqual(result.task.model, newModel.id);
+    assert.strictEqual(fake.lastUpdates?.modelReasoningEffort, "");
+    assert.match(result.warning ?? "", /not supported/);
   });
 
   test("updateTask with an empty model clears every model field", async () => {
