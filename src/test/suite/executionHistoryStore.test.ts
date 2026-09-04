@@ -60,18 +60,36 @@ suite("executionHistoryStore", () => {
     setExecutionHistoryContextForTests(undefined);
   });
 
-  test("appends newest first and enforces limit", async () => {
+  test("appends newest first and enforces the limit per task", async () => {
     const ctx = stubContext();
     setExecutionHistoryContextForTests(ctx);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 51; i++) {
       await enqueueExecutionHistoryEntry(
-        entry({ taskId: `t${i}`, executedAt: `2026-07-08T00:00:0${i}Z` }),
+        entry({
+          taskId: "frequent",
+          executedAt: new Date(Date.UTC(2026, 6, 8, 0, i)).toISOString(),
+        }),
       );
     }
+    await enqueueExecutionHistoryEntry(
+      entry({ taskId: "weekly", executedAt: "2026-07-01T00:00:00Z" }),
+    );
     const entries = getExecutionHistoryEntries();
-    assert.strictEqual(entries.length, 3);
-    assert.strictEqual(entries[0].taskId, "t2", "newest should be first");
-    assert.strictEqual(entries[2].taskId, "t0", "oldest should be last");
+    const frequentEntries = entries.filter(
+      (historyEntry) => historyEntry.taskId === "frequent",
+    );
+    assert.strictEqual(entries.length, 51);
+    assert.strictEqual(frequentEntries.length, 50);
+    assert.strictEqual(entries[0].taskId, "weekly", "newest should be first");
+    assert.strictEqual(
+      frequentEntries[0].executedAt,
+      "2026-07-08T00:50:00.000Z",
+    );
+    assert.strictEqual(
+      frequentEntries[49].executedAt,
+      "2026-07-08T00:01:00.000Z",
+      "the oldest entry for one task should be evicted without removing other tasks",
+    );
   });
 
   test("returns [] when store not initialised", () => {
@@ -162,22 +180,26 @@ suite("executionHistoryStore", () => {
       entry({
         taskId: "valid-date",
         executedAt: "2026-07-30T09:00:00Z",
+        dueAt: "2026-07-30T08:30:00+09:00",
         nextRunAt: "2026-07-30T10:00:00Z",
       }),
       entry({
         taskId: "invalid-date",
         executedAt: "2026-07-30 09:00:00",
+        dueAt: "2026-07-30 08:30:00",
         nextRunAt: "2026-07-30T10:00:00",
       }),
     ]);
 
     const [valid, invalid] = getExecutionHistoryEntries();
     assert.strictEqual(valid.executedAt, "2026-07-30T09:00:00.000Z");
+    assert.strictEqual(valid.dueAt, "2026-07-29T23:30:00.000Z");
     assert.strictEqual(valid.nextRunAt, "2026-07-30T10:00:00.000Z");
     assert.strictEqual(valid.executedAtInvalid, undefined);
     assert.strictEqual(valid.nextRunAtInvalid, undefined);
     assert.strictEqual(invalid.executedAt, "2026-07-30 09:00:00");
     assert.strictEqual(invalid.executedAtInvalid, true);
+    assert.strictEqual(invalid.dueAt, undefined);
     assert.strictEqual(invalid.nextRunAt, undefined);
     assert.strictEqual(invalid.nextRunAtInvalid, true);
   });

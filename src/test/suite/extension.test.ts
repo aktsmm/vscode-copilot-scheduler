@@ -620,7 +620,7 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
-  test("history quick picks expose prompt audit metadata", async () => {
+  test("history quick picks expose execution context and prompt audit metadata", async () => {
     const { __testOnly } = await import("../../extension");
     const buildItems = __testOnly.buildExecutionHistoryQuickPickItems as (
       entries: ExecutionHistoryEntry[],
@@ -630,9 +630,11 @@ suite("Execution History Queue Tests", () => {
       {
         taskId: "task-audit",
         taskName: "Audit task",
-        trigger: "manual",
+        trigger: "auto",
         status: "success",
         executedAt: "2026-07-30T09:00:00.000Z",
+        dueAt: "2026-07-30T08:30:00.000Z",
+        attachmentCount: 2,
         promptSource: "snapshotFallback",
         promptPathDisplay: "daily.prompt.md",
         promptHash: "ABC123DEF456",
@@ -642,6 +644,9 @@ suite("Execution History Queue Tests", () => {
     ]);
 
     assert.ok(item.detail.includes(messages.executionPromptSourceSnapshot()));
+    assert.ok(item.detail.includes(messages.executionHistoryDueAt()));
+    assert.ok(item.detail.includes(messages.executionHistoryDelay(30 * 60)));
+    assert.ok(item.detail.includes(messages.executionHistoryAttachments(2)));
     assert.ok(item.detail.includes("daily.prompt.md"));
     assert.ok(item.detail.includes("abc123def456"));
     assert.ok(item.detail.includes(messages.promptBlockedReasonReadFailed()));
@@ -1354,6 +1359,10 @@ suite("Webview Test Prompt Wiring Tests", () => {
         `deactivate must clear ${cache} so a reactivated host does not inherit stale per-task state`,
       );
     }
+    assert.ok(
+      body.includes("disposePromptResourceWatchers();"),
+      "deactivate must cancel prompt watchers and pending preview refreshes",
+    );
   });
 
   test("every successful run records how many files it attached", () => {
@@ -1376,6 +1385,25 @@ suite("Webview Test Prompt Wiring Tests", () => {
       assert.ok(
         payload.includes("attachmentCount:"),
         `a success history entry must record attachmentCount: ${payload.trim()}`,
+      );
+    }
+  });
+
+  test("every automatic run records its scheduled due time", () => {
+    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const payloads = [
+      ...source.matchAll(/recordExecutionHistoryBestEffort\(\{([^}]*)\}\)/g),
+    ].map((match) => match[1]);
+    const automaticPayloads = payloads.filter((payload) =>
+      payload.includes("trigger,"),
+    );
+
+    assert.strictEqual(automaticPayloads.length, 3);
+    for (const payload of automaticPayloads) {
+      assert.ok(
+        payload.includes("dueAt,"),
+        `an automatic history entry must record dueAt: ${payload.trim()}`,
       );
     }
   });
@@ -1628,6 +1656,31 @@ suite("Webview Test Prompt Wiring Tests", () => {
         watcherBlock.includes(token),
         `Prompt resource watcher block should include token: ${token}`,
       );
+    }
+  });
+
+  test("disposing prompt resource watchers cancels pending preview refresh", async () => {
+    const { __testOnly } = await import("../../extension");
+    const scheduleRefresh = __testOnly.schedulePromptPreviewRefresh;
+    const disposeWatchers = __testOnly.disposePromptResourceWatchers;
+    const getRefreshState = __testOnly.getPromptPreviewRefreshState;
+
+    try {
+      scheduleRefresh(
+        vscode.Uri.file("C:\\workspace\\.github\\prompts\\daily.md"),
+      );
+      assert.deepStrictEqual(getRefreshState(), {
+        pendingPathCount: 1,
+        timerScheduled: true,
+      });
+
+      disposeWatchers();
+      assert.deepStrictEqual(getRefreshState(), {
+        pendingPathCount: 0,
+        timerScheduled: false,
+      });
+    } finally {
+      disposeWatchers();
     }
   });
 

@@ -252,6 +252,7 @@ suite("lmTools scheduler_query", () => {
       trigger: "manual",
       status: "success",
       executedAt: "2026-07-30T09:00:00.000Z",
+      dueAt: "2026-07-30T08:30:00.000Z",
       promptSource: "file",
       promptPathDisplay: "daily.prompt.md",
       promptHash: "abc123def456",
@@ -266,6 +267,7 @@ suite("lmTools scheduler_query", () => {
     );
     const history = payload.entries as Array<Record<string, unknown>>;
     assert.strictEqual(payload.count, 1);
+    assert.strictEqual(history[0]?.dueAt, "2026-07-30T08:30:00.000Z");
     assert.strictEqual(history[0]?.promptSource, "file");
     assert.strictEqual(history[0]?.promptPathDisplay, "daily.prompt.md");
     assert.strictEqual(history[0]?.promptHash, "abc123def456");
@@ -308,6 +310,8 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.total, 3);
     assert.strictEqual(payload.count, 2);
     assert.strictEqual(payload.hasMore, true);
+    assert.strictEqual(payload.retentionLimit, 50);
+    assert.strictEqual(payload.retentionScope, "task");
     assert.deepStrictEqual(
       history.map((item) => item.taskId),
       ["history-2", "history-1"],

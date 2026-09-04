@@ -506,6 +506,21 @@ function buildExecutionHistoryDetail(entry: ExecutionHistoryEntry): string {
     lines.push(entry.detail.trim());
   }
 
+  if (entry.dueAt) {
+    lines.push(
+      `${messages.executionHistoryDueAt()}: ${formatHistoryTimestamp(entry.dueAt)}`,
+    );
+    const dueAt = new Date(entry.dueAt).getTime();
+    const executedAt = new Date(entry.executedAt).getTime();
+    if (!Number.isNaN(dueAt) && !Number.isNaN(executedAt)) {
+      const delaySeconds = Math.max(0, Math.floor((executedAt - dueAt) / 1000));
+      lines.push(messages.executionHistoryDelay(delaySeconds));
+    }
+  }
+  if (entry.attachmentCount !== undefined) {
+    lines.push(messages.executionHistoryAttachments(entry.attachmentCount));
+  }
+
   const sourceLabel = resolveHistoryPromptSourceLabel(entry.promptSource);
   if (sourceLabel) {
     lines.push(`${messages.executionHistoryPromptSource()}: ${sourceLabel}`);
@@ -745,6 +760,12 @@ function handleManualRunFailure(
 }
 
 function disposePromptResourceWatchers(): void {
+  if (promptPreviewTimer) {
+    clearTimeout(promptPreviewTimer);
+    promptPreviewTimer = undefined;
+  }
+  pendingPromptPreviewPaths.clear();
+
   for (const disposable of promptResourceWatchers) {
     try {
       disposable.dispose();
@@ -1315,6 +1336,7 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 export function deactivate(): void {
   scheduleManager?.stopScheduler();
+  disposePromptResourceWatchers();
   SchedulerWebview.dispose();
   extensionContextRef = undefined;
   manualRunInFlightTaskIds.clear();
@@ -1332,6 +1354,12 @@ async function executeTask(task: ScheduledTask): Promise<void> {
   const trigger: ExecutionTrigger = manualRunInFlightTaskIds.has(task.id)
     ? "manual"
     : "auto";
+  const dueAt =
+    trigger === "auto" &&
+    task.lastFiredDueAt instanceof Date &&
+    !Number.isNaN(task.lastFiredDueAt.getTime())
+      ? task.lastFiredDueAt.toISOString()
+      : undefined;
   // notifyInfo already checks shouldNotify() internally — no need for an outer guard.
   notifyInfo(messages.taskExecuting(task.name));
 
@@ -1362,6 +1390,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         trigger,
         status: "success",
         executedAt: new Date().toISOString(),
+        dueAt,
         nextRunAt: nextRunDate?.toISOString(),
         attachmentCount: task.attachments?.length,
         ...buildPromptHistoryMetadata(
@@ -1398,6 +1427,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
           trigger,
           status: "blocked",
           executedAt: new Date().toISOString(),
+          dueAt,
           nextRunAt: nextRunDate?.toISOString(),
           detail: resolveDisplayErrorMessage(
             error instanceof Error ? error.message : String(error),
@@ -1429,6 +1459,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         trigger,
         status: "failed",
         executedAt: new Date().toISOString(),
+        dueAt,
         nextRunAt: nextRunDate?.toISOString(),
         detail: resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
         ...buildPromptHistoryMetadata(
@@ -1880,6 +1911,12 @@ export const __testOnly = {
   getAttachmentSignature,
   pruneRuntimeCachesForRemovedTasks,
   attachmentBlockNotifications,
+  schedulePromptPreviewRefresh,
+  disposePromptResourceWatchers,
+  getPromptPreviewRefreshState: () => ({
+    pendingPathCount: pendingPromptPreviewPaths.size,
+    timerScheduled: promptPreviewTimer !== undefined,
+  }),
 };
 
 function getWorkspaceFolderPaths(): string[] {

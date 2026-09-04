@@ -140,6 +140,21 @@ export const messages = {
   executionHistoryPromptHash: () => t("Hash", "ハッシュ"),
   executionHistoryPromptResolvedAt: () => t("Resolved", "解決時刻"),
   executionHistoryPromptFallback: () => t("Fallback", "フォールバック"),
+  executionHistoryDueAt: () => t("Scheduled", "予定時刻"),
+  executionHistoryDelay: (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const duration =
+      hours > 0
+        ? t(`${hours}h ${minutes}m`, `${hours}時間${minutes}分`)
+        : minutes > 0
+          ? t(`${minutes}m ${seconds}s`, `${minutes}分${seconds}秒`)
+          : t(`${seconds}s`, `${seconds}秒`);
+    return t(`Delay: ${duration}`, `遅延: ${duration}`);
+  },
+  executionHistoryAttachments: (count: number) =>
+    t(`Attachments: ${count}`, `添付: ${count}件`),
   executionPromptSourceInline: () => t("Inline", "インライン"),
   executionPromptSourceOpenDocument: () =>
     t("Open editor", "開いているエディター"),

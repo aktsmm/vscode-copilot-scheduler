@@ -5,6 +5,14 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-09-04
+
+### Fixed
+
+- Execution history now keeps the configured number of entries per task instead of sharing one global 50-entry buffer, so frequent tasks no longer evict low-frequency task history ([#5](https://github.com/aktsmm/vscode-copilot-scheduler/issues/5)). History queries also report the effective per-task retention contract.
+- Automatic execution history now records the scheduled `dueAt` timestamp, and the history view shows scheduled time, derived delay, and attachment count so catch-up runs can be distinguished from on-time runs ([#6](https://github.com/aktsmm/vscode-copilot-scheduler/issues/6)).
+- Re-registering or disposing prompt resource watchers now cancels queued prompt-preview paths and their debounce timer, preventing a stale refresh after a root change or extension deactivation.
+
 ## [1.5.1] - 2026-09-02
 
 ### Fixed

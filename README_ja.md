@@ -80,6 +80,8 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 | `Copilot Scheduler: Show Execution History`         | 実行履歴を表示（記録済みの場合はプロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由も表示） |
 | `Copilot Scheduler: Dump Model Catalog Diagnostics` | モデルカタログ診断を表示                                                                               |
 
+実行履歴には、記録済みの場合、予定時刻・遅延・添付数・プロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由を表示します。
+
 ## 🛠️ Copilot Chat ツール
 
 Copilot Chat のエージェントモードでは、`#` 参照でスケジューラ用ツールを呼び出せます。
@@ -137,7 +139,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.globalAgentsPath`         | `""`              | グローバルエージェントフォルダー（`*.agent.md`）のパス（未指定時: VS Code の User/prompts フォルダーと `~/.copilot/agents` を自動検出。設定すると既定の探索先より優先）                                                                                                  |
 | `copilotScheduler.promptFileFallback`       | `"snapshot"`      | ローカル / グローバルのプロンプトファイルを実行時に読めなかった場合の動作: `snapshot`（保存済みスナップショットで実行）/ `blockWhenResolvable`（パスは解決できるのに読めない場合は中止）/ `blockAlways`（常に中止）。インラインプロンプトは対象外                        |
 | `copilotScheduler.logLevel`                 | `info`            | ログレベル (none/error/info/debug)                                                                                                                                                                                                                                       |
-| `copilotScheduler.executionHistoryLimit`    | `50`              | 実行履歴ビューに保持する件数上限（10〜500）                                                                                                                                                                                                                              |
+| `copilotScheduler.executionHistoryLimit`    | `50`              | 実行履歴ビューにタスクごとに保持する件数上限（10〜500）                                                                                                                                                                                                                  |
 | `copilotScheduler.lmTools.enableWriteTools` | `true`            | Copilot Chat ツールからタスクの作成・更新・削除・有効/無効切替を許可します。`false` にすると読み取り専用ツールだけが利用できます。                                                                                                                                       |
 | `copilotScheduler.lmTools.confirmationMode` | `destructiveOnly` | write 系ツールで拡張側のカスタム確認メッセージを出す範囲を制御します: `always` / `destructiveOnly` / `minimal`。VS Code/Copilot 側の汎用承認は表示される場合があります。                                                                                                 |
 

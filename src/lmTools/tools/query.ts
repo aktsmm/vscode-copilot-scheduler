@@ -4,7 +4,10 @@ import {
   getFirstDistinctCronRuns,
   validateCronExpressions,
 } from "../../cronExpressions";
-import { getExecutionHistoryEntries } from "../../executionHistoryStore";
+import {
+  getExecutionHistoryEntries,
+  getExecutionHistoryLimit,
+} from "../../executionHistoryStore";
 import { sanitizeAbsolutePathDetails } from "../../errorSanitizer";
 import { getSupportedExperimentalReasoningEfforts } from "../../modelQualityExperiment";
 import type { ScheduleManager } from "../../scheduleManager";
@@ -180,6 +183,8 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
     total,
     count: Math.min(total, limit),
     hasMore: total > limit,
+    retentionLimit: getExecutionHistoryLimit(),
+    retentionScope: "task",
     entries: filtered.slice(0, limit),
   });
 }

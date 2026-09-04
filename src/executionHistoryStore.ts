@@ -26,6 +26,8 @@ export type ExecutionHistoryEntry = {
   trigger: ExecutionTrigger;
   status: ExecutionHistoryStatus;
   executedAt: string;
+  /** Scheduled due time for an automatic run. */
+  dueAt?: string;
   /** True when a legacy executedAt value could not be parsed. */
   executedAtInvalid?: true;
   nextRunAt?: string;
@@ -82,6 +84,7 @@ export function isExecutionHistoryEntry(
     (trigger === "auto" || trigger === "manual") &&
     (status === "success" || status === "failed" || status === "blocked") &&
     typeof record.executedAt === "string" &&
+    isOptionalString(record.dueAt) &&
     (record.executedAtInvalid === undefined ||
       record.executedAtInvalid === true) &&
     (record.nextRunAt === undefined || typeof record.nextRunAt === "string") &&
@@ -166,6 +169,7 @@ function normalizeExecutionHistoryEntry(
   const normalizedExecutedAt = normalizeHistoryTimestamp(entry.executedAt);
   const executedAtInvalid = normalizedExecutedAt ? undefined : true;
   const executedAt = normalizedExecutedAt ?? entry.executedAt;
+  const dueAt = normalizeHistoryTimestamp(entry.dueAt);
   const normalizedNextRunAt = normalizeHistoryTimestamp(entry.nextRunAt);
   const nextRunAtInvalid =
     entry.nextRunAt !== undefined && !normalizedNextRunAt
@@ -212,6 +216,7 @@ function normalizeExecutionHistoryEntry(
     trigger: entry.trigger,
     status: entry.status,
     executedAt,
+    dueAt,
     executedAtInvalid,
     nextRunAt,
     nextRunAtInvalid,
@@ -264,8 +269,13 @@ async function appendExecutionHistoryEntry(
   const existing = getExecutionHistoryEntries();
   const normalizedEntry = normalizeExecutionHistoryEntry(entry);
   const limit = getExecutionHistoryLimit();
-  // Newest-first ordering, matching the previous inline implementation.
-  const next = [normalizedEntry, ...existing].slice(0, limit);
+  let retainedForTask = 0;
+  const retained = existing.filter((existingEntry) => {
+    if (existingEntry.taskId !== normalizedEntry.taskId) return true;
+    retainedForTask += 1;
+    return retainedForTask < limit;
+  });
+  const next = [normalizedEntry, ...retained];
   await contextRef.globalState.update(EXECUTION_HISTORY_KEY, next);
 }
 
