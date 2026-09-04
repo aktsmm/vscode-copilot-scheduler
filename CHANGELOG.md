@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-09-04
+
+### Fixed
+
+- Startup now removes orphaned task-store atomic-write temporary files left by a hard Extension Host termination, while retaining fresh files, files owned by a live process, unrelated names, and non-file entries ([#7](https://github.com/aktsmm/vscode-copilot-scheduler/issues/7)). Cleanup requires an exact target-specific filename, a dead owner PID, and both filename and filesystem ages greater than 24 hours.
+
 ## [1.5.2] - 2026-09-04
 
 ### Fixed

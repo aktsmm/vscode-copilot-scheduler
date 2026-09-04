@@ -18,7 +18,10 @@ import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { selectTaskStore } from "./taskStoreSelection";
-import { writeFileAtomically } from "./atomic-file-write";
+import {
+  cleanupOrphanedAtomicWriteTemps,
+  writeFileAtomically,
+} from "./atomic-file-write";
 import { TaskStoreLockBusyError, withTaskStoreLock } from "./task-store-lock";
 import {
   areModelSelectionsEqual,
@@ -353,6 +356,24 @@ export class ScheduleManager {
       this.context.globalStorageUri.fsPath,
       "scheduledTasks.lock",
     );
+    void Promise.all([
+      cleanupOrphanedAtomicWriteTemps(this.storageFilePath),
+      cleanupOrphanedAtomicWriteTemps(this.storageMetaFilePath),
+    ])
+      .then((counts) => {
+        const removed = counts.reduce((sum, count) => sum + count, 0);
+        if (removed > 0) {
+          logDebug(
+            `[CopilotScheduler] Removed ${removed} orphaned task-store temporary file(s).`,
+          );
+        }
+      })
+      .catch((error) => {
+        logError(
+          "[CopilotScheduler] Failed to clean orphaned task-store temporary files:",
+          toSafeErrorDetails(error),
+        );
+      });
     this.loadDailyExecCount();
     this.loadDailyTaskExecCounts();
     this.dailyLimitNotifiedDate = this.context.globalState.get<string>(
