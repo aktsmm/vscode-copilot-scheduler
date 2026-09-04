@@ -63,17 +63,12 @@ export const messages = {
     t(`Task "${name}" disabled`, `タスク「${name}」を無効にしました`),
   taskExecuting: (name: string) =>
     t(`Executing task "${name}"...`, `タスク「${name}」を実行中...`),
-  taskExecuted: (name: string) =>
-    t(
-      `Task "${name}" executed successfully`,
-      `タスク「${name}」を実行しました`,
-    ),
   taskExecutionSummary: (name: string, result: string, nextRun: string) =>
     t(
       `Task "${name}": ${result} (Next run: ${nextRun})`,
       `タスク「${name}」: ${result}（次回実行: ${nextRun}）`,
     ),
-  executionResultSuccess: () => t("Success", "成功"),
+  executionResultDispatched: () => t("Dispatched", "送信済み"),
   executionResultFailed: () => t("Failed", "失敗"),
   executionResultBlocked: () => t("Blocked", "実行前に中止"),
   promptFileBlocked: (name: string, reason: string) =>

@@ -71,7 +71,7 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 | `Copilot Scheduler: Show Execution History`         | View recent run history, including prompt source, path, hash, resolution time, and fallback reason when available |
 | `Copilot Scheduler: Dump Model Catalog Diagnostics` | Dump model diagnostics                                                                                            |
 
-Execution history shows scheduled time, delay, attachment count, prompt source, path, hash, resolution time, and fallback reason when available.
+Execution history shows scheduled time, delay, attachment count, prompt source, path, hash, resolution time, and fallback reason when available. A successful entry is labeled **Dispatched** because it confirms that the prompt was sent to Chat, not that the model finished producing a response.
 
 ## 🛠️ Copilot Chat Tools
 
@@ -85,7 +85,7 @@ In Copilot Chat agent mode, use the scheduler tools with `#` references:
 | `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                                               |
 | `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                                          |
 
-For `kind=history`, the response includes `total`, returned `count`, `hasMore`, and newest-first `entries`. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
+For `kind=history`, the response includes `total`, returned `count`, `hasMore`, `statusSemantics`, and newest-first `entries`. `status: "success"` confirms prompt dispatch rather than model response completion. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
 
 `kind=list` returns task metadata with a short `promptPreview` and `promptLength` instead of the prompt body, because a `local` or `global` task stores a snapshot of the whole prompt file. The write tools return the same shape in their success payloads. Use `kind=get` when the full prompt is needed; a preview must never be written back to a task.
 

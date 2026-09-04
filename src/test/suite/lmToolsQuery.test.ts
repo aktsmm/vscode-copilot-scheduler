@@ -312,6 +312,10 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.hasMore, true);
     assert.strictEqual(payload.retentionLimit, 50);
     assert.strictEqual(payload.retentionScope, "task");
+    assert.deepStrictEqual(payload.statusSemantics, {
+      success: "prompt_dispatched",
+      note: "success confirms prompt dispatch, not model response completion",
+    });
     assert.deepStrictEqual(
       history.map((item) => item.taskId),
       ["history-2", "history-1"],

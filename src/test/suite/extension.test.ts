@@ -3,6 +3,7 @@
  */
 
 import * as assert from "assert";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -266,6 +267,7 @@ suite("Extension Test Suite", () => {
     // before the artifact reaches the Marketplace.
     for (const gate of [
       "node scripts/verify-package-lock-registry.js",
+      "npm run verify:nls",
       "npm run lint",
       "npm test",
       "npm run verify:vsix",
@@ -279,6 +281,143 @@ suite("Extension Test Suite", () => {
       workflow.includes("Validate tag matches package version"),
       "publish workflow should refuse a tag that does not match package.json",
     );
+    assert.match(
+      workflow,
+      /node-version:\s*22/,
+      "publish workflow should use a supported Node.js LTS release",
+    );
+  });
+
+  test("NLS consistency gate rejects keys missing from either locale", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const script = path.join(root, "scripts/verify-nls-consistency.js");
+    const actual = spawnSync(process.execPath, [script], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.strictEqual(actual.status, 0, actual.stderr);
+
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-nls-"));
+    const defaultPath = path.join(fixtureRoot, "package.nls.json");
+    const localizedPath = path.join(fixtureRoot, "package.nls.ja.json");
+    try {
+      fs.writeFileSync(defaultPath, JSON.stringify({ shared: "x", en: "x" }));
+      fs.writeFileSync(localizedPath, JSON.stringify({ shared: " ", ja: "x" }));
+      const mismatch = spawnSync(
+        process.execPath,
+        [script, defaultPath, localizedPath],
+        { cwd: root, encoding: "utf8" },
+      );
+      assert.strictEqual(mismatch.status, 1);
+      assert.match(mismatch.stderr, /Missing from package\.nls\.ja\.json: en/);
+      assert.match(mismatch.stderr, /Missing from package\.nls\.json: ja/);
+      assert.match(
+        mismatch.stderr,
+        /Invalid values in package\.nls\.ja\.json: shared/,
+      );
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("VSIX verifier rejects a central directory outside the archive", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const script = path.join(root, "scripts/verify-vsix-contents.js");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-vsix-"));
+    const fixturePath = path.join(fixtureRoot, "corrupt.vsix");
+    try {
+      const buffer = Buffer.alloc(22);
+      buffer.writeUInt32LE(0x06054b50, 0);
+      buffer.writeUInt16LE(1, 10);
+      buffer.writeUInt32LE(46, 12);
+      buffer.writeUInt32LE(1000, 16);
+      fs.writeFileSync(fixturePath, buffer);
+
+      const result = spawnSync(process.execPath, [script, fixturePath], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.strictEqual(result.status, 1);
+      assert.match(
+        result.stderr,
+        /Invalid VSIX: central directory is outside the archive/,
+      );
+      assert.ok(!result.stderr.includes("RangeError"));
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("VSIX verifier handles empty ZIP structure and rejects ZIP64", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const script = path.join(root, "scripts/verify-vsix-contents.js");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-vsix-"));
+    try {
+      const emptyPath = path.join(fixtureRoot, "empty.vsix");
+      const empty = Buffer.alloc(22);
+      empty.writeUInt32LE(0x06054b50, 0);
+      fs.writeFileSync(emptyPath, empty);
+      const emptyResult = spawnSync(process.execPath, [script, emptyPath], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.strictEqual(emptyResult.status, 1);
+      assert.match(emptyResult.stderr, /Required entries missing/);
+      assert.ok(!emptyResult.stderr.includes("Invalid VSIX"));
+
+      const zip64Path = path.join(fixtureRoot, "zip64.vsix");
+      const zip64 = Buffer.from(empty);
+      zip64.writeUInt16LE(0xffff, 10);
+      zip64.writeUInt32LE(0xffffffff, 12);
+      zip64.writeUInt32LE(0xffffffff, 16);
+      fs.writeFileSync(zip64Path, zip64);
+      const zip64Result = spawnSync(process.execPath, [script, zip64Path], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.strictEqual(zip64Result.status, 1);
+      assert.match(zip64Result.stderr, /ZIP64 archives are not supported/);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("VSIX verifier rejects case-insensitive duplicate entries", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const script = path.join(root, "scripts/verify-vsix-contents.js");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-vsix-"));
+    const fixturePath = path.join(fixtureRoot, "duplicate.vsix");
+    const makeEntry = (name: string): Buffer => {
+      const nameBytes = Buffer.from(name, "utf8");
+      const entry = Buffer.alloc(46 + nameBytes.length);
+      entry.writeUInt32LE(0x02014b50, 0);
+      entry.writeUInt16LE(nameBytes.length, 28);
+      nameBytes.copy(entry, 46);
+      return entry;
+    };
+
+    try {
+      const entries = Buffer.concat([
+        makeEntry("extension/package.json"),
+        makeEntry("EXTENSION/PACKAGE.JSON"),
+      ]);
+      const footer = Buffer.alloc(22);
+      footer.writeUInt32LE(0x06054b50, 0);
+      footer.writeUInt16LE(2, 10);
+      footer.writeUInt32LE(entries.length, 12);
+      footer.writeUInt32LE(0, 16);
+      fs.writeFileSync(fixturePath, Buffer.concat([entries, footer]));
+
+      const result = spawnSync(process.execPath, [script, fixturePath], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.strictEqual(result.status, 1);
+      assert.match(result.stderr, /Duplicate entries found/);
+      assert.match(result.stderr, /EXTENSION\/PACKAGE\.JSON/);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   test("README command tables stay aligned with contributed commands", () => {
@@ -620,6 +759,18 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
+  test("execution summaries describe success as prompt dispatch", async () => {
+    const { __testOnly } = await import("../../extension");
+    const buildSummary = __testOnly.buildExecutionSummary;
+    const nextRun = new Date("2026-09-05T09:00:00.000Z");
+
+    const dispatched = buildSummary("Audit task", "success", nextRun);
+    assert.ok(dispatched.includes(messages.executionResultDispatched()));
+
+    const failed = buildSummary("Audit task", "failed", nextRun);
+    assert.ok(failed.includes(messages.executionResultFailed()));
+  });
+
   test("history quick picks expose execution context and prompt audit metadata", async () => {
     const { __testOnly } = await import("../../extension");
     const buildItems = __testOnly.buildExecutionHistoryQuickPickItems as (
@@ -644,6 +795,7 @@ suite("Execution History Queue Tests", () => {
     ]);
 
     assert.ok(item.detail.includes(messages.executionPromptSourceSnapshot()));
+    assert.ok(item.description.includes(messages.executionResultDispatched()));
     assert.ok(item.detail.includes(messages.executionHistoryDueAt()));
     assert.ok(item.detail.includes(messages.executionHistoryDelay(30 * 60)));
     assert.ok(item.detail.includes(messages.executionHistoryAttachments(2)));

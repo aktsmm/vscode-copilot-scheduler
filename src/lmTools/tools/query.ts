@@ -185,6 +185,10 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
     hasMore: total > limit,
     retentionLimit: getExecutionHistoryLimit(),
     retentionScope: "task",
+    statusSemantics: {
+      success: "prompt_dispatched",
+      note: "success confirms prompt dispatch, not model response completion",
+    },
     entries: filtered.slice(0, limit),
   });
 }

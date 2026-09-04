@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] - 2026-09-04
+
+### Changed
+
+- Execution notifications and history now label a successful Chat command as **Dispatched** / **送信済み**, and `scheduler_query` history responses expose `statusSemantics.success: "prompt_dispatched"`. The stored `status: "success"` value remains compatible, while the UI and tool contract clarify that dispatch does not prove model response completion ([#8](https://github.com/aktsmm/vscode-copilot-scheduler/issues/8)).
+
+### Internal
+
+- Release CI now runs npm scripts on Node.js 22 and verifies that default and Japanese NLS files have identical keys with non-empty string values before packaging.
+- VSIX verification now validates ZIP32 central-directory bounds and declared sizes, rejects ZIP64 and case-insensitive duplicate entries explicitly, and covers malformed archive structures with deterministic fixtures.
+
 ## [1.5.3] - 2026-09-04
 
 ### Fixed

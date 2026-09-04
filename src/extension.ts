@@ -444,7 +444,7 @@ function buildExecutionSummary(
 ): string {
   const resultLabel =
     status === "success"
-      ? messages.executionResultSuccess()
+      ? messages.executionResultDispatched()
       : status === "blocked"
         ? messages.executionResultBlocked()
         : messages.executionResultFailed();
@@ -562,7 +562,7 @@ function buildExecutionHistoryQuickPickItems(
           : "❌";
     const statusLabel =
       entry.status === "success"
-        ? messages.executionResultSuccess()
+        ? messages.executionResultDispatched()
         : entry.status === "blocked"
           ? messages.executionResultBlocked()
           : messages.executionResultFailed();
@@ -1904,6 +1904,7 @@ export const __testOnly = {
   enqueueExecutionHistory,
   getExecutionHistoryEntries,
   buildExecutionHistoryQuickPickItems,
+  buildExecutionSummary,
   showExecutionHistoryView,
   confirmManualRunIfWorkspaceMismatch,
   setExtensionContextForTests,
