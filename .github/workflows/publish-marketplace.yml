@@ -14,13 +14,13 @@ on:
         description: Publish the current package.json version to VS Code Marketplace
         required: true
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: publish-extension-${{ github.ref }}
+  group: publish-extension
   cancel-in-progress: false
 
 jobs:

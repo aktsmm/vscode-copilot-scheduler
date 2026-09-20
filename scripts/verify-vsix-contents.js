@@ -30,6 +30,8 @@ const REQUIRED_ENTRIES = [
   "extension/out/extension.js",
   "extension/media/schedulerWebview.js",
   "extension/README.md",
+  "extension/README_ja.md",
+  "extension/images/icon.png",
   "extension/LICENSE.txt",
 ];
 

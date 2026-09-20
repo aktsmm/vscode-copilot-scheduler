@@ -2528,8 +2528,8 @@ export class SchedulerWebview {
 <body>
   <div class="page-shell">
     <div class="tabs" role="tablist">
-      <button type="button" id="create-tab-button" class="tab-button active" data-tab="create" role="tab" aria-selected="true" aria-controls="create-tab">${escapeHtml(strings.tabCreate)}</button>
-      <button type="button" id="list-tab-button" class="tab-button" data-tab="list" role="tab" aria-selected="false" aria-controls="list-tab">${escapeHtml(strings.tabList)}</button>
+      <button type="button" id="create-tab-button" class="tab-button active" data-tab="create" role="tab" aria-selected="true" aria-controls="create-tab" tabindex="0">${escapeHtml(strings.tabCreate)}</button>
+      <button type="button" id="list-tab-button" class="tab-button" data-tab="list" role="tab" aria-selected="false" aria-controls="list-tab" tabindex="-1">${escapeHtml(strings.tabList)}</button>
     </div>
     
     <div id="create-tab" class="tab-content active" role="tabpanel" aria-labelledby="create-tab-button" tabindex="-1">

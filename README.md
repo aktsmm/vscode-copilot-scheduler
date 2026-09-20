@@ -33,6 +33,8 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 📎 **Attachments** - Attach instructions, prompts, skills, or any workspace file to a task so they are sent with the prompt
 
+In the task panel, Tab focuses the selected tab. Left/Right arrows switch tabs, Home/End select the first/last tab, and Tab moves into the selected panel. Enter/Space retain normal button activation.
+
 ## ⏰ Cron Expression Examples
 
 | Expression     | Description             |
@@ -111,30 +113,34 @@ Task snapshots and revision metadata are written through same-directory temporar
 
 ## ⚙️ Settings
 
-| Setting                                     | Default           | Description                                                                                                                                                                                                                                                    |
-| ------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copilotScheduler.enabled`                  | `true`            | Enable/disable scheduled execution                                                                                                                                                                                                                             |
-| `copilotScheduler.defaultScope`             | `workspace`       | Default scope                                                                                                                                                                                                                                                  |
-| `copilotScheduler.language`                 | `auto`            | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.                                                                                                                                        |
-| `copilotScheduler.timezone`                 | `""`              | Timezone for scheduling, the allowed time window and the daily run counters                                                                                                                                                                                    |
-| `copilotScheduler.jitterSeconds`            | `600`             | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                      |
-| `copilotScheduler.manualRunNextRunPolicy`   | `advance`         | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                       |
-| `copilotScheduler.chatSession`              | `new`             | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                       |
-| `copilotScheduler.autoModeDefault`          | `false`           | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                              |
-| `copilotScheduler.commandDelayFactor`       | `0.8`             | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                       |
-| `copilotScheduler.showNotifications`        | `true`            | Show notifications when tasks are executed                                                                                                                                                                                                                     |
-| `copilotScheduler.notificationMode`         | `sound`           | Notification mode (sound/silentToast/silentStatus)                                                                                                                                                                                                             |
-| `copilotScheduler.maxDailyExecutions`       | `24`              | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.                                                                                                                                                        |
-| `copilotScheduler.minimumIntervalWarning`   | `true`            | Warn when cron interval is shorter than 30 minutes                                                                                                                                                                                                             |
-| `copilotScheduler.globalPromptsPath`        | `""`              | Custom global prompts folder path (default: VS Code's User/prompts folder — Windows: `%APPDATA%/Code/User/prompts`, macOS: `~/Library/Application Support/Code/User/prompts`, Linux: `$XDG_CONFIG_HOME/Code/User/prompts` or `~/.config/Code/User/prompts`)    |
-| `copilotScheduler.globalAgentsPath`         | `""`              | Custom global agents folder path (`*.agent.md`) (default: auto-detect VS Code's User/prompts folder and `~/.copilot/agents`; setting this overrides the default discovery roots)                                                                               |
-| `copilotScheduler.promptFileFallback`       | `"snapshot"`      | What to do when a local/global prompt file cannot be read at execution time: `snapshot` (run the saved snapshot), `blockWhenResolvable` (block when the path resolves but the file is unreadable), `blockAlways` (always block). Inline prompts are unaffected |
-| `copilotScheduler.logLevel`                 | `info`            | Log level (none/error/info/debug)                                                                                                                                                                                                                              |
-| `copilotScheduler.executionHistoryLimit`    | `50`              | Max number of execution history entries kept per task for the history view (10–500)                                                                                                                                                                            |
-| `copilotScheduler.lmTools.enableWriteTools` | `true`            | Allow Copilot Chat tools to create, update, delete, and enable/disable scheduler tasks. Set to `false` to keep only read-only tools available.                                                                                                                 |
-| `copilotScheduler.lmTools.confirmationMode` | `destructiveOnly` | Controls extension-provided custom confirmation messages for write tools: `always`, `destructiveOnly`, or `minimal`. VS Code/Copilot generic approval may still appear.                                                                                        |
+| Setting                                       | Default           | Description                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copilotScheduler.enabled`                    | `true`            | Enable/disable scheduled execution                                                                                                                                                                                                                             |
+| `copilotScheduler.defaultScope`               | `workspace`       | Default scope                                                                                                                                                                                                                                                  |
+| `copilotScheduler.language`                   | `auto`            | UI language (auto/en/ja). Applies to extension Webview/Tree UI; settings-description updates may require window reload.                                                                                                                                        |
+| `copilotScheduler.timezone`                   | `""`              | Timezone for scheduling, the allowed time window and the daily run counters                                                                                                                                                                                    |
+| `copilotScheduler.jitterSeconds`              | `600`             | Max random delay (seconds) before execution (0–1800, 0 = off). Each task can override it.                                                                                                                                                                      |
+| `copilotScheduler.manualRunNextRunPolicy`     | `advance`         | Next-run calculation after `Run Now`: `advance` (from existing next run) / `fromNow` (from current time)                                                                                                                                                       |
+| `copilotScheduler.missedRunPolicy`            | `runOnce`         | Tasks due before scheduler startup: `runOnce` runs each overdue task once; `skip` advances each task without running it. Available as a dropdown in VS Code Settings.                                                                                          |
+| `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | Maximum concurrent automatic prompt dispatches in this window, including jitter (1–10). Does not wait for model response completion. `Run Now` is not limited.                                                                                                 |
+| `copilotScheduler.chatSession`                | `new`             | Default chat session behavior (new/continue). Tasks can override this in the Webview form. `continue` is usually faster.                                                                                                                                       |
+| `copilotScheduler.autoModeDefault`            | `false`           | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                              |
+| `copilotScheduler.commandDelayFactor`         | `0.8`             | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                       |
+| `copilotScheduler.showNotifications`          | `true`            | Show notifications when tasks are executed                                                                                                                                                                                                                     |
+| `copilotScheduler.notificationMode`           | `sound`           | Notification mode (sound/silentToast/silentStatus)                                                                                                                                                                                                             |
+| `copilotScheduler.maxDailyExecutions`         | `24`              | Daily execution limit across all tasks (0 = unlimited, 1–100). ⚠️ Unlimited may risk API rate-limiting.                                                                                                                                                        |
+| `copilotScheduler.minimumIntervalWarning`     | `true`            | Warn when cron interval is shorter than 30 minutes                                                                                                                                                                                                             |
+| `copilotScheduler.globalPromptsPath`          | `""`              | Custom global prompts folder path (default: VS Code's User/prompts folder — Windows: `%APPDATA%/Code/User/prompts`, macOS: `~/Library/Application Support/Code/User/prompts`, Linux: `$XDG_CONFIG_HOME/Code/User/prompts` or `~/.config/Code/User/prompts`)    |
+| `copilotScheduler.globalAgentsPath`           | `""`              | Custom global agents folder path (`*.agent.md`) (default: auto-detect VS Code's User/prompts folder and `~/.copilot/agents`; setting this overrides the default discovery roots)                                                                               |
+| `copilotScheduler.promptFileFallback`         | `"snapshot"`      | What to do when a local/global prompt file cannot be read at execution time: `snapshot` (run the saved snapshot), `blockWhenResolvable` (block when the path resolves but the file is unreadable), `blockAlways` (always block). Inline prompts are unaffected |
+| `copilotScheduler.logLevel`                   | `info`            | Log level (none/error/info/debug)                                                                                                                                                                                                                              |
+| `copilotScheduler.executionHistoryLimit`      | `50`              | Max number of execution history entries kept per task for the history view (10–500)                                                                                                                                                                            |
+| `copilotScheduler.lmTools.enableWriteTools`   | `true`            | Allow Copilot Chat tools to create, update, delete, and enable/disable scheduler tasks. Set to `false` to keep only read-only tools available.                                                                                                                 |
+| `copilotScheduler.lmTools.confirmationMode`   | `destructiveOnly` | Controls extension-provided custom confirmation messages for write tools: `always`, `destructiveOnly`, or `minimal`. VS Code/Copilot generic approval may still appear.                                                                                        |
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
+
+Missed-run policy uses the exact scheduler start/restart time: only an earlier `nextRun` is missed. `skip` advances it without an execution history entry or a daily-count increment; it cannot restore skipped occurrences later. A sleep delay after startup is not a missed startup run. Settings apply on the next check; active dispatches are not cancelled. Waiting tasks are selected oldest-due-first on a later tick, subject to time windows and daily limits. A daily slot reserved by an unfinished dispatch remains unavailable until that dispatch succeeds or fails. The default concurrency is now 1 (previously unrestricted); model responses may still overlap and other VS Code windows have independent dispatch limits.
 
 Task-level controls (`Chat Session`, `Max Runs/Day`, `Allowed Time Window`) are configured per task in the Webview create/edit form. `Max Runs/Day` and `Allowed Time Window` are evaluated on the same clock as the schedule: `copilotScheduler.timezone` when it is set, otherwise the machine's local time.
 
@@ -203,13 +209,30 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 - VS Code 1.95.0 or higher
 - GitHub Copilot extension
 
+## Development Tests
+
+`npm test` compiles and runs the complete suite in an isolated VS Code profile. No Copilot sign-in is required. To select tests by their full suite/test title, pass a JavaScript regular expression with `--grep` (or `-g`). On Windows PowerShell, use `npm.cmd` to preserve option forwarding:
+
+```powershell
+npm.cmd test -- --grep "Test Runner Arguments"
+```
+
+For shell-sensitive expressions (for example, alternation with `|`), compile first and invoke Node directly:
+
+```powershell
+npm.cmd run pretest
+node ./out/test/runTest.js --grep 'tabs|claim'
+```
+
+Patterns are preserved verbatim. Unknown arguments, empty/invalid patterns and zero matching tests fail the run. Without arguments the full suite runs even if a filter environment variable was inherited. A focused test pass is not a substitute for `npm test` before release.
+
 ## 🛠️ Release Automation
 
 Maintainers can publish from GitHub Actions instead of running `vsce publish` locally.
 
 - Push a tag in the form `vX.Y.Z` after updating `package.json` to the same version.
 - GitHub Actions runs `npm ci`, `npm run compile`, `npm test`, packages a `.vsix`, publishes to VS Code Marketplace, and attaches the `.vsix` to the GitHub release.
-- For ad-hoc publishing, use the `Publish Extension` workflow from the Actions tab to publish the current `package.json` version manually.
+- For a pre-release dry run, dispatch `Publish Extension` on the branch with `publish=false` (the default). Wait for all gates to pass before pushing the version tag. Runs are serialized across branches and tags. Explicit `publish=true` publishes to Marketplace only; a matching tag is required for the GitHub Release.
 - Add the repository secret `VSCE_PAT` before using the workflow.
 
 ## ⚠️ Known Issues

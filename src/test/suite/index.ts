@@ -13,7 +13,14 @@ export async function run(): Promise<void> {
     ui: "tdd",
     color: true,
     timeout: 10000,
+    failZero: true,
   });
+
+  const grep = process.env.COPILOT_SCHEDULER_TEST_GREP;
+  if (grep) {
+    mocha.grep(new RegExp(grep));
+    console.log(`Test filter: ${grep}`);
+  }
 
   const testsRoot = path.resolve(__dirname, ".");
 

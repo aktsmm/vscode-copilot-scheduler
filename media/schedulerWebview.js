@@ -1378,16 +1378,21 @@
 
   // Tab switching function
   function switchTab(tabName) {
+    if (tabName !== "create" && tabName !== "list") return;
     var targetBtn = document.querySelector(
       '.tab-button[data-tab="' + tabName + '"]',
     );
     var targetContent = document.getElementById(tabName + "-tab");
+    if (!targetBtn || !targetContent) return;
     var active = document.activeElement;
     var focusWasInHiddenPanel = false;
+    var focusWasOnPreviousTab = false;
 
     document.querySelectorAll(".tab-button").forEach(function (b) {
+      if (b !== targetBtn && b === active) focusWasOnPreviousTab = true;
       b.classList.remove("active");
       b.setAttribute("aria-selected", "false");
+      b.setAttribute("tabindex", "-1");
     });
     document.querySelectorAll(".tab-content").forEach(function (c) {
       if (c !== targetContent && active && c.contains(active)) {
@@ -1398,10 +1403,11 @@
     if (targetBtn) {
       targetBtn.classList.add("active");
       targetBtn.setAttribute("aria-selected", "true");
+      targetBtn.setAttribute("tabindex", "0");
     }
     if (targetContent) targetContent.classList.add("active");
     // Focus must not stay inside a panel that just became display:none.
-    if (focusWasInHiddenPanel && targetBtn) {
+    if (focusWasInHiddenPanel || focusWasOnPreviousTab) {
       targetBtn.focus();
     }
     scheduleLayoutRefresh();
@@ -1480,6 +1486,36 @@
     }
     return null;
   }
+
+  function handleTabKeydown(event) {
+    if (
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.isComposing
+    )
+      return;
+    var button = resolveTabButton(event.target);
+    if (!button) return;
+    var buttons = Array.prototype.slice.call(
+      document.querySelectorAll(".tab-button"),
+    );
+    var index = buttons.indexOf(button);
+    if (index < 0) return;
+    if (event.key === "ArrowRight") index = (index + 1) % buttons.length;
+    else if (event.key === "ArrowLeft")
+      index = (index + buttons.length - 1) % buttons.length;
+    else if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = buttons.length - 1;
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
+    switchTab(buttons[index].getAttribute("data-tab"));
+    buttons[index].focus();
+  }
+
+  document.addEventListener("keydown", handleTabKeydown);
 
   document.addEventListener("click", function (e) {
     var button = resolveTabButton(e.target);

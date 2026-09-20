@@ -1958,9 +1958,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
     for (const token of [
       '<div class="tabs" role="tablist">',
       'id="create-tab-button"',
-      'role="tab" aria-selected="true" aria-controls="create-tab"',
+      'role="tab" aria-selected="true" aria-controls="create-tab" tabindex="0"',
       'id="list-tab-button"',
-      'role="tab" aria-selected="false" aria-controls="list-tab"',
+      'role="tab" aria-selected="false" aria-controls="list-tab" tabindex="-1"',
       'id="create-tab" class="tab-content active" role="tabpanel" aria-labelledby="create-tab-button"',
       'id="list-tab" class="tab-content" role="tabpanel" aria-labelledby="list-tab-button"',
       'id="form-error" class="feedback-banner feedback-banner-error" role="alert"',
@@ -1975,7 +1975,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("switchTab syncs aria-selected and rescues focus from the hidden panel", () => {
+  test("tabs support keyboard navigation and keep selection, tab stops and focus aligned", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
       "utf8",
@@ -1983,7 +1983,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     type StubElement = {
       children: StubElement[];
-      classList: { add(name: string): void; remove(name: string): void };
+      classList: {
+        add(name: string): void;
+        remove(name: string): void;
+        contains(name: string): boolean;
+      };
       setAttribute(name: string, value: string): void;
       getAttribute(name: string): string | null;
       contains(node: unknown): boolean;
@@ -2004,6 +2008,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         classList: {
           add: (name: string) => void classes.add(name),
           remove: (name: string) => void classes.delete(name),
+          contains: (name: string) => classes.has(name),
         },
         setAttribute: (name: string, value: string) =>
           void attrs.set(name, value),
@@ -2020,6 +2025,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     const createBtn = makeElement("tab-button active");
     const listBtn = makeElement("tab-button");
+    createBtn.setAttribute("data-tab", "create");
+    listBtn.setAttribute("data-tab", "list");
     const createPanel = makeElement("tab-content active");
     const listPanel = makeElement("tab-content");
     const submitBtn = makeElement();
@@ -2049,14 +2056,29 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const factory = new Function(
       "document",
       "scheduleLayoutRefresh",
-      [extractFunctionSource(source, "switchTab"), "return switchTab;"].join(
-        "\n",
-      ),
+      [
+        extractFunctionSource(source, "switchTab"),
+        extractFunctionSource(source, "resolveTabButton"),
+        extractFunctionSource(source, "handleTabKeydown"),
+        "return { switchTab, handleTabKeydown };",
+      ].join("\n"),
     ) as (
       doc: typeof documentStub,
       refresh: () => void,
-    ) => (tabName: string) => void;
-    const switchTab = factory(documentStub, () => undefined);
+    ) => {
+      switchTab: (tabName: string) => void;
+      handleTabKeydown: (event: Record<string, unknown>) => void;
+    };
+    const { switchTab, handleTabKeydown } = factory(
+      documentStub,
+      () => undefined,
+    );
+    assert.ok(
+      sourceContainsToken(
+        source,
+        'document.addEventListener("keydown", handleTabKeydown)',
+      ),
+    );
 
     submitBtn.focus();
     switchTab("list");
@@ -2068,6 +2090,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
     assert.strictEqual(createBtn.getAttribute("aria-selected"), "false");
     assert.strictEqual(listBtn.getAttribute("aria-selected"), "true");
+    assert.strictEqual(createBtn.getAttribute("tabindex"), "-1");
+    assert.strictEqual(listBtn.getAttribute("tabindex"), "0");
     assert.strictEqual(createPanel.hasClass("active"), false);
     assert.strictEqual(listPanel.hasClass("active"), true);
 
@@ -2081,6 +2105,72 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
     assert.strictEqual(createBtn.getAttribute("aria-selected"), "true");
     assert.strictEqual(listBtn.getAttribute("aria-selected"), "false");
+    assert.strictEqual(createBtn.getAttribute("tabindex"), "0");
+    assert.strictEqual(listBtn.getAttribute("tabindex"), "-1");
+
+    createBtn.focus();
+    switchTab("list");
+    assert.strictEqual(state.activeElement, listBtn);
+    switchTab("create");
+    assert.strictEqual(state.activeElement, createBtn);
+    for (const invalidTab of ["missing", "", '\"']) {
+      switchTab(invalidTab);
+      assert.strictEqual(state.activeElement, createBtn);
+      assert.strictEqual(createBtn.getAttribute("aria-selected"), "true");
+      assert.strictEqual(createPanel.hasClass("active"), true);
+    }
+
+    function pressKey(
+      key: string,
+      target: StubElement,
+      modifiers = {},
+    ): boolean {
+      let prevented = false;
+      let stopped = false;
+      handleTabKeydown({
+        key,
+        target,
+        ...modifiers,
+        preventDefault: () => {
+          prevented = true;
+        },
+        stopPropagation: () => {
+          stopped = true;
+        },
+      });
+      assert.strictEqual(stopped, prevented);
+      return prevented;
+    }
+    for (const [key, expected] of [
+      ["ArrowRight", listBtn],
+      ["ArrowRight", createBtn],
+      ["ArrowLeft", listBtn],
+      ["Home", createBtn],
+      ["End", listBtn],
+    ] as Array<[string, StubElement]>) {
+      assert.strictEqual(pressKey(key, state.activeElement!), true);
+      assert.strictEqual(state.activeElement, expected);
+      assert.strictEqual(expected.getAttribute("aria-selected"), "true");
+      assert.strictEqual(expected.getAttribute("tabindex"), "0");
+    }
+    for (const key of ["Tab", "Enter", " ", "ArrowDown", "ArrowUp"]) {
+      assert.strictEqual(pressKey(key, listBtn), false);
+      assert.strictEqual(state.activeElement, listBtn);
+    }
+    for (const modifier of [
+      "altKey",
+      "ctrlKey",
+      "metaKey",
+      "shiftKey",
+      "isComposing",
+    ]) {
+      assert.strictEqual(
+        pressKey("ArrowLeft", listBtn, { [modifier]: true }),
+        false,
+      );
+      assert.strictEqual(state.activeElement, listBtn);
+    }
+    assert.strictEqual(pressKey("ArrowRight", submitBtn), false);
   });
 
   test("submit validation focuses and marks the offending field", () => {

@@ -5,9 +5,28 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { parseArgs } from "util";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 
 const DEFAULT_TEST_VSCODE_VERSION = "1.115.0";
+
+export function parseTestGrep(args: string[]): string | undefined {
+  const { values } = parseArgs({
+    args,
+    options: { grep: { type: "string", short: "g" } },
+    strict: true,
+    allowPositionals: false,
+  });
+  const pattern = values.grep;
+  if (pattern === undefined) return undefined;
+  if (!pattern.trim()) throw new Error("--grep must not be empty");
+  try {
+    new RegExp(pattern);
+  } catch {
+    throw new Error("--grep must be a valid regular expression");
+  }
+  return pattern;
+}
 
 function getTestVSCodeVersion(): string {
   const configured = process.env.COPILOT_SCHEDULER_VSCODE_TEST_VERSION?.trim();
@@ -77,6 +96,7 @@ async function main(): Promise<void> {
   let testExtensionsDir: string | undefined;
 
   try {
+    const grep = parseTestGrep(process.argv.slice(2));
     // The folder containing the Extension Manifest package.json
     const extensionDevelopmentPath = path.resolve(__dirname, "../../");
 
@@ -102,6 +122,7 @@ async function main(): Promise<void> {
       vscodeExecutablePath,
       extensionDevelopmentPath,
       extensionTestsPath,
+      extensionTestsEnv: { COPILOT_SCHEDULER_TEST_GREP: grep ?? "" },
       launchArgs: [
         "--user-data-dir",
         testUserDataDir,
@@ -132,4 +153,6 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (require.main === module) {
+  void main();
+}

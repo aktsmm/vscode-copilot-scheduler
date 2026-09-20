@@ -54,6 +54,30 @@ function createMockContext(storageRoot: string): vscode.ExtensionContext {
   } as unknown as vscode.ExtensionContext;
 }
 
+function overrideSchedulerConfig(values: Record<string, unknown>): () => void {
+  const original = vscode.workspace.getConfiguration;
+  Object.defineProperty(vscode.workspace, "getConfiguration", {
+    configurable: true,
+    value: ((section?: string) => {
+      const config = original.call(vscode.workspace, section);
+      if (section !== "copilotScheduler") return config;
+      return {
+        ...config,
+        get<T>(key: string, defaultValue?: T): T {
+          return Object.prototype.hasOwnProperty.call(values, key)
+            ? (values[key] as T)
+            : config.get<T>(key, defaultValue as T);
+        },
+      };
+    }) as typeof vscode.workspace.getConfiguration,
+  });
+  return () =>
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      value: original,
+      configurable: true,
+    });
+}
+
 function createMockContextWithGlobalTasks(
   storageRoot: string,
   tasks: unknown[],
@@ -2691,6 +2715,356 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("checkAndExecuteTasks skips runs due before scheduler startup when configured", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const context = createMockContext(tmp);
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "skip-missed-run",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        schedulerStartedAt?: Date;
+        getMissedRunPolicy: () => "runOnce" | "skip";
+        onExecuteCallback?: (task: unknown) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      internals.schedulerStartedAt = new Date();
+      internals.getMissedRunPolicy = () => "skip";
+      task.nextRun = truncateToMinute(
+        new Date(internals.schedulerStartedAt.getTime() - 60 * 1000),
+      );
+      let executions = 0;
+      internals.onExecuteCallback = async () => {
+        executions++;
+      };
+
+      await internals.checkAndExecuteTasks();
+
+      assert.strictEqual(executions, 0);
+      assert.strictEqual(task.lastRun, undefined);
+      assert.strictEqual(task.lastFiredDueAt, undefined);
+      assert.ok((task.nextRun as Date).getTime() > Date.now());
+      assert.strictEqual(
+        context.globalState.get<number>("dailyExecCount", 0),
+        0,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("checkAndExecuteTasks runs tasks that became due after scheduler startup", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "due-after-startup",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        schedulerStartedAt?: Date;
+        getMissedRunPolicy: () => "runOnce" | "skip";
+        onExecuteCallback?: (task: unknown) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      internals.schedulerStartedAt = new Date(dueAt.getTime() - 60 * 1000);
+      internals.getMissedRunPolicy = () => "skip";
+      task.nextRun = dueAt;
+      let executions = 0;
+      internals.onExecuteCallback = async () => {
+        executions++;
+      };
+
+      await internals.checkAndExecuteTasks();
+
+      assert.strictEqual(executions, 1);
+      assert.strictEqual(task.lastFiredDueAt?.getTime(), dueAt.getTime());
+      assert.ok(task.lastRun instanceof Date);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("checkAndExecuteTasks limits automatic claims and preserves waiting tasks", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const first = await manager.createTask({
+        name: "concurrent-first",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      const second = await manager.createTask({
+        name: "concurrent-second",
+        prompt: "hello",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      first.nextRun = dueAt;
+      second.nextRun = dueAt;
+
+      let releaseFirst!: () => void;
+      const firstBlocked = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let firstStarted!: () => void;
+      const firstStartedPromise = new Promise<void>((resolve) => {
+        firstStarted = resolve;
+      });
+      const executed: string[] = [];
+      const internals = manager as unknown as {
+        getMaxConcurrentAutomaticRuns: () => number;
+        onExecuteCallback?: (task: { name: string }) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      internals.getMaxConcurrentAutomaticRuns = () => 1;
+      internals.onExecuteCallback = async (task) => {
+        executed.push(task.name);
+        if (task.name === "concurrent-first") {
+          firstStarted();
+          await firstBlocked;
+        }
+      };
+
+      const firstTick = internals.checkAndExecuteTasks();
+      await firstStartedPromise;
+
+      assert.deepStrictEqual(executed, ["concurrent-first"]);
+      assert.strictEqual(second.nextRun?.getTime(), dueAt.getTime());
+      assert.strictEqual(second.lastFiredDueAt, undefined);
+
+      releaseFirst();
+      await firstTick;
+      await internals.checkAndExecuteTasks();
+
+      assert.deepStrictEqual(executed, [
+        "concurrent-first",
+        "concurrent-second",
+      ]);
+      assert.ok((second.nextRun as Date).getTime() > dueAt.getTime());
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("checkAndExecuteTasks fills all configured automatic run slots", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const tasks = await Promise.all(
+        ["slot-one", "slot-two"].map((name) =>
+          manager.createTask({
+            name,
+            prompt: "hello",
+            cronExpression: "*/5 * * * *",
+            scope: "global",
+            promptSource: "inline",
+            enabled: true,
+            jitterSeconds: 0,
+          }),
+        ),
+      );
+      const dueAt = truncateToMinute(new Date(Date.now() - 60 * 1000));
+      for (const task of tasks) {
+        task.nextRun = dueAt;
+      }
+
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let bothStarted!: () => void;
+      const bothStartedPromise = new Promise<void>((resolve) => {
+        bothStarted = resolve;
+      });
+      let active = 0;
+      let maximumActive = 0;
+      const internals = manager as unknown as {
+        getMaxConcurrentAutomaticRuns: () => number;
+        onExecuteCallback?: (task: unknown) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      internals.getMaxConcurrentAutomaticRuns = () => 2;
+      internals.onExecuteCallback = async () => {
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        if (active === 2) {
+          bothStarted();
+        }
+        await blocked;
+        active--;
+      };
+
+      const tick = internals.checkAndExecuteTasks();
+      await bothStartedPromise;
+      assert.strictEqual(maximumActive, 2);
+
+      release();
+      await tick;
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("checkAndExecuteTasks serves the oldest waiting occurrence before newer runs", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const manager = new ScheduleManager(createMockContext(tmp));
+    try {
+      const tasks = [];
+      for (const name of ["frequent-first", "older-waiting"]) {
+        tasks.push(
+          await manager.createTask({
+            name,
+            prompt: "hello",
+            cronExpression: "* * * * *",
+            scope: "global",
+            promptSource: "inline",
+            enabled: true,
+            jitterSeconds: 0,
+          }),
+        );
+      }
+      const recentDue = truncateToMinute(new Date(Date.now() - 60_000));
+      const olderDue = new Date(recentDue.getTime() - 60_000);
+      tasks[0].nextRun = recentDue;
+      tasks[1].nextRun = olderDue;
+      const internals = manager as unknown as {
+        getMaxConcurrentAutomaticRuns: () => number;
+        onExecuteCallback: (task: { name: string }) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      const executed: string[] = [];
+      internals.getMaxConcurrentAutomaticRuns = () => 1;
+      internals.onExecuteCallback = async (task) => {
+        executed.push(task.name);
+      };
+
+      await internals.checkAndExecuteTasks();
+
+      assert.deepStrictEqual(executed, ["older-waiting"]);
+      assert.strictEqual(tasks[0].nextRun.getTime(), recentDue.getTime());
+      assert.strictEqual(tasks[0].lastFiredDueAt, undefined);
+      await internals.checkAndExecuteTasks();
+      assert.deepStrictEqual(executed, ["older-waiting", "frequent-first"]);
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  for (const offset of [-1, 0, 1]) {
+    test(`missed-run skip uses exact startup boundary (offset ${offset}ms)`, async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      const restore = overrideSchedulerConfig({ missedRunPolicy: "skip" });
+      const manager = new ScheduleManager(createMockContext(tmp));
+      try {
+        const task = await manager.createTask({
+          name: "exact-startup-boundary",
+          prompt: "hello",
+          cronExpression: "* * * * *",
+          scope: "global",
+          enabled: true,
+          jitterSeconds: 0,
+        });
+        const dueAt = new Date(truncateToMinute(new Date()).getTime() - 90_000);
+        task.nextRun = dueAt;
+        const internals = manager as unknown as {
+          schedulerStartedAt: Date;
+          onExecuteCallback: () => Promise<void>;
+          checkAndExecuteTasks: () => Promise<void>;
+        };
+        internals.schedulerStartedAt = new Date(dueAt.getTime() + offset);
+        let executions = 0;
+        internals.onExecuteCallback = async () => {
+          executions++;
+        };
+        await internals.checkAndExecuteTasks();
+        assert.strictEqual(executions, offset > 0 ? 0 : 1);
+      } finally {
+        manager.stopScheduler();
+        restore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const failFirst of [false, true]) {
+    test(`automatic claims reserve remaining daily budget and release slots (failure=${failFirst})`, async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      const restore = overrideSchedulerConfig({
+        maxDailyExecutions: 1,
+        maxConcurrentAutomaticRuns: 2,
+      });
+      const context = createMockContext(tmp);
+      const manager = new ScheduleManager(context);
+      try {
+        const tasks = [];
+        for (const name of ["budget-first", "budget-waiting"]) {
+          tasks.push(
+            await manager.createTask({
+              name,
+              prompt: "hello",
+              cronExpression: "0 * * * *",
+              scope: "global",
+              enabled: true,
+              jitterSeconds: 0,
+            }),
+          );
+        }
+        const dueAt = truncateToMinute(new Date(Date.now() - 60_000));
+        for (const task of tasks) task.nextRun = dueAt;
+        const internals = manager as unknown as {
+          automaticRunsInFlight: number;
+          onExecuteCallback: (task: { name: string }) => Promise<void>;
+          checkAndExecuteTasks: () => Promise<void>;
+        };
+        const executions: string[] = [];
+        internals.onExecuteCallback = async (task) => {
+          executions.push(task.name);
+          if (failFirst && task.name === "budget-first")
+            throw new Error("dispatch failed");
+        };
+        await internals.checkAndExecuteTasks();
+        assert.deepStrictEqual(executions, ["budget-first"]);
+        assert.strictEqual(internals.automaticRunsInFlight, 0);
+        assert.strictEqual(tasks[1].nextRun?.getTime(), dueAt.getTime());
+        assert.strictEqual(tasks[1].lastFiredDueAt, undefined);
+        await internals.checkAndExecuteTasks();
+        assert.deepStrictEqual(
+          executions,
+          failFirst ? ["budget-first", "budget-waiting"] : ["budget-first"],
+        );
+        assert.strictEqual(internals.automaticRunsInFlight, 0);
+        assert.strictEqual(context.globalState.get("dailyExecCount"), 1);
+      } finally {
+        manager.stopScheduler();
+        restore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("checkAndExecuteTasks does not re-run a due time that was already claimed", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
@@ -2752,6 +3126,114 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("automatic settings normalize unknown policy and invalid concurrency values", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const manager = new ScheduleManager(createMockContext(tmp));
+    try {
+      const internals = manager as unknown as {
+        getMissedRunPolicy: () => string;
+        getMaxConcurrentAutomaticRuns: () => number;
+      };
+      for (const [value, expected] of [
+        [undefined, 1],
+        [null, 1],
+        ["2", 1],
+        [NaN, 1],
+        [Infinity, 1],
+        [-10, 1],
+        [0, 1],
+        [2.9, 2],
+        [10, 10],
+        [100, 10],
+      ] as Array<[unknown, number]>) {
+        const restore = overrideSchedulerConfig({
+          missedRunPolicy: "invalid",
+          maxConcurrentAutomaticRuns: value,
+        });
+        try {
+          assert.strictEqual(internals.getMissedRunPolicy(), "runOnce");
+          assert.strictEqual(
+            internals.getMaxConcurrentAutomaticRuns(),
+            expected,
+          );
+        } finally {
+          restore();
+        }
+      }
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("zero daily limit leaves automatic dispatch capacity available", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const restore = overrideSchedulerConfig({
+      maxDailyExecutions: 0,
+      maxConcurrentAutomaticRuns: 2,
+    });
+    const manager = new ScheduleManager(createMockContext(tmp));
+    try {
+      for (const name of ["unlimited-one", "unlimited-two"]) {
+        const task = await manager.createTask({
+          name,
+          prompt: "hello",
+          cronExpression: "0 * * * *",
+          scope: "global",
+          enabled: true,
+          jitterSeconds: 0,
+        });
+        task.nextRun = new Date(Date.now() - 60_000);
+      }
+      const internals = manager as unknown as {
+        automaticRunsInFlight: number;
+        onExecuteCallback: () => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      let executions = 0;
+      internals.onExecuteCallback = async () => {
+        executions++;
+      };
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(executions, 2);
+      assert.strictEqual(internals.automaticRunsInFlight, 0);
+    } finally {
+      manager.stopScheduler();
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("Run Now does not consume or wait for automatic dispatch slots", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const manager = new ScheduleManager(createMockContext(tmp));
+    try {
+      const task = await manager.createTask({
+        name: "manual-independent",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        automaticRunsInFlight: number;
+        onExecuteCallback: () => Promise<void>;
+      };
+      internals.automaticRunsInFlight = 1;
+      let executions = 0;
+      internals.onExecuteCallback = async () => {
+        executions++;
+      };
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+      assert.strictEqual(executions, 1);
+      assert.strictEqual(internals.automaticRunsInFlight, 1);
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("checkAndExecuteTasks skips execution when the run claim cannot be persisted", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
@@ -2769,6 +3251,7 @@ suite("ScheduleManager RunNow Tests", () => {
       let executions = 0;
       let saveAttempts = 0;
       const internals = manager as unknown as {
+        automaticRunsInFlight: number;
         onExecuteCallback?: (task: unknown) => Promise<void>;
         saveTasks: () => Promise<void>;
         checkAndExecuteTasks?: () => Promise<void>;
@@ -2794,6 +3277,7 @@ suite("ScheduleManager RunNow Tests", () => {
       );
       assert.strictEqual((task.nextRun as Date).getTime(), dueAt.getTime());
       assert.strictEqual(task.lastFiredDueAt, undefined);
+      assert.strictEqual(internals.automaticRunsInFlight, 0);
     } finally {
       try {
         fs.rmSync(tmp, {

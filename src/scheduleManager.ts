@@ -81,6 +81,7 @@ type TaskStorageMeta = {
 class TaskStoreConflictError extends Error {}
 
 type ManualRunNextRunPolicy = "advance" | "fromNow";
+type MissedRunPolicy = "runOnce" | "skip";
 type ManualRunFailureReason =
   | "taskNotFound"
   | "executorUnavailable"
@@ -310,6 +311,8 @@ export class ScheduleManager {
   private schedulerTimeout: ReturnType<typeof setTimeout> | undefined;
   private schedulerTickInProgress = false;
   private schedulerTickPending = false;
+  private schedulerStartedAt: Date | undefined;
+  private automaticRunsInFlight = 0;
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
@@ -1294,6 +1297,21 @@ export class ScheduleManager {
     return policy === "fromNow" ? "fromNow" : "advance";
   }
 
+  private getMissedRunPolicy(): MissedRunPolicy {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    return config.get<string>("missedRunPolicy", "runOnce") === "skip"
+      ? "skip"
+      : "runOnce";
+  }
+
+  private getMaxConcurrentAutomaticRuns(): number {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const value = config.get<number>("maxConcurrentAutomaticRuns", 1);
+    return Number.isFinite(value)
+      ? Math.min(Math.max(Math.floor(value), 1), 10)
+      : 1;
+  }
+
   /**
    * Calculate next run time from cron expression
    */
@@ -1961,6 +1979,7 @@ export class ScheduleManager {
 
     // Align to next minute boundary
     const now = new Date();
+    this.schedulerStartedAt = now;
     const msToNextMinute = ScheduleManager.millisecondsUntilNextMinute(now);
 
     // Start after alignment
@@ -2042,13 +2061,21 @@ export class ScheduleManager {
     const maxDailyLimit =
       safeMaxDaily === 0 ? 0 : Math.min(Math.max(safeMaxDaily, 1), 100);
     const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
+    const missedRunPolicy = this.getMissedRunPolicy();
+    const maxConcurrentAutomaticRuns = this.getMaxConcurrentAutomaticRuns();
+    const schedulerStartedAt = this.schedulerStartedAt;
 
     let needsSave = false;
     let executedCount = 0;
     const claims: TaskRunClaim[] = [];
     const runResults = new Map<string, Date>();
 
-    for (const task of this.tasks.values()) {
+    const candidates = Array.from(this.tasks.values()).sort(
+      (left, right) =>
+        (left.nextRun?.getTime() ?? Infinity) -
+        (right.nextRun?.getTime() ?? Infinity),
+    );
+    for (const task of candidates) {
       if (!task.enabled || !task.nextRun) {
         continue;
       }
@@ -2069,6 +2096,19 @@ export class ScheduleManager {
 
       // Check if due
       if (nextRunMinute.getTime() <= nowMinute.getTime()) {
+        if (
+          missedRunPolicy === "skip" &&
+          schedulerStartedAt &&
+          task.nextRun.getTime() < schedulerStartedAt.getTime()
+        ) {
+          logDebug(
+            `[CopilotScheduler] Skipping missed run from before scheduler startup: ${task.name}`,
+          );
+          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          needsSave = true;
+          continue;
+        }
+
         // Another window may have already run this occurrence and rolled our
         // in-memory state back, so never fire the same due time twice.
         if (
@@ -2109,6 +2149,10 @@ export class ScheduleManager {
           continue;
         }
 
+        if (this.automaticRunsInFlight >= maxConcurrentAutomaticRuns) {
+          continue;
+        }
+
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached(maxDailyLimit)) {
           logDebug(
@@ -2135,6 +2179,13 @@ export class ScheduleManager {
           continue;
         }
 
+        if (
+          maxDailyLimit > 0 &&
+          this.dailyExecCount + this.automaticRunsInFlight >= maxDailyLimit
+        ) {
+          continue;
+        }
+
         if (!this.tryStartTaskRun(task.id)) {
           logDebug(
             `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
@@ -2149,6 +2200,7 @@ export class ScheduleManager {
           dueAt: nextRunMinute,
           nextRun: this.getNextRunForTask(task.cronExpression, now),
         });
+        this.automaticRunsInFlight++;
         needsSave = true;
       }
     }
@@ -2175,6 +2227,7 @@ export class ScheduleManager {
           "[CopilotScheduler] Could not claim due tasks, retrying on the next tick.",
         );
         for (const claim of claims) {
+          this.automaticRunsInFlight--;
           this.finishTaskRun(claim.taskId);
         }
         // Persisting is unavailable right now, so skip the trailing save too.
@@ -2366,6 +2419,7 @@ export class ScheduleManager {
       }
       return executedAt;
     } finally {
+      this.automaticRunsInFlight--;
       this.finishTaskRun(claim.taskId);
     }
   }

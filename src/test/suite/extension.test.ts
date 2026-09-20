@@ -198,6 +198,32 @@ suite("Extension Test Suite", () => {
     );
   });
 
+  test("auto-mode guidance uses native setting links without a trailing hash in the target", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    assert.strictEqual(
+      manifest.contributes.configuration.properties[
+        "copilotScheduler.autoModeDefault"
+      ].markdownDescription,
+      "%config.autoModeDefault%",
+    );
+    for (const filename of ["package.nls.json", "package.nls.ja.json"]) {
+      const strings: Record<string, string> = JSON.parse(
+        fs.readFileSync(path.join(root, filename), "utf8"),
+      );
+      const description = strings["config.autoModeDefault"];
+      assert.ok(
+        description.includes("`#chat.editing.autoAcceptDelay#`"),
+        filename,
+      );
+      for (const value of Object.values(strings)) {
+        assert.doesNotMatch(value, /\]\(#[^)\s]+#\)/, filename);
+      }
+    }
+  });
+
   test("FULL_SPECIFICATION stays aligned with package manifest basics", () => {
     const root = path.resolve(__dirname, "../../..");
     const specPath = path.join(root, "FULL_SPECIFICATION.md");
@@ -281,11 +307,37 @@ suite("Extension Test Suite", () => {
       workflow.includes("Validate tag matches package version"),
       "publish workflow should refuse a tag that does not match package.json",
     );
+    assert.match(workflow, /type: boolean\s+default: false/);
+    assert.match(
+      workflow,
+      /group: publish-extension\s+cancel-in-progress: false/,
+    );
     assert.match(
       workflow,
       /node-version:\s*22/,
       "publish workflow should use a supported Node.js LTS release",
     );
+  });
+
+  test("registry gate rejects an empty lockfile rather than reporting a vacuous pass", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-lock-"));
+    try {
+      const fixture = path.join(fixtureRoot, "package-lock.json");
+      fs.writeFileSync(
+        fixture,
+        JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      );
+      const result = spawnSync(
+        process.execPath,
+        [path.join(root, "scripts/verify-package-lock-registry.js"), fixture],
+        { encoding: "utf8" },
+      );
+      assert.strictEqual(result.status, 1);
+      assert.match(result.stderr, /No resolved package URLs found/);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   test("NLS consistency gate rejects keys missing from either locale", () => {
@@ -415,6 +467,56 @@ suite("Extension Test Suite", () => {
       assert.strictEqual(result.status, 1);
       assert.match(result.stderr, /Duplicate entries found/);
       assert.match(result.stderr, /EXTENSION\/PACKAGE\.JSON/);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("VSIX verifier requires localized documentation and the Marketplace icon", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const script = path.join(root, "scripts/verify-vsix-contents.js");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-vsix-"));
+    const fixturePath = path.join(fixtureRoot, "entries.vsix");
+    const required = [
+      "extension/package.json",
+      "extension/package.nls.json",
+      "extension/package.nls.ja.json",
+      "extension/out/extension.js",
+      "extension/media/schedulerWebview.js",
+      "extension/README.md",
+      "extension/README_ja.md",
+      "extension/images/icon.png",
+      "extension/LICENSE.txt",
+    ];
+    try {
+      for (const missing of [
+        undefined,
+        "extension/README_ja.md",
+        "extension/images/icon.png",
+      ]) {
+        const names = required.filter((name) => name !== missing);
+        const directory = Buffer.concat(
+          names.map((name) => {
+            const bytes = Buffer.from(name, "utf8");
+            const entry = Buffer.alloc(46 + bytes.length);
+            entry.writeUInt32LE(0x02014b50, 0);
+            entry.writeUInt16LE(bytes.length, 28);
+            bytes.copy(entry, 46);
+            return entry;
+          }),
+        );
+        const footer = Buffer.alloc(22);
+        footer.writeUInt32LE(0x06054b50, 0);
+        footer.writeUInt16LE(names.length, 10);
+        footer.writeUInt32LE(directory.length, 12);
+        fs.writeFileSync(fixturePath, Buffer.concat([directory, footer]));
+        const result = spawnSync(process.execPath, [script, fixturePath], {
+          cwd: root,
+          encoding: "utf8",
+        });
+        assert.strictEqual(result.status, missing ? 1 : 0, result.stderr);
+        if (missing) assert.ok(result.stderr.includes(missing), result.stderr);
+      }
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
@@ -759,6 +861,42 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
+  test("automatic concurrency settings clarify dispatch rather than response completion", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    const settings = manifest.contributes.configuration.properties;
+    assert.strictEqual(
+      settings["copilotScheduler.missedRunPolicy"].default,
+      "runOnce",
+    );
+    assert.deepStrictEqual(settings["copilotScheduler.missedRunPolicy"].enum, [
+      "runOnce",
+      "skip",
+    ]);
+    assert.strictEqual(
+      settings["copilotScheduler.maxConcurrentAutomaticRuns"].default,
+      1,
+    );
+    assert.strictEqual(
+      settings["copilotScheduler.maxConcurrentAutomaticRuns"].maximum,
+      10,
+    );
+    for (const [filename, wording] of [
+      ["package.nls.json", "Does not wait for model response completion"],
+      ["package.nls.ja.json", "モデル応答の完了は待ちません"],
+    ]) {
+      const strings = JSON.parse(
+        fs.readFileSync(path.join(root, filename), "utf8"),
+      );
+      assert.ok(
+        strings["config.maxConcurrentAutomaticRuns"].includes(wording),
+        filename,
+      );
+    }
+  });
+
   test("execution summaries describe success as prompt dispatch", async () => {
     const { __testOnly } = await import("../../extension");
     const buildSummary = __testOnly.buildExecutionSummary;

@@ -33,6 +33,13 @@ function verifyPackageLockRegistry(filePath) {
   const resolvedUrls = collectResolvedUrls(lock);
   const invalid = findInvalidResolvedUrls(lock);
 
+  if (resolvedUrls.length === 0) {
+    console.error(
+      "No resolved package URLs found; registry verification requires a populated lockfile.",
+    );
+    return false;
+  }
+
   if (invalid.length > 0) {
     console.error(
       `Non-public or invalid package-lock resolved URLs found in ${path.basename(resolvedPath)}:`,

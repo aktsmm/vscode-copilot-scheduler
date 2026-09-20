@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-09-21
+
+### Internal
+
+- Manual release workflows now default to validation without publishing, serialize branch/tag runs, and reject empty lockfiles in the registry gate.
+- Updated vulnerable transitive development dependencies within their existing version ranges; the dependency audit reports no known vulnerabilities.
+- VSIX verification now requires the Japanese README and Marketplace icon as well as the runtime entry points.
+- Test runner now forwards `--grep` / `-g` into the isolated VS Code suite, rejects invalid arguments before launch, and fails on zero matching tests. Unfiltered runs explicitly clear inherited test filters.
+
+### Added
+
+- Added `missedRunPolicy` (`runOnce` by default, or `skip`) and `maxConcurrentAutomaticRuns` (1 by default, range 1-10). The concurrency limit covers automatic prompt dispatches including jitter in one window, not model response completion or manual runs.
+
+### Fixed
+
+- Task panel tabs now support Left/Right and Home/End navigation, maintain a single tab stop, and move focus out of inactive tabs or hidden panels. Invalid tab requests leave the current panel unchanged.
+- Auto-accept guidance now uses native VS Code setting-link syntax in both languages so setting searches do not include a stray trailing hash.
+- Automatic dispatches select the oldest due tasks first to prevent frequently scheduled tasks from starving waiting tasks. In-flight dispatches reserve daily capacity, preventing a parallel batch from exceeding its remaining daily budget.
+- Missed-run classification compares the original scheduled timestamp against the exact scheduler start time, preserving same-time and later occurrences even when they contain seconds.
+
 ## [1.5.4] - 2026-09-04
 
 ### Changed

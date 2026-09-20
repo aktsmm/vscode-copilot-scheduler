@@ -42,6 +42,8 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 3. タスク名、プロンプト、Cron スケジュールを入力
 4. スケジュールされた時刻に自動で Copilot にプロンプトが送信されます
 
+タスク画面では、Tabキーで選択中のタブへ移動できます。左右キーでタブを切り替え、Home/Endで先頭・末尾のタブを選択し、Tabキーで選択中のパネル内へ移動します。Enter/Spaceは通常のボタン操作として使えます。
+
 ## ⏰ Cron 式の例
 
 | 式             | 説明            |
@@ -120,30 +122,34 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 
 ## ⚙️ 設定
 
-| 設定                                        | デフォルト        | 説明                                                                                                                                                                                                                                                                     |
-| ------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `copilotScheduler.enabled`                  | `true`            | スケジュール実行の有効/無効                                                                                                                                                                                                                                              |
-| `copilotScheduler.defaultScope`             | `workspace`       | デフォルトスコープ                                                                                                                                                                                                                                                       |
-| `copilotScheduler.language`                 | `auto`            | UI 言語 (auto/en/ja)。拡張の Webview/Tree に適用。設定説明文の反映にはウィンドウ再読み込みが必要な場合があります。                                                                                                                                                       |
-| `copilotScheduler.timezone`                 | `""`              | スケジュール、実行可能時間帯、1 日の実行回数カウントに使うタイムゾーン                                                                                                                                                                                                   |
-| `copilotScheduler.jitterSeconds`            | `600`             | タスク実行前に入れるランダム遅延の最大秒数 (0〜1800、0=無効、タスクごとに上書き可)                                                                                                                                                                                       |
-| `copilotScheduler.manualRunNextRunPolicy`   | `advance`         | `Run Now` 後の次回実行計算: `advance`（既存 nextRun から進める）/ `fromNow`（現在時刻から再計算）                                                                                                                                                                        |
-| `copilotScheduler.chatSession`              | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
-| `copilotScheduler.autoModeDefault`          | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
-| `copilotScheduler.commandDelayFactor`       | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
-| `copilotScheduler.showNotifications`        | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
-| `copilotScheduler.notificationMode`         | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |
-| `copilotScheduler.maxDailyExecutions`       | `24`              | 1日のスケジュール実行回数上限（全タスク合計、0=無制限、1〜100）。⚠️ 無制限はAPIレート制限のリスクあり                                                                                                                                                                    |
-| `copilotScheduler.minimumIntervalWarning`   | `true`            | 30分未満のcron間隔を設定するときに警告表示                                                                                                                                                                                                                               |
-| `copilotScheduler.globalPromptsPath`        | `""`              | グローバルプロンプトフォルダーのパス（未指定時: VS Code の User/prompts フォルダー。Windows: `%APPDATA%/Code/User/prompts`、macOS: `~/Library/Application Support/Code/User/prompts`、Linux: `$XDG_CONFIG_HOME/Code/User/prompts` または `~/.config/Code/User/prompts`） |
-| `copilotScheduler.globalAgentsPath`         | `""`              | グローバルエージェントフォルダー（`*.agent.md`）のパス（未指定時: VS Code の User/prompts フォルダーと `~/.copilot/agents` を自動検出。設定すると既定の探索先より優先）                                                                                                  |
-| `copilotScheduler.promptFileFallback`       | `"snapshot"`      | ローカル / グローバルのプロンプトファイルを実行時に読めなかった場合の動作: `snapshot`（保存済みスナップショットで実行）/ `blockWhenResolvable`（パスは解決できるのに読めない場合は中止）/ `blockAlways`（常に中止）。インラインプロンプトは対象外                        |
-| `copilotScheduler.logLevel`                 | `info`            | ログレベル (none/error/info/debug)                                                                                                                                                                                                                                       |
-| `copilotScheduler.executionHistoryLimit`    | `50`              | 実行履歴ビューにタスクごとに保持する件数上限（10〜500）                                                                                                                                                                                                                  |
-| `copilotScheduler.lmTools.enableWriteTools` | `true`            | Copilot Chat ツールからタスクの作成・更新・削除・有効/無効切替を許可します。`false` にすると読み取り専用ツールだけが利用できます。                                                                                                                                       |
-| `copilotScheduler.lmTools.confirmationMode` | `destructiveOnly` | write 系ツールで拡張側のカスタム確認メッセージを出す範囲を制御します: `always` / `destructiveOnly` / `minimal`。VS Code/Copilot 側の汎用承認は表示される場合があります。                                                                                                 |
+| 設定                                          | デフォルト        | 説明                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `copilotScheduler.enabled`                    | `true`            | スケジュール実行の有効/無効                                                                                                                                                                                                                                              |
+| `copilotScheduler.defaultScope`               | `workspace`       | デフォルトスコープ                                                                                                                                                                                                                                                       |
+| `copilotScheduler.language`                   | `auto`            | UI 言語 (auto/en/ja)。拡張の Webview/Tree に適用。設定説明文の反映にはウィンドウ再読み込みが必要な場合があります。                                                                                                                                                       |
+| `copilotScheduler.timezone`                   | `""`              | スケジュール、実行可能時間帯、1 日の実行回数カウントに使うタイムゾーン                                                                                                                                                                                                   |
+| `copilotScheduler.jitterSeconds`              | `600`             | タスク実行前に入れるランダム遅延の最大秒数 (0〜1800、0=無効、タスクごとに上書き可)                                                                                                                                                                                       |
+| `copilotScheduler.manualRunNextRunPolicy`     | `advance`         | `Run Now` 後の次回実行計算: `advance`（既存 nextRun から進める）/ `fromNow`（現在時刻から再計算）                                                                                                                                                                        |
+| `copilotScheduler.missedRunPolicy`            | `runOnce`         | スケジューラ起動前に期限を迎えたタスク: `runOnce` は各タスクを1回実行、`skip` は実行せず次回へ進めます。VS Code の設定画面で選択できます。                                                                                                                               |
+| `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | このウィンドウの自動プロンプト送信処理の最大同時数（jitterを含む、1〜10）。モデル応答の完了は待ちません。「今すぐ実行」は対象外です。                                                                                                                                    |
+| `copilotScheduler.chatSession`                | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
+| `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
+| `copilotScheduler.commandDelayFactor`         | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
+| `copilotScheduler.showNotifications`          | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
+| `copilotScheduler.notificationMode`           | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |
+| `copilotScheduler.maxDailyExecutions`         | `24`              | 1日のスケジュール実行回数上限（全タスク合計、0=無制限、1〜100）。⚠️ 無制限はAPIレート制限のリスクあり                                                                                                                                                                    |
+| `copilotScheduler.minimumIntervalWarning`     | `true`            | 30分未満のcron間隔を設定するときに警告表示                                                                                                                                                                                                                               |
+| `copilotScheduler.globalPromptsPath`          | `""`              | グローバルプロンプトフォルダーのパス（未指定時: VS Code の User/prompts フォルダー。Windows: `%APPDATA%/Code/User/prompts`、macOS: `~/Library/Application Support/Code/User/prompts`、Linux: `$XDG_CONFIG_HOME/Code/User/prompts` または `~/.config/Code/User/prompts`） |
+| `copilotScheduler.globalAgentsPath`           | `""`              | グローバルエージェントフォルダー（`*.agent.md`）のパス（未指定時: VS Code の User/prompts フォルダーと `~/.copilot/agents` を自動検出。設定すると既定の探索先より優先）                                                                                                  |
+| `copilotScheduler.promptFileFallback`         | `"snapshot"`      | ローカル / グローバルのプロンプトファイルを実行時に読めなかった場合の動作: `snapshot`（保存済みスナップショットで実行）/ `blockWhenResolvable`（パスは解決できるのに読めない場合は中止）/ `blockAlways`（常に中止）。インラインプロンプトは対象外                        |
+| `copilotScheduler.logLevel`                   | `info`            | ログレベル (none/error/info/debug)                                                                                                                                                                                                                                       |
+| `copilotScheduler.executionHistoryLimit`      | `50`              | 実行履歴ビューにタスクごとに保持する件数上限（10〜500）                                                                                                                                                                                                                  |
+| `copilotScheduler.lmTools.enableWriteTools`   | `true`            | Copilot Chat ツールからタスクの作成・更新・削除・有効/無効切替を許可します。`false` にすると読み取り専用ツールだけが利用できます。                                                                                                                                       |
+| `copilotScheduler.lmTools.confirmationMode`   | `destructiveOnly` | write 系ツールで拡張側のカスタム確認メッセージを出す範囲を制御します: `always` / `destructiveOnly` / `minimal`。VS Code/Copilot 側の汎用承認は表示される場合があります。                                                                                                 |
 
 AI が適用した編集を遅延後に自動で保持するには、VS Code 設定 `chat.editing.autoAcceptDelay` を設定してください（`0` = 無効、`1-100` = 秒、推奨: `5`）。
+
+未実行判定はスケジューラの起動・再開時刻より前の `nextRun` だけが対象です。`skip` は実行履歴・日次件数を増やさず次回へ進め、後から設定を戻しても破棄した予定は復元しません。起動後のスリープによる遅延は起動前の未実行とは区別します。設定変更は次回チェックから反映し、処理中の送信は中断しません。待機タスクは後続 tick で古い予定から選び、許可時間帯と日次上限も適用します。処理中の送信が予約した日次枠は、成功・失敗が確定するまで他のタスクに割り当てません。同時数の既定値は従来の無制限から1に変わりますが、モデル応答は並行する可能性があり、別の VS Code ウィンドウの送信上限とは独立しています。
 
 タスク単位の運用制御（「チャットセッション」「上限/日」「実行許可時間帯」）は Webview の作成/編集フォームで設定できます。「上限/日」と「実行許可時間帯」はスケジュールと同じ時計で判定します。`copilotScheduler.timezone` を設定していればそのタイムゾーン、未設定ならマシンのローカル時刻です。
 
@@ -206,13 +212,30 @@ Webview では、対応 family に対して Copilot Chat に近い思考の負�
 - VS Code 1.95.0 以上
 - GitHub Copilot 拡張機能
 
+## 開発時のテスト
+
+`npm test` はコンパイル後、隔離された VS Code プロファイルで全テストを実行します。Copilotへのサインインは不要です。スイート名とテスト名を含むタイトルで絞り込むには、JavaScriptの正規表現を `--grep`（または `-g`）で指定します。Windows PowerShellでは、オプションを正しく渡すため `npm.cmd` を使ってください。
+
+```powershell
+npm.cmd test -- --grep "Test Runner Arguments"
+```
+
+`|` による選択など、シェルが解釈する文字を含む場合は、先にコンパイルしてNodeを直接実行します。
+
+```powershell
+npm.cmd run pretest
+node ./out/test/runTest.js --grep 'tabs|claim'
+```
+
+正規表現は空白も含めてそのまま使います。未知の引数、空・不正なパターン、一致0件は失敗になります。引数なしなら、フィルター環境変数を継承していても全テストを実行します。部分テストの成功だけでリリースせず、公開前は `npm test` を実行してください。
+
 ## 🛠️ リリース自動化
 
 メンテナーはローカルで `vsce publish` を実行しなくても、GitHub Actions から公開できます。
 
 - `package.json` の version を更新した後、同じ番号の `vX.Y.Z` タグを push します。
 - GitHub Actions が `npm ci`、`npm run compile`、`npm test`、`.vsix` 作成、VS Code Marketplace 公開、GitHub Release への `.vsix` 添付まで実行します。
-- タグを切らずに公開したい場合は、Actions タブの `Publish Extension` workflow から現在の `package.json` version を手動公開できます。
+- 公開前の確認は、対象ブランチで `Publish Extension` を `publish=false`（既定値）として手動起動します。全ゲート成功後にバージョンタグをpushします。ブランチ・タグをまたいでジョブは直列化されます。明示的な `publish=true` はMarketplaceのみへ公開し、GitHub Releaseには対応するタグが必要です。
 - 利用前に repository secret `VSCE_PAT` を設定してください。
 
 ## ⚠️ 既知の問題
