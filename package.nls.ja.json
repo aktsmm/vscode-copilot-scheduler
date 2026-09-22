@@ -58,9 +58,9 @@
   "config.promptFileFallback.blockWhenResolvable": "パスは解決できるのにファイルを読めない場合は実行を中止する。パス自体を解決できない場合（ワークスペース未オープンなど）はスナップショットで実行する。",
   "config.promptFileFallback.blockAlways": "最新のプロンプトファイルを読み込めない場合は常に実行を中止する。",
   "config.reportIssue": "🐛 バグを見つけた場合は [GitHub で報告](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
-  "config.lmTools.enableWriteTools": "Copilot Chat / エージェントモードから言語モデルツール経由でスケジュールタスクの作成・更新・削除・有効化切替を許可します。読み取り系ツールは常に利用可能です。無効化すると読み取り系ツールのみ公開されます。",
+  "config.lmTools.enableWriteTools": "Copilot Chat / エージェントモードから言語モデルツール経由でタスクの作成・更新・削除・有効化切替・1回実行を許可します。無効化しても変更系ツールは表示されますが、呼び出しは拒否され、読み取り系のみ利用できます。",
   "config.lmTools.confirmationMode": "Copilot Chat の write 系言語モデルツールで、この拡張が表示するカスタム確認メッセージを制御します。VS Code または Copilot Chat 側の汎用承認ダイアログは引き続き表示される場合があります。",
-  "config.lmTools.confirmationMode.always": "作成・更新・削除・有効/無効切替のすべてで、拡張側のカスタム確認メッセージを表示します。",
+  "config.lmTools.confirmationMode.always": "作成・更新・削除・有効/無効切替・1回実行のすべてで、拡張側のカスタム確認メッセージを表示します。",
   "config.lmTools.confirmationMode.destructiveOnly": "削除などの破壊的操作だけで、拡張側のカスタム確認メッセージを表示します。",
   "config.lmTools.confirmationMode.minimal": "拡張側のカスタム確認メッセージをすべて抑制します。VS Code または Copilot Chat 側の汎用承認は表示される場合があります。",
   "tool.scheduler_query.displayName": "スケジューラ: タスク問い合わせ",
@@ -73,5 +73,7 @@
   "tool.scheduler_delete_task.modelDescription": "ユーザーが既存のスケジュールタスクの削除、除去、またはキャンセルを依頼したときに使います。id 指定でタスクを削除します。**この操作は取り消せません**。実行前の確認ダイアログでタスク名・scope・ワークスペースがユーザーに表示されます。",
   "tool.scheduler_set_task_enabled.displayName": "スケジューラ: タスク有効/無効切替",
   "tool.scheduler_set_task_enabled.modelDescription": "ユーザーが既存のスケジュールタスクの有効化、無効化、一時停止、再開、オン、またはオフを依頼したときに使います。id 指定でタスクを有効化または無効化します。有効化には Copilot Scheduler ビュー上での初回実行同意が事前に必要です。",
+  "tool.scheduler_run_task.displayName": "スケジューラ: タスクを今すぐ実行",
+  "tool.scheduler_run_task.modelDescription": "ユーザーが既存のタスクを今すぐ1回実行、起動、テストするよう依頼したときに使います。先に scheduler_query で id を特定してください。有効/無効の状態は変更しませんが、有効なタスクの nextRun は manualRunNextRunPolicy に従って進みます。成功はプロンプト送信を示し、モデル応答完了は意味しません。saveFailed は送信済みなので自動再試行しないでください。キャンセルは実行開始前に確認し、開始済みの送信は取り消せません。workspace タスクは現在のワークスペースに属する場合だけ実行でき、それ以外は対象ワークスペースを開くか Scheduler ビューを利用してください。",
   "view.tasks": "スケジュールタスク"
 }

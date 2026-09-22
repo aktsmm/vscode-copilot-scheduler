@@ -67,6 +67,9 @@ jobs:
       - name: Verify package-lock registry hygiene
         run: node scripts/verify-package-lock-registry.js
 
+      - name: Audit dependencies
+        run: npm audit --registry=https://registry.npmjs.org
+
       - name: Verify NLS consistency
         run: npm run verify:nls
 

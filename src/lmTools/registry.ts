@@ -11,6 +11,10 @@ import {
   createSchedulerQueryTool,
   type SchedulerCatalogProvider,
 } from "./tools/query";
+import {
+  createSchedulerRunTaskTool,
+  type ManualTaskRunner,
+} from "./tools/runTask";
 import { createSchedulerSetTaskEnabledTool } from "./tools/setTaskEnabled";
 import { createSchedulerUpdateTaskTool } from "./tools/updateTask";
 
@@ -21,6 +25,7 @@ import { createSchedulerUpdateTaskTool } from "./tools/updateTask";
 export interface LmToolsRegistrationOptions {
   catalogProvider?: SchedulerCatalogProvider;
   resolveModelSelection?: ModelSelectionResolver;
+  runTask?: ManualTaskRunner;
 }
 
 /**
@@ -63,6 +68,14 @@ export function registerLmTools(
     vscode.lm.registerTool(
       "scheduler_set_task_enabled",
       createSchedulerSetTaskEnabledTool(mutationClient),
+    ),
+    vscode.lm.registerTool(
+      "scheduler_run_task",
+      createSchedulerRunTaskTool(
+        scheduleManager,
+        options.runTask ??
+          (async () => ({ ok: false, reason: "executorUnavailable" })),
+      ),
     ),
   ];
 

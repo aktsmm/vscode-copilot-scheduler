@@ -4,6 +4,7 @@ import type { LmToolMutationClient } from "../../taskMutationService";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
@@ -30,7 +31,7 @@ export function createSchedulerSetTaskEnabledTool(
         prepared.confirmationMessages = {
           title: `${verb === "enable" ? "Enable" : "Disable"} scheduler task`,
           message: new vscode.MarkdownString(
-            `Copilot Chat wants to **${verb}** task \`${input.id ?? "(missing)"}\`.`,
+            `Copilot Chat wants to **${verb}** task ${formatConfirmationCode(input.id ?? "(missing)")}.`,
           ),
         };
       }
@@ -38,8 +39,9 @@ export function createSchedulerSetTaskEnabledTool(
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<SetEnabledToolInput>,
+      token: vscode.CancellationToken,
     ) {
-      const gate = assertWriteToolGates();
+      const gate = assertWriteToolGates(token);
       if (gate) {
         return gate;
       }

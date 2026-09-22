@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -731,6 +731,30 @@
           "required": [
             "id",
             "enabled"
+          ]
+        }
+      },
+      {
+        "name": "scheduler_run_task",
+        "displayName": "%tool.scheduler_run_task.displayName%",
+        "modelDescription": "%tool.scheduler_run_task.modelDescription%",
+        "toolReferenceName": "scheduler_run_task",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(play)",
+        "tags": [
+          "copilot-scheduler"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Task id to run once immediately. The task's enabled state is not changed."
+            }
+          },
+          "required": [
+            "id"
           ]
         }
       }

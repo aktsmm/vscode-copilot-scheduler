@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
 import { getFirstDistinctCronRuns } from "../../cronExpressions";
+import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
 
 function normalizePathForAssertion(p: string): string {
   const resolved = path.normalize(path.resolve(p));
@@ -3606,6 +3607,64 @@ suite("ScheduleManager RunNow Tests", () => {
       } catch {
         // ignore
       }
+    }
+  });
+
+  test("run task tool dispatches a disabled task once and persists it disabled", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const context = createMockContext(tmp);
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "disabled-manual-run",
+        prompt: "local test only",
+        cronExpression: "*/5 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: false,
+        jitterSeconds: 1800,
+      });
+      let calls = 0;
+      (
+        manager as unknown as { onExecuteCallback: () => Promise<void> }
+      ).onExecuteCallback = async () => {
+        calls++;
+      };
+      const tool = createSchedulerRunTaskTool(manager, (selected) =>
+        manager.runTaskNowDetailed(selected.id),
+      );
+      const result = await tool.invoke(
+        {
+          input: { id: task.id },
+        } as vscode.LanguageModelToolInvocationOptions<{ id: string }>,
+        { isCancellationRequested: false } as vscode.CancellationToken,
+      );
+      assert.ok(result);
+      const payload = JSON.parse(
+        (result.content[0] as vscode.LanguageModelTextPart).value,
+      );
+      assert.strictEqual(payload.ok, true);
+      assert.strictEqual(payload.executionSemantics, "prompt_dispatched");
+      assert.strictEqual(payload.task.enabled, false);
+      assert.strictEqual(payload.task.prompt, undefined);
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(task.enabled, false);
+      assert.strictEqual(task.nextRun, undefined);
+      assert.ok(task.lastRun instanceof Date);
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<Record<string, unknown>>;
+      const persisted = saved.find((entry) => entry.id === task.id);
+      assert.strictEqual(persisted?.enabled, false);
+      assert.strictEqual(persisted?.nextRun, undefined);
+      assert.strictEqual(persisted?.lastRun, task.lastRun.toISOString());
+    } finally {
+      fs.rmSync(tmp, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
     }
   });
 

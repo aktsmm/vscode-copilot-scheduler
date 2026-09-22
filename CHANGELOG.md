@@ -5,6 +5,25 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-09-22
+
+### Added
+
+- Added `scheduler_run_task` to dispatch an existing task once from Copilot Chat without enabling its schedule, with workspace/trust/write gates, bilingual confirmation, and explicit dispatch-only results.
+
+### Fixed
+
+- All LM write tools reject cancellation before starting. Confirmation text safely displays task names, IDs and other values without interpreting injected Markdown.
+- Duplicate manual runs no longer clear the active run marker or consume its prompt audit metadata. The guard remains active through history recording.
+- Run-tool save failures report that the prompt was already dispatched and must not be retried automatically; unknown outcomes are explicitly marked unsafe to retry. The tool stays registered even when its runner is unavailable.
+
+### Internal
+
+- VSIX verification now requires the Activity Bar icon as well as the Marketplace icon; a missing-icon regression fixture prevents shipping an invisible sidebar entry.
+- Release and validation-only workflows now run the dependency audit against the public npm registry before packaging.
+
+This release also includes the changes listed for 1.6.0, whose Marketplace publication failed.
+
 ## [1.6.0] - 2026-09-21
 
 ### Internal

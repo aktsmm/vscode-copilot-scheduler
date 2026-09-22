@@ -6,6 +6,7 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   describeAttachmentsForConfirmation,
+  formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
@@ -68,9 +69,11 @@ export function createSchedulerUpdateTaskTool(
           title: "Update scheduler task",
           message: new vscode.MarkdownString(
             [
-              `Copilot Chat wants to update task \`${input.id ?? "(missing)"}\`.\n\nFields to change: ${
+              `Copilot Chat wants to update task ${formatConfirmationCode(input.id ?? "(missing)")}.\n\nFields to change: ${
                 updateKeys.length
-                  ? updateKeys.map((k) => `\`${k}\``).join(", ")
+                  ? updateKeys
+                      .map((key) => formatConfirmationCode(key))
+                      .join(", ")
                   : "(none)"
               }`,
               attachmentDetail
@@ -84,8 +87,9 @@ export function createSchedulerUpdateTaskTool(
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<UpdateTaskToolInput>,
+      token: vscode.CancellationToken,
     ) {
-      const gate = assertWriteToolGates();
+      const gate = assertWriteToolGates(token);
       if (gate) {
         return gate;
       }

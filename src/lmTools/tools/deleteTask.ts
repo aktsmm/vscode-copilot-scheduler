@@ -5,6 +5,8 @@ import type { LmToolMutationClient } from "../../taskMutationService";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  escapeConfirmationText,
+  formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
 } from "../shared";
@@ -29,13 +31,13 @@ export function createSchedulerDeleteTaskTool(
           : undefined;
       const detail = task
         ? [
-            `**${task.name}**`,
-            `- id: \`${task.id}\``,
-            `- scope: ${task.scope}`,
-            `- workspace: ${task.workspacePath ?? "(none)"}`,
-            `- cron: \`${task.cronExpression}\``,
+            `**${escapeConfirmationText(task.name)}**`,
+            `- id: ${formatConfirmationCode(task.id)}`,
+            `- scope: ${escapeConfirmationText(task.scope)}`,
+            `- workspace: ${escapeConfirmationText(task.workspacePath ?? "(none)")}`,
+            `- cron: ${formatConfirmationCode(task.cronExpression)}`,
           ].join("\n")
-        : `- id: \`${id}\` (task not found; it may have been deleted already)`;
+        : `- id: ${formatConfirmationCode(id)} (task not found; it may have been deleted already)`;
       const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: `Deleting scheduler task: ${task?.name ?? id}`,
       };
@@ -51,8 +53,9 @@ export function createSchedulerDeleteTaskTool(
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<DeleteTaskToolInput>,
+      token: vscode.CancellationToken,
     ) {
-      const gate = assertWriteToolGates();
+      const gate = assertWriteToolGates(token);
       if (gate) {
         return gate;
       }

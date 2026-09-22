@@ -6,6 +6,8 @@ import {
   assertWriteToolGates,
   buildJsonTextResult,
   describeAttachmentsForConfirmation,
+  escapeConfirmationText,
+  formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
@@ -63,13 +65,19 @@ export function createSchedulerCreateTaskTool(
     ): Promise<vscode.PreparedToolInvocation> {
       const input = options.input ?? {};
       const detail = [
-        `**${input.name || "(unnamed)"}**`,
-        `- cron: \`${input.cronExpression || "(missing)"}\``,
-        `- scope: ${input.scope || "(missing)"}`,
-        `- promptSource: ${input.promptSource || "inline"}`,
-        input.promptPath ? `- promptPath: \`${input.promptPath}\`` : undefined,
-        input.agent ? `- agent: ${input.agent}` : undefined,
-        input.model ? `- model: ${input.model}` : undefined,
+        `**${escapeConfirmationText(input.name || "(unnamed)")}**`,
+        `- cron: ${formatConfirmationCode(input.cronExpression || "(missing)")}`,
+        `- scope: ${escapeConfirmationText(input.scope || "(missing)")}`,
+        `- promptSource: ${escapeConfirmationText(input.promptSource || "inline")}`,
+        input.promptPath
+          ? `- promptPath: ${formatConfirmationCode(input.promptPath)}`
+          : undefined,
+        input.agent
+          ? `- agent: ${escapeConfirmationText(input.agent)}`
+          : undefined,
+        input.model
+          ? `- model: ${escapeConfirmationText(input.model)}`
+          : undefined,
         describeAttachmentsForConfirmation(input.attachments),
         input.enabled === false
           ? "- initial state: disabled"
@@ -92,8 +100,9 @@ export function createSchedulerCreateTaskTool(
     },
     async invoke(
       options: vscode.LanguageModelToolInvocationOptions<CreateTaskToolInput>,
+      token: vscode.CancellationToken,
     ) {
-      const gate = assertWriteToolGates();
+      const gate = assertWriteToolGates(token);
       if (gate) {
         return gate;
       }

@@ -32,6 +32,7 @@ const REQUIRED_ENTRIES = [
   "extension/README.md",
   "extension/README_ja.md",
   "extension/images/icon.png",
+  "extension/images/scheduler-icon.svg",
   "extension/LICENSE.txt",
 ];
 

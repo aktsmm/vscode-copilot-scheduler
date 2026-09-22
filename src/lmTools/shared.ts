@@ -15,7 +15,8 @@ export type ConfirmableLmToolAction =
   | "create"
   | "update"
   | "delete"
-  | "setEnabled";
+  | "setEnabled"
+  | "run";
 
 export function isWriteToolsEnabled(): boolean {
   const config = vscode.workspace.getConfiguration("copilotScheduler");
@@ -66,9 +67,12 @@ export function trustGateBlockedResult(): vscode.LanguageModelToolResult {
   );
 }
 
-export function assertWriteToolGates():
-  | vscode.LanguageModelToolResult
-  | undefined {
+export function assertWriteToolGates(
+  token: vscode.CancellationToken,
+): vscode.LanguageModelToolResult | undefined {
+  if (token.isCancellationRequested) {
+    return buildJsonTextResult({ ok: false, reason: "cancelled" });
+  }
   if (!isWriteToolsEnabled()) {
     return writeGateBlockedResult();
   }
@@ -82,6 +86,22 @@ export function buildTextResult(text: string): vscode.LanguageModelToolResult {
   return new vscode.LanguageModelToolResult([
     new vscode.LanguageModelTextPart(text),
   ]);
+}
+
+export function escapeConfirmationText(value: string): string {
+  return new vscode.MarkdownString().appendText(value.replace(/[\r\n]+/g, " "))
+    .value;
+}
+
+export function formatConfirmationCode(value: string): string {
+  const text = value.replace(/[\r\n]+/g, " ");
+  const longestFence = (text.match(/`+/g) ?? []).reduce(
+    (longest, match) => Math.max(longest, match.length),
+    0,
+  );
+  const fence = "`".repeat(longestFence + 1);
+  const padding = longestFence > 0 ? " " : "";
+  return `${fence}${padding}${text}${padding}${fence}`;
 }
 
 /**

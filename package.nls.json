@@ -58,9 +58,9 @@
   "config.promptFileFallback.blockWhenResolvable": "Block the run when the prompt file path resolves but the file cannot be read. Fall back to the snapshot when the path cannot be resolved at all (for example the workspace is not open).",
   "config.promptFileFallback.blockAlways": "Block the run whenever the latest prompt file cannot be read.",
   "config.reportIssue": "🐛 Found a bug? [Report an issue on GitHub](https://github.com/aktsmm/vscode-copilot-scheduler/issues)",
-  "config.lmTools.enableWriteTools": "Allow Copilot Chat / agent mode to create, update, delete and toggle scheduler tasks via language-model tools. Read tools are always available. When disabled, only read tools are exposed.",
+  "config.lmTools.enableWriteTools": "Allow Copilot Chat / agent mode to create, update, delete, toggle and run scheduler tasks via language-model tools. When disabled, write tools remain visible but their invocations are blocked; read tools remain usable.",
   "config.lmTools.confirmationMode": "Controls the extension-provided custom confirmation messages for Copilot Chat language-model write tools. VS Code or Copilot Chat may still show a generic approval dialog.",
-  "config.lmTools.confirmationMode.always": "Always show custom confirmation messages from the extension for create, update, delete and enable-disable tools.",
+  "config.lmTools.confirmationMode.always": "Always show custom confirmation messages from the extension for create, update, delete, enable-disable, and run tools.",
   "config.lmTools.confirmationMode.destructiveOnly": "Show custom confirmation messages from the extension only for destructive operations such as delete.",
   "config.lmTools.confirmationMode.minimal": "Suppress all extension-provided custom confirmation messages. VS Code or Copilot Chat may still show generic approval.",
   "tool.scheduler_query.displayName": "Scheduler: Query Tasks",
@@ -73,5 +73,7 @@
   "tool.scheduler_delete_task.modelDescription": "Use when the user asks to delete, remove, or cancel an existing scheduled Copilot task. Delete a task by id. This is permanent and cannot be undone. The user will be shown the task name, scope and workspace in the confirmation dialog before the tool actually runs.",
   "tool.scheduler_set_task_enabled.displayName": "Scheduler: Enable/Disable Task",
   "tool.scheduler_set_task_enabled.modelDescription": "Use when the user asks to enable, disable, pause, resume, turn on, or turn off an existing scheduled Copilot task. Enable or disable a task by id. Enabling requires the user to have accepted the first-time execution disclaimer in the Copilot Scheduler view.",
+  "tool.scheduler_run_task.displayName": "Scheduler: Run Task Now",
+  "tool.scheduler_run_task.modelDescription": "Use when the user asks to run, execute, trigger, or test an existing scheduled Copilot task once right now. Use scheduler_query first to identify its id. Does not change enabled state; enabled tasks advance nextRun according to manualRunNextRunPolicy. Success means prompt dispatch, not model response completion. saveFailed means already dispatched: do not retry automatically. Cancellation is checked before execution starts; an in-flight dispatch cannot be undone. Workspace tasks must belong to the current workspace; otherwise open that workspace or use the Copilot Scheduler view.",
   "view.tasks": "Scheduled Tasks"
 }

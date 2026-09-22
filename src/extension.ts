@@ -1137,6 +1137,17 @@ export function activate(context: vscode.ExtensionContext): void {
       listAgents: () => CopilotExecutor.getAllAgents(),
     },
     resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
+    runTask: async (task) => {
+      const result = await runTaskManually(task);
+      if (result.ok) {
+        return result;
+      }
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.errorMessage,
+      };
+    },
   });
   void CopilotExecutor.getAvailableModelsWithSource()
     .then(async ({ models, source }) => {
@@ -1907,6 +1918,7 @@ export const __testOnly = {
   buildExecutionSummary,
   showExecutionHistoryView,
   confirmManualRunIfWorkspaceMismatch,
+  runTaskManually,
   setExtensionContextForTests,
   resetExecutionHistoryQueueForTests,
   getAttachmentSignature,
@@ -1944,6 +1956,38 @@ function getTaskAttachmentRoots(task: ScheduledTask): string[] {
  */
 function handleTaskAction(action: TaskAction): void {
   void handleTaskActionAsync(action);
+}
+
+async function runTaskManually(
+  task: ScheduledTask,
+  deps = {
+    run: (id: string) => scheduleManager.runTaskNowDetailed(id),
+    recordHistory: appendManualRunHistory,
+    refresh: () => SchedulerWebview.updateTasks(scheduleManager.getAllTasks()),
+  },
+): Promise<{ ok: true } | ManualRunFailureResult> {
+  if (manualRunInFlightTaskIds.has(task.id)) {
+    return { ok: false, reason: "alreadyRunning" };
+  }
+  manualRunInFlightTaskIds.add(task.id);
+  try {
+    const runResult = await deps.run(task.id);
+    if (
+      !runResult.ok &&
+      (runResult.reason === "alreadyRunning" ||
+        runResult.reason === "taskNotFound" ||
+        runResult.reason === "executorUnavailable")
+    ) {
+      return runResult;
+    }
+    await deps.recordHistory(task, runResult);
+    if (!runResult.ok) {
+      deps.refresh();
+    }
+    return runResult;
+  } finally {
+    manualRunInFlightTaskIds.delete(task.id);
+  }
 }
 
 async function confirmManualRunIfWorkspaceMismatch(
@@ -1997,21 +2041,13 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
         // On execution failure, executePrompt already shows a warning with copy option.
-        manualRunInFlightTaskIds.add(action.taskId);
-        const runResult = await scheduleManager
-          .runTaskNowDetailed(action.taskId)
-          .finally(() => {
-            manualRunInFlightTaskIds.delete(action.taskId);
-          });
+        const runResult = await runTaskManually(runTask);
         if (!runResult.ok) {
-          await appendManualRunHistory(runTask, runResult);
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           handleManualRunFailure(runTask.name, runResult, {
             showWebviewError: true,
           });
           break;
         }
-        await appendManualRunHistory(runTask, runResult);
         // Success path already persists via saveTasks(), which triggers
         // onTasksChanged callback → SchedulerWebview.updateTasks once.
         // Avoid sending a duplicate full task list here.
@@ -2612,19 +2648,11 @@ function registerRunNowCommand(): vscode.Disposable {
         }
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-        manualRunInFlightTaskIds.add(task.id);
-        const runResult = await scheduleManager
-          .runTaskNowDetailed(task.id)
-          .finally(() => {
-            manualRunInFlightTaskIds.delete(task.id);
-          });
+        const runResult = await runTaskManually(task);
         if (!runResult.ok) {
-          await appendManualRunHistory(task, runResult);
-          SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           handleManualRunFailure(task.name, runResult);
           return;
         }
-        await appendManualRunHistory(task, runResult);
         // Success path already persists via saveTasks(), which triggers
         // onTasksChanged callback → SchedulerWebview.updateTasks once.
         // Avoid sending a duplicate full task list here.

@@ -293,6 +293,7 @@ suite("Extension Test Suite", () => {
     // before the artifact reaches the Marketplace.
     for (const gate of [
       "node scripts/verify-package-lock-registry.js",
+      "npm audit --registry=https://registry.npmjs.org",
       "npm run verify:nls",
       "npm run lint",
       "npm test",
@@ -308,6 +309,8 @@ suite("Extension Test Suite", () => {
       "publish workflow should refuse a tag that does not match package.json",
     );
     assert.match(workflow, /type: boolean\s+default: false/);
+    assert.match(workflow, /- name: Audit dependencies\s+run: npm audit --registry=https:\/\/registry\.npmjs\.org/);
+    assert.ok(workflow.indexOf("- name: Audit dependencies") < workflow.indexOf("- name: Package VSIX"));
     assert.match(
       workflow,
       /group: publish-extension\s+cancel-in-progress: false/,
@@ -472,7 +475,7 @@ suite("Extension Test Suite", () => {
     }
   });
 
-  test("VSIX verifier requires localized documentation and the Marketplace icon", () => {
+  test("VSIX verifier requires localized documentation and both product icons", () => {
     const root = path.resolve(__dirname, "../../..");
     const script = path.join(root, "scripts/verify-vsix-contents.js");
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-vsix-"));
@@ -486,6 +489,7 @@ suite("Extension Test Suite", () => {
       "extension/README.md",
       "extension/README_ja.md",
       "extension/images/icon.png",
+      "extension/images/scheduler-icon.svg",
       "extension/LICENSE.txt",
     ];
     try {
@@ -493,6 +497,7 @@ suite("Extension Test Suite", () => {
         undefined,
         "extension/README_ja.md",
         "extension/images/icon.png",
+        "extension/images/scheduler-icon.svg",
       ]) {
         const names = required.filter((name) => name !== missing);
         const directory = Buffer.concat(
@@ -653,6 +658,10 @@ suite("Extension Test Suite", () => {
       nls["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
     const setEnabledDescriptionJa =
       nlsJa["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
+    const runDescription =
+      nls["tool.scheduler_run_task.modelDescription"] ?? "";
+    const runDescriptionJa =
+      nlsJa["tool.scheduler_run_task.modelDescription"] ?? "";
 
     assert.match(createDescription, /Use when the user asks/i);
     assert.match(createDescription, /schedule|set up|register|automate/i);
@@ -675,6 +684,15 @@ suite("Extension Test Suite", () => {
       setEnabledDescriptionJa,
       /有効化|無効化|一時停止|再開|オン|オフ/,
     );
+    assert.match(runDescription, /run|execute|trigger|test/i);
+    assert.match(runDescription, /without enabling|enabled state/i);
+    assert.match(runDescriptionJa, /今すぐ1回実行|起動|テスト/);
+    assert.match(runDescriptionJa, /有効\/無効の状態は変更しません/);
+    assert.match(runDescription, /not model response completion/);
+    assert.match(runDescription, /saveFailed.*do not retry automatically/);
+    assert.match(runDescription, /manualRunNextRunPolicy/);
+    assert.match(runDescriptionJa, /モデル応答完了は意味しません/);
+    assert.match(runDescriptionJa, /saveFailed.*自動再試行しない/);
   });
 
   test("LM tools manifest keeps prompt references and avoids proposed toolsets", () => {
@@ -699,6 +717,7 @@ suite("Extension Test Suite", () => {
       "scheduler_update_task",
       "scheduler_delete_task",
       "scheduler_set_task_enabled",
+      "scheduler_run_task",
     ];
 
     assert.deepStrictEqual(
@@ -752,6 +771,14 @@ suite("Extension Test Suite", () => {
 
     const createProperties =
       toolByName("scheduler_create_task")?.inputSchema?.properties ?? {};
+    const runSchema = toolByName("scheduler_run_task")?.inputSchema as {
+      additionalProperties?: boolean;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    assert.strictEqual(runSchema.additionalProperties, false);
+    assert.deepStrictEqual(runSchema.required, ["id"]);
+    assert.deepStrictEqual(Object.keys(runSchema.properties ?? {}), ["id"]);
     const updates = toolByName("scheduler_update_task")?.inputSchema?.properties
       ?.updates as
       | { additionalProperties?: boolean; properties?: Record<string, unknown> }
@@ -1166,6 +1193,136 @@ suite("Manual Run Workspace Confirmation Tests", () => {
     assert.strictEqual(await confirm(task("global"), deps), true);
     assert.strictEqual(await confirm(task("workspace"), deps), true);
     assert.strictEqual(promptCalls, 0);
+  });
+
+  test("manual run rejects duplicates through history completion without stealing metadata", async () => {
+    const { __testOnly } = await import("../../extension");
+    const selectedTask = task("global");
+    let releaseRun!: () => void;
+    let releaseHistory!: () => void;
+    let historyStarted!: () => void;
+    const historyReady = new Promise<void>((resolve) => {
+      historyStarted = resolve;
+    });
+    const runPending = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const historyPending = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    let calls = 0;
+    let histories = 0;
+    let refreshes = 0;
+    const deps = {
+      run: async () => {
+        calls++;
+        await runPending;
+        return { ok: true as const };
+      },
+      recordHistory: async () => {
+        histories++;
+        historyStarted();
+        await historyPending;
+      },
+      refresh: () => {
+        refreshes++;
+      },
+    };
+    const firstRun = __testOnly.runTaskManually(selectedTask, deps);
+    try {
+      assert.deepStrictEqual(
+        await __testOnly.runTaskManually(selectedTask, deps),
+        {
+          ok: false,
+          reason: "alreadyRunning",
+        },
+      );
+      assert.strictEqual(histories, 0);
+      releaseRun();
+      await historyReady;
+      assert.deepStrictEqual(
+        await __testOnly.runTaskManually(selectedTask, deps),
+        {
+          ok: false,
+          reason: "alreadyRunning",
+        },
+      );
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(histories, 1);
+      assert.strictEqual(refreshes, 0);
+    } finally {
+      releaseRun();
+      releaseHistory();
+      await firstRun;
+    }
+    assert.deepStrictEqual(
+      await __testOnly.runTaskManually(selectedTask, deps),
+      { ok: true },
+    );
+    assert.strictEqual(calls, 2);
+  });
+
+  test("manual run rejections leave execution history untouched and release the guard", async () => {
+    const { __testOnly } = await import("../../extension");
+    const selectedTask = task("global");
+    for (const reason of [
+      "alreadyRunning",
+      "taskNotFound",
+      "executorUnavailable",
+    ] as const) {
+      const result = await __testOnly.runTaskManually(selectedTask, {
+        run: async () => ({ ok: false, reason }),
+        recordHistory: async () => {
+          assert.fail("No dispatch, so no history metadata may be consumed");
+        },
+        refresh: () => {
+          assert.fail("No run state was changed");
+        },
+      });
+      assert.deepStrictEqual(result, { ok: false, reason });
+    }
+    const deps = {
+      run: async () => {
+        throw new Error("runner failed");
+      },
+      recordHistory: async () => {},
+      refresh: () => {},
+    };
+    await assert.rejects(
+      __testOnly.runTaskManually(selectedTask, deps),
+      /runner failed/,
+    );
+    assert.deepStrictEqual(
+      await __testOnly.runTaskManually(selectedTask, {
+        ...deps,
+        run: async () => ({ ok: true }),
+      }),
+      { ok: true },
+    );
+  });
+
+  test("manual run dispatch failures retain history and refresh rollback state", async () => {
+    const { __testOnly } = await import("../../extension");
+    for (const reason of [
+      "promptBlocked",
+      "executionFailed",
+      "saveFailed",
+    ] as const) {
+      let histories = 0;
+      let refreshes = 0;
+      await __testOnly.runTaskManually(task("global"), {
+        run: async () => ({ ok: false, reason }),
+        recordHistory: async (_task, result) => {
+          assert.deepStrictEqual(result, { ok: false, reason });
+          histories++;
+        },
+        refresh: () => {
+          refreshes++;
+        },
+      });
+      assert.strictEqual(histories, 1);
+      assert.strictEqual(refreshes, 1);
+    }
   });
 
   test("requires explicit confirmation for another workspace", async () => {
@@ -2010,12 +2167,24 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
     const source = fs.readFileSync(sourcePath, "utf8");
 
+    const helperStart = source.indexOf("async function runTaskManually(");
+    const helperEnd = source.indexOf(
+      "async function confirmManualRunIfWorkspaceMismatch(",
+      helperStart,
+    );
+    assert.ok(helperStart >= 0 && helperEnd > helperStart);
+    const helperBlock = source.slice(helperStart, helperEnd);
+    assert.ok(
+      helperBlock.includes(
+        "SchedulerWebview.updateTasks(scheduleManager.getAllTasks())",
+      ),
+      "shared manual-run failure path should refresh cached task state",
+    );
+
     const webviewRunBlock = extractBlockFromStartToken(source, 'case "run": {');
     assert.ok(
-      webviewRunBlock.includes(
-        "SchedulerWebview.updateTasks(scheduleManager.getAllTasks());",
-      ),
-      "webview manual-run failure should refresh cached task state",
+      webviewRunBlock.includes("runTaskManually(runTask)"),
+      "webview manual run should use the shared failure-resync path",
     );
 
     const commandStart = source.indexOf('"copilotScheduler.runNow",');
@@ -2029,10 +2198,8 @@ suite("Webview Test Prompt Wiring Tests", () => {
 
     const commandBlock = source.slice(commandStart, commandEnd);
     assert.ok(
-      commandBlock.includes(
-        "SchedulerWebview.updateTasks(scheduleManager.getAllTasks());",
-      ),
-      "command manual-run failure should refresh cached task state",
+      commandBlock.includes("runTaskManually(task)"),
+      "command manual run should use the shared failure-resync path",
     );
   });
 

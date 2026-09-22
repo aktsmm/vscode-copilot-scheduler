@@ -3,8 +3,15 @@ import * as vscode from "vscode";
 
 import { createSchedulerCreateTaskTool } from "../../lmTools/tools/createTask";
 import { createSchedulerDeleteTaskTool } from "../../lmTools/tools/deleteTask";
+import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
 import { createSchedulerSetTaskEnabledTool } from "../../lmTools/tools/setTaskEnabled";
 import { createSchedulerUpdateTaskTool } from "../../lmTools/tools/updateTask";
+import {
+  escapeConfirmationText,
+  formatConfirmationCode,
+} from "../../lmTools/shared";
+import { messages } from "../../i18n";
+import { registerLmTools } from "../../lmTools/registry";
 import type {
   LmToolMutationClient,
   MutationDeleteResult,
@@ -101,9 +108,13 @@ class WarningClient extends FakeClient {
   }
 }
 
-function fakeScheduleManager(task: ScheduledTask | undefined): ScheduleManager {
+function fakeScheduleManager(
+  task: ScheduledTask | undefined,
+  matchesWorkspace = true,
+): ScheduleManager {
   return {
     getTask: (id: string) => (task?.id === id ? task : undefined),
+    shouldTaskRunInCurrentWorkspace: () => matchesWorkspace,
   } as unknown as ScheduleManager;
 }
 
@@ -239,6 +250,334 @@ function confirmationMessageText(
 }
 
 suite("lmTools write wrappers", () => {
+  test("run task rejects unknown fields and whitespace ids without dispatch", async () => {
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(fakeTask()),
+      async () => {
+        calls++;
+        return { ok: true };
+      },
+    );
+    for (const input of [
+      null,
+      [],
+      "task-1",
+      { id: " " },
+      { id: "task-1", enabled: true },
+    ]) {
+      assert.strictEqual(
+        parseJson(await invoke(tool, input as never)).reason,
+        "validation",
+      );
+    }
+    assert.strictEqual(calls, 0);
+  });
+
+  test("run task enforces trust write and workspace gates before dispatch", async () => {
+    const task = fakeTask();
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task, false),
+      async () => {
+        calls++;
+        return { ok: true };
+      },
+    );
+    assert.match(
+      textOf(await withWriteToolsDisabled(() => invoke(tool, { id: task.id }))),
+      /Write scheduler tools are disabled/,
+    );
+    assert.match(
+      textOf(
+        await withWorkspaceTrust(false, () => invoke(tool, { id: task.id })),
+      ),
+      /workspace is not trusted/,
+    );
+    assert.strictEqual(
+      parseJson(await invoke(tool, { id: task.id })).reason,
+      "workspaceMismatch",
+    );
+    assert.strictEqual(calls, 0);
+  });
+
+  test("run task reports dispatch when only persistence fails and never retries", async () => {
+    const task = fakeTask();
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => {
+        calls++;
+        return { ok: false, reason: "saveFailed" };
+      },
+    );
+    const payload = parseJson(await invoke(tool, { id: task.id }));
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, "saveFailed");
+    assert.strictEqual(payload.executionSemantics, "prompt_dispatched");
+    assert.strictEqual(payload.retrySafe, false);
+    assert.match(String(payload.message), /Do not retry automatically/);
+    assert.strictEqual(calls, 1);
+  });
+
+  test("run task reports unknown outcomes without leaking exceptions or retrying", async () => {
+    const task = fakeTask();
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => {
+        calls++;
+        throw new Error("C:/private/prompt.txt secret-value");
+      },
+    );
+    const result = await invoke(tool, { id: task.id });
+    const payload = parseJson(result);
+    assert.strictEqual(payload.reason, "internal_error");
+    assert.strictEqual(payload.executionSemantics, "unknown");
+    assert.strictEqual(payload.retrySafe, false);
+    assert.ok(!textOf(result).includes("secret-value"));
+    assert.ok(!textOf(result).includes("private"));
+    assert.strictEqual(calls, 1);
+  });
+
+  test("run task stays registered without a runner and returns executorUnavailable", async () => {
+    const original = vscode.lm.registerTool;
+    const registered = new Map<string, vscode.LanguageModelTool<unknown>>();
+    const disposables: vscode.Disposable[] = [];
+    Object.defineProperty(vscode.lm, "registerTool", {
+      configurable: true,
+      value: (name: string, tool: vscode.LanguageModelTool<unknown>) => {
+        registered.set(name, tool);
+        return { dispose() {} };
+      },
+    });
+    try {
+      const task = fakeTask();
+      registerLmTools(
+        { subscriptions: disposables } as vscode.ExtensionContext,
+        fakeScheduleManager(task),
+      );
+      assert.strictEqual(registered.size, 6);
+      assert.strictEqual(disposables.length, 6);
+      const tool = registered.get("scheduler_run_task");
+      assert.ok(tool);
+      assert.strictEqual(
+        parseJson(await invoke(tool, { id: task.id })).reason,
+        "executorUnavailable",
+      );
+    } finally {
+      Object.defineProperty(vscode.lm, "registerTool", {
+        configurable: true,
+        value: original,
+      });
+      disposables.forEach((disposable) => disposable.dispose());
+    }
+  });
+
+  test("confirmation values remain literal text or bounded inline code", async () => {
+    const hostile =
+      "[link](https://example.invalid) **admin** `quoted`\n- scope: global";
+    const safeText = new vscode.MarkdownString().appendText(
+      hostile.replace(/[\r\n]+/g, " "),
+    ).value;
+    assert.strictEqual(escapeConfirmationText(hostile), safeText);
+    assert.strictEqual(
+      formatConfirmationCode(hostile),
+      `\`\` ${hostile.replace(/[\r\n]+/g, " ")} \`\``,
+    );
+    const task = fakeTask({
+      name: hostile,
+      id: hostile,
+      workspacePath: hostile,
+    });
+    const client = new FakeClient(task);
+    await withConfirmationMode("always", async () => {
+      const created = confirmationMessageText(
+        await prepare(createSchedulerCreateTaskTool(client), {
+          name: hostile,
+          cronExpression: hostile,
+          scope: hostile,
+          model: hostile,
+          agent: hostile,
+          promptPath: hostile,
+        }),
+      );
+      const deleted = confirmationMessageText(
+        await prepare(
+          createSchedulerDeleteTaskTool(fakeScheduleManager(task), client),
+          { id: task.id },
+        ),
+      );
+      assert.ok(created.includes(`**${safeText}**`));
+      assert.ok(created.includes(`- agent: ${safeText}`));
+      assert.ok(created.includes(`- model: ${safeText}`));
+      assert.ok(deleted.includes(`**${safeText}**`));
+      assert.ok(deleted.includes(`- workspace: ${safeText}`));
+      const updated = confirmationMessageText(
+        await prepare(createSchedulerUpdateTaskTool(client), {
+          id: hostile,
+          updates: { [hostile]: true } as never,
+        }),
+      );
+      const toggled = confirmationMessageText(
+        await prepare(createSchedulerSetTaskEnabledTool(client), {
+          id: hostile,
+          enabled: true,
+        }),
+      );
+      for (const text of [created, deleted, updated, toggled]) {
+        assert.ok(text.includes(formatConfirmationCode(hostile)));
+        assert.ok(!text.includes("\n- scope: global"));
+      }
+      const run = await prepare(
+        createSchedulerRunTaskTool(fakeScheduleManager(task), async () => ({
+          ok: true,
+        })),
+        { id: task.id },
+      );
+      assert.strictEqual(
+        confirmationMessageText(run),
+        new vscode.MarkdownString().appendText(
+          messages.lmToolRunConfirmation(hostile),
+        ).value,
+      );
+    });
+  });
+
+  test("all write tools reject cancelled invocations before mutations", async () => {
+    const client = new FakeClient();
+    const calls: Array<[vscode.LanguageModelTool<unknown>, unknown]> = [
+      [
+        createSchedulerCreateTaskTool(client),
+        {
+          name: "test",
+          prompt: "test",
+          cronExpression: "0 * * * *",
+          scope: "global",
+        },
+      ],
+      [
+        createSchedulerUpdateTaskTool(client),
+        { id: "task-1", updates: { name: "updated" } },
+      ],
+      [
+        createSchedulerDeleteTaskTool(fakeScheduleManager(fakeTask()), client),
+        { id: "task-1" },
+      ],
+      [
+        createSchedulerSetTaskEnabledTool(client),
+        { id: "task-1", enabled: true },
+      ],
+    ];
+    for (const [tool, input] of calls) {
+      const result = await tool.invoke(
+        { input } as vscode.LanguageModelToolInvocationOptions<unknown>,
+        { isCancellationRequested: true } as vscode.CancellationToken,
+      );
+      assert.ok(result);
+      assert.strictEqual(parseJson(result).reason, "cancelled");
+    }
+    assert.strictEqual(client.createInput, undefined);
+    assert.strictEqual(client.updateArgs, undefined);
+    assert.strictEqual(client.deletedId, undefined);
+    assert.strictEqual(client.enabledArgs, undefined);
+  });
+
+  test("run task does not dispatch after cancellation", async () => {
+    const task = fakeTask();
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => {
+        calls++;
+        return { ok: true };
+      },
+    );
+    const result = await tool.invoke(
+      { input: { id: task.id } } as vscode.LanguageModelToolInvocationOptions<{
+        id: string;
+      }>,
+      { isCancellationRequested: true } as vscode.CancellationToken,
+    );
+    assert.strictEqual(calls, 0);
+    assert.ok(result);
+    assert.strictEqual(parseJson(result).reason, "cancelled");
+  });
+
+  test("run task executes once without changing enabled state", async () => {
+    const task = fakeTask({ enabled: false });
+    let executedTask: ScheduledTask | undefined;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async (selectedTask) => {
+        executedTask = selectedTask;
+        return { ok: true };
+      },
+    );
+
+    const payload = parseJson(await invoke(tool, { id: task.id }));
+    assert.strictEqual(payload.ok, true);
+    assert.strictEqual(payload.action, "run");
+    assert.strictEqual(payload.enabledStateChanged, false);
+    assert.strictEqual(executedTask, task);
+    assert.strictEqual(task.enabled, false);
+  });
+
+  test("run task rejects missing and unknown ids", async () => {
+    let calls = 0;
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(undefined),
+      async () => {
+        calls++;
+        return { ok: true };
+      },
+    );
+    const missing = parseJson(await invoke(tool, {}));
+    const unknown = parseJson(await invoke(tool, { id: "unknown" }));
+    assert.strictEqual(missing.reason, "validation");
+    assert.strictEqual(unknown.reason, "not_found");
+    assert.strictEqual(calls, 0);
+  });
+
+  test("run task forwards classified execution failures", async () => {
+    const task = fakeTask();
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => ({
+        ok: false,
+        reason: "workspaceMismatch",
+        message: "Open the task workspace.",
+      }),
+    );
+    const payload = parseJson(await invoke(tool, { id: task.id }));
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, "workspaceMismatch");
+    assert.strictEqual(payload.message, "Open the task workspace.");
+  });
+
+  test("run task uses custom confirmation only in always mode", async () => {
+    const task = fakeTask({ enabled: false });
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => ({ ok: true }),
+    );
+    const defaultPrepared = await prepare(tool, { id: task.id });
+    const alwaysPrepared = await withConfirmationMode("always", () =>
+      prepare(tool, { id: task.id }),
+    );
+    assert.strictEqual(defaultPrepared.confirmationMessages, undefined);
+    assert.strictEqual(
+      alwaysPrepared.confirmationMessages?.title,
+      "Run scheduler task now",
+    );
+    assert.strictEqual(
+      confirmationMessageText(alwaysPrepared),
+      new vscode.MarkdownString().appendText(
+        messages.lmToolRunConfirmation(task.name),
+      ).value,
+    );
+  });
+
   test("create task prepareInvocation includes explicit missing scope", async () => {
     const tool = createSchedulerCreateTaskTool(new FakeClient());
     const prepared = await withConfirmationMode("always", () =>
@@ -252,7 +591,11 @@ suite("lmTools write wrappers", () => {
       prepared.confirmationMessages?.title,
       "Create scheduler task",
     );
-    assert.match(confirmationMessageText(prepared), /scope: \(missing\)/);
+    assert.ok(
+      confirmationMessageText(prepared).includes(
+        `scope: ${escapeConfirmationText("(missing)")}`,
+      ),
+    );
   });
 
   test("default confirmation mode suppresses non-destructive custom confirmations", async () => {
@@ -505,7 +848,11 @@ suite("lmTools write wrappers", () => {
         model: "claude-sonnet-4",
       }),
     );
-    assert.match(confirmationMessageText(prepared), /claude-sonnet-4/);
+    assert.ok(
+      confirmationMessageText(prepared).includes(
+        escapeConfirmationText("claude-sonnet-4"),
+      ),
+    );
   });
 
   test("update task forwards model and execution controls", async () => {
@@ -618,9 +965,11 @@ suite("lmTools write wrappers", () => {
       prepared.confirmationMessages?.title,
       "⚠️ Delete scheduler task",
     );
-    assert.match(message, /Morning summary/);
+    assert.ok(message.includes(escapeConfirmationText("Morning summary")));
     assert.match(message, /scope: workspace/);
-    assert.match(message, /workspace: workspace-a/);
+    assert.ok(
+      message.includes(`workspace: ${escapeConfirmationText("workspace-a")}`),
+    );
   });
 
   test("minimal confirmation mode suppresses delete custom confirmation", async () => {

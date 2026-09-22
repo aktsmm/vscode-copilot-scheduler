@@ -63,6 +63,12 @@ export const messages = {
     t(`Task "${name}" disabled`, `タスク「${name}」を無効にしました`),
   taskExecuting: (name: string) =>
     t(`Executing task "${name}"...`, `タスク「${name}」を実行中...`),
+  lmToolRunTitle: () => t("Run scheduler task now", "タスクを今すぐ実行"),
+  lmToolRunConfirmation: (name: string) =>
+    t(
+      `Copilot Chat wants to run task "${name}" once now. Its enabled state will not change. Success confirms prompt dispatch, not response completion.`,
+      `Copilot Chat がタスク「${name}」を今すぐ1回実行します。有効/無効の状態は変更しません。成功はプロンプト送信を示し、応答完了を意味しません。`,
+    ),
   taskExecutionSummary: (name: string, result: string, nextRun: string) =>
     t(
       `Task "${name}": ${result} (Next run: ${nextRun})`,

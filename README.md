@@ -29,7 +29,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 🖥️ **Webview GUI** - Easy-to-use graphical interface for creating and editing tasks
 
-🛠️ **Copilot Chat Tools** - Query, create, update, delete, and enable/disable scheduled tasks from agent mode using Language Model Tools
+🛠️ **Copilot Chat Tools** - Query, create, update, delete, enable/disable, and run scheduled tasks once from agent mode using Language Model Tools
 
 📎 **Attachments** - Attach instructions, prompts, skills, or any workspace file to a task so they are sent with the prompt
 
@@ -86,6 +86,7 @@ In Copilot Chat agent mode, use the scheduler tools with `#` references:
 | `#scheduler_update_task`      | Update task fields, including `model`, `agent`, `scope`, and the execution controls. Use `#scheduler_set_task_enabled` for enable/disable changes. |
 | `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                                               |
 | `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                                          |
+| `#scheduler_run_task`         | Run a task once immediately without changing its enabled state.                                                                                    |
 
 For `kind=history`, the response includes `total`, returned `count`, `hasMore`, `statusSemantics`, and newest-first `entries`. `status: "success"` confirms prompt dispatch rather than model response completion. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
 
@@ -101,11 +102,16 @@ In agent mode, Copilot can also choose these tools from natural-language request
 - "Change the daily summary task to run at 10:30."
 - "Use Claude Sonnet for the daily summary task."
 - "Pause the release reminder task until I turn it back on."
+- "Run the disabled release reminder task once now without enabling it."
 - "Show my scheduled Copilot tasks before changing anything."
 
 If multiple tasks could match the same name across scopes, ask Copilot to show the scheduled tasks first so it can confirm the exact task before updating, disabling, or deleting it.
 
-Write tools are enabled by default and require a trusted workspace. Set `copilotScheduler.lmTools.enableWriteTools` to `false` to keep read-only tools available while disabling create/update/delete/enable-disable operations.
+`scheduler_run_task` accepts only `{ "id": "..." }` and reuses **Run Now**, including prompt/attachment resolution and history. Disabled tasks stay disabled; enabled tasks advance `nextRun` according to `manualRunNextRunPolicy`. Like Run Now, it bypasses jitter, allowed time windows and daily limits. A workspace task must belong to the current workspace.
+
+`ok: true` with `executionSemantics: "prompt_dispatched"` confirms dispatch, not model response completion. `saveFailed` also reports `prompt_dispatched` and `retrySafe: false`: only bookkeeping failed, so do not retry automatically. Unexpected failures report `executionSemantics: "unknown"` and `retrySafe: false`; check Chat and history first. Cancellation is checked before execution starts, not during dispatch, and cannot undo a sent prompt. Every invocation is a new manual request, not an idempotent operation; duplicate requests are rejected while dispatch and history recording are in progress in the current window.
+
+Write tools are enabled by default and require a trusted workspace. Set `copilotScheduler.lmTools.enableWriteTools` to `false` to block create/update/delete/enable-disable/run operations. They remain visible, but only read-only tools can be used.
 
 `copilotScheduler.lmTools.confirmationMode` controls only the extension-provided custom confirmation messages for write tools. VS Code or Copilot Chat may still show a generic approval dialog for extension tools, and users can use the built-in Always Allow flow when available.
 
@@ -135,7 +141,7 @@ Task snapshots and revision metadata are written through same-directory temporar
 | `copilotScheduler.promptFileFallback`         | `"snapshot"`      | What to do when a local/global prompt file cannot be read at execution time: `snapshot` (run the saved snapshot), `blockWhenResolvable` (block when the path resolves but the file is unreadable), `blockAlways` (always block). Inline prompts are unaffected |
 | `copilotScheduler.logLevel`                   | `info`            | Log level (none/error/info/debug)                                                                                                                                                                                                                              |
 | `copilotScheduler.executionHistoryLimit`      | `50`              | Max number of execution history entries kept per task for the history view (10–500)                                                                                                                                                                            |
-| `copilotScheduler.lmTools.enableWriteTools`   | `true`            | Allow Copilot Chat tools to create, update, delete, and enable/disable scheduler tasks. Set to `false` to keep only read-only tools available.                                                                                                                 |
+| `copilotScheduler.lmTools.enableWriteTools`   | `true`            | Allow Copilot Chat tools to create, update, delete, enable/disable and run scheduler tasks. When `false`, write tools remain visible but are blocked.                                                                                                          |
 | `copilotScheduler.lmTools.confirmationMode`   | `destructiveOnly` | Controls extension-provided custom confirmation messages for write tools: `always`, `destructiveOnly`, or `minimal`. VS Code/Copilot generic approval may still appear.                                                                                        |
 
 To automatically keep AI-applied edits after review delay, configure VS Code setting `chat.editing.autoAcceptDelay` (`0` = off, `1-100` = seconds, recommended: `5`).
