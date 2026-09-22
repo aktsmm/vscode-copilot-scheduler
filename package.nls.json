@@ -39,7 +39,7 @@
   "config.autoModeDefault": "Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt). To automatically keep AI-applied edits, configure `#chat.editing.autoAcceptDelay#`. If the link does not open, search for chat.editing.autoAcceptDelay in Settings.",
   "config.commandDelayFactor": "Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster but may reduce stability in some environments.",
   "config.manualRunNextRunPolicy": "How to compute next run after Run Now",
-  "config.manualRunNextRunPolicy.advance": "Advance from existing next run when possible (keeps queue progression)",
+  "config.manualRunNextRunPolicy.advance": "Advance past an existing future next run; otherwise recalculate from the current time",
   "config.manualRunNextRunPolicy.fromNow": "Recalculate from current time (ignores existing future next run)",
   "config.missedRunPolicy": "How to handle tasks due before scheduler start or restart. Evaluated on the next scheduler check; tasks due after startup are unaffected.",
   "config.missedRunPolicy.runOnce": "Run each overdue task once, regardless of how many occurrences were missed",

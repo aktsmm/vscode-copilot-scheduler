@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-09-23
+
+### Changed
+
+- Changed `copilotScheduler.manualRunNextRunPolicy` to default to `fromNow`, including the fallback for invalid values. After a successful manual dispatch, the next run is recalculated from the current time instead of advancing past an existing future occurrence. Explicit `advance` selections still advance past an existing future run and fall back to the current time when none exists.
+
 ## [1.7.0] - 2026-09-22
 
 ### Added

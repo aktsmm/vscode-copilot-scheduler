@@ -1293,8 +1293,8 @@ export class ScheduleManager {
 
   private getManualRunNextRunPolicy(): ManualRunNextRunPolicy {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const policy = config.get<string>("manualRunNextRunPolicy", "advance");
-    return policy === "fromNow" ? "fromNow" : "advance";
+    const policy = config.get<string>("manualRunNextRunPolicy", "fromNow");
+    return policy === "advance" ? "advance" : "fromNow";
   }
 
   private getMissedRunPolicy(): MissedRunPolicy {

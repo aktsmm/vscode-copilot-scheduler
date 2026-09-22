@@ -3668,8 +3668,11 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
-  test("runTaskNow advances nextRun when future nextRun already exists", async () => {
+  test("runTaskNow advances nextRun when advance is explicitly configured", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const restoreConfig = overrideSchedulerConfig({
+      manualRunNextRunPolicy: "advance",
+    });
     try {
       const manager = new ScheduleManager(createMockContext(tmp));
       const task = await manager.createTask({
@@ -3697,6 +3700,7 @@ suite("ScheduleManager RunNow Tests", () => {
       assert.ok(task.nextRun instanceof Date);
       assert.ok((task.nextRun as Date).getTime() > futureNextRun.getTime());
     } finally {
+      restoreConfig();
       try {
         fs.rmSync(tmp, {
           recursive: true,
@@ -3710,9 +3714,59 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
-  test("runTaskNow recalculates from now when policy is fromNow", async () => {
+  test("runTaskNow advance falls back to current time without a future nextRun", async () => {
+    for (const existingNextRun of [
+      undefined,
+      new Date(Date.now() - 10 * 60 * 1000),
+    ]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      const restoreConfig = overrideSchedulerConfig({
+        manualRunNextRunPolicy: "advance",
+      });
+      try {
+        const manager = new ScheduleManager(createMockContext(tmp));
+        const task = await manager.createTask({
+          name: "run-now-advance-fallback",
+          prompt: "hello",
+          cronExpression: "*/5 * * * *",
+          scope: "global",
+          promptSource: "inline",
+          enabled: true,
+        });
+        task.nextRun = existingNextRun;
+        (
+          manager as unknown as {
+            onExecuteCallback?: (task: unknown) => Promise<void>;
+          }
+        ).onExecuteCallback = async () => {};
+
+        assert.strictEqual(await manager.runTaskNow(task.id), true);
+        assert.ok(task.lastRun instanceof Date);
+        assert.ok(task.nextRun instanceof Date);
+        assert.ok(task.nextRun.getTime() > task.lastRun.getTime());
+        assert.ok(
+          task.nextRun.getTime() <= task.lastRun.getTime() + 5 * 60 * 1000,
+        );
+      } finally {
+        restoreConfig();
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      }
+    }
+  });
+
+  test("runTaskNow recalculates from now by default", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
+      const config = vscode.workspace.getConfiguration("copilotScheduler");
+      assert.strictEqual(
+        config.inspect<string>("manualRunNextRunPolicy")?.defaultValue,
+        "fromNow",
+      );
       const manager = new ScheduleManager(createMockContext(tmp));
       const task = await manager.createTask({
         name: "run-now-from-now",
@@ -3729,20 +3783,16 @@ suite("ScheduleManager RunNow Tests", () => {
       (
         manager as unknown as {
           onExecuteCallback?: (task: unknown) => Promise<void>;
-          getManualRunNextRunPolicy?: () => "advance" | "fromNow";
         }
       ).onExecuteCallback = async () => {
         // no-op
       };
-      (
-        manager as unknown as {
-          getManualRunNextRunPolicy?: () => "advance" | "fromNow";
-        }
-      ).getManualRunNextRunPolicy = () => "fromNow";
 
       const ok = await manager.runTaskNow(task.id);
       assert.strictEqual(ok, true);
       assert.ok(task.nextRun instanceof Date);
+      assert.ok(task.lastRun instanceof Date);
+      assert.ok(task.nextRun.getTime() > task.lastRun.getTime());
       assert.ok((task.nextRun as Date).getTime() < futureNextRun.getTime());
     } finally {
       try {
@@ -3755,6 +3805,44 @@ suite("ScheduleManager RunNow Tests", () => {
       } catch {
         // ignore
       }
+    }
+  });
+
+  test("manual run policy preserves explicit choices and defaults invalid values to fromNow", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const resolver = manager as unknown as {
+        getManualRunNextRunPolicy(): string;
+      };
+      for (const value of [
+        undefined,
+        null,
+        "",
+        "invalid",
+        42,
+        "fromNow",
+        "advance",
+      ]) {
+        const restoreConfig = overrideSchedulerConfig({
+          manualRunNextRunPolicy: value,
+        });
+        try {
+          assert.strictEqual(
+            resolver.getManualRunNextRunPolicy(),
+            value === "advance" ? "advance" : "fromNow",
+          );
+        } finally {
+          restoreConfig();
+        }
+      }
+    } finally {
+      fs.rmSync(tmp, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
     }
   });
 });

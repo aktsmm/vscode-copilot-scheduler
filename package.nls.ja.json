@@ -39,7 +39,7 @@
   "config.autoModeDefault": "新規タスクのオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）。AI が適用した編集を自動で保持するには `#chat.editing.autoAcceptDelay#` を設定してください。リンクが開けない場合は設定で chat.editing.autoAcceptDelay を検索してください。",
   "config.commandDelayFactor": "Copilotコマンド実行時の待機時間倍率（0.1〜2.0）。小さいほど高速ですが、環境によっては安定性が低下する場合があります。",
   "config.manualRunNextRunPolicy": "「今すぐ実行」後の次回実行時刻の計算方法",
-  "config.manualRunNextRunPolicy.advance": "可能なら既存の次回実行から進める（キュー進行を維持）",
+  "config.manualRunNextRunPolicy.advance": "既存の未来の次回予定を消化して進める（未来の予定がなければ現在時刻から再計算）",
   "config.manualRunNextRunPolicy.fromNow": "現在時刻から再計算する（既存の未来の nextRun は無視）",
   "config.missedRunPolicy": "スケジューラの起動・再開前に期限を迎えたタスクの処理方法。次回のチェックから反映され、起動後に期限を迎えたタスクには影響しません。",
   "config.missedRunPolicy.runOnce": "未実行回数にかかわらず、期限超過した各タスクを1回実行する",

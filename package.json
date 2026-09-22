@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -176,14 +176,14 @@
         },
         "copilotScheduler.manualRunNextRunPolicy": {
           "type": "string",
-          "default": "advance",
+          "default": "fromNow",
           "enum": [
-            "advance",
-            "fromNow"
+            "fromNow",
+            "advance"
           ],
           "enumDescriptions": [
-            "%config.manualRunNextRunPolicy.advance%",
-            "%config.manualRunNextRunPolicy.fromNow%"
+            "%config.manualRunNextRunPolicy.fromNow%",
+            "%config.manualRunNextRunPolicy.advance%"
           ],
           "description": "%config.manualRunNextRunPolicy%"
         },

@@ -281,6 +281,68 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("manual run next-run policy default stays aligned across runtime docs", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      contributes?: {
+        configuration?: {
+          properties?: Record<
+            string,
+            {
+              default?: unknown;
+              enum?: unknown[];
+              enumDescriptions?: unknown[];
+            }
+          >;
+        };
+      };
+    };
+    const setting =
+      manifest.contributes?.configuration?.properties?.[
+        "copilotScheduler.manualRunNextRunPolicy"
+      ];
+    assert.strictEqual(setting?.default, "fromNow");
+    assert.deepStrictEqual(setting?.enum, ["fromNow", "advance"]);
+    assert.strictEqual(
+      setting?.enumDescriptions?.length,
+      setting?.enum?.length,
+    );
+
+    for (const [filename, expectedRow, fallbackText] of [
+      [
+        "README.md",
+        /manualRunNextRunPolicy`\s*\|\s*`fromNow`/,
+        "otherwise use current time",
+      ],
+      [
+        "README_ja.md",
+        /manualRunNextRunPolicy`\s*\|\s*`fromNow`/,
+        "なければ現在時刻から再計算",
+      ],
+    ] as const) {
+      const readme = fs.readFileSync(path.join(root, filename), "utf8");
+      assert.match(readme, expectedRow, filename);
+      assert.ok(readme.includes(fallbackText), filename);
+    }
+
+    const nls = JSON.parse(
+      fs.readFileSync(path.join(root, "package.nls.json"), "utf8"),
+    ) as Record<string, string>;
+    const nlsJa = JSON.parse(
+      fs.readFileSync(path.join(root, "package.nls.ja.json"), "utf8"),
+    ) as Record<string, string>;
+    assert.match(
+      nls["config.manualRunNextRunPolicy.advance"],
+      /otherwise recalculate from the current time/,
+    );
+    assert.match(
+      nlsJa["config.manualRunNextRunPolicy.advance"],
+      /未来の予定がなければ現在時刻から再計算/,
+    );
+  });
+
   test("the publish workflow runs every release gate", () => {
     const root = path.resolve(__dirname, "../../..");
     const workflowPath = path.join(
@@ -309,8 +371,14 @@ suite("Extension Test Suite", () => {
       "publish workflow should refuse a tag that does not match package.json",
     );
     assert.match(workflow, /type: boolean\s+default: false/);
-    assert.match(workflow, /- name: Audit dependencies\s+run: npm audit --registry=https:\/\/registry\.npmjs\.org/);
-    assert.ok(workflow.indexOf("- name: Audit dependencies") < workflow.indexOf("- name: Package VSIX"));
+    assert.match(
+      workflow,
+      /- name: Audit dependencies\s+run: npm audit --registry=https:\/\/registry\.npmjs\.org/,
+    );
+    assert.ok(
+      workflow.indexOf("- name: Audit dependencies") <
+        workflow.indexOf("- name: Package VSIX"),
+    );
     assert.match(
       workflow,
       /group: publish-extension\s+cancel-in-progress: false/,
