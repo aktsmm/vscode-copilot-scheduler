@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { ModelInfo, ModelSelectionFields } from "./types";
 
 export const EXPERIMENTAL_REASONING_EFFORT_LEVELS = [
+  "none",
   "low",
   "medium",
   "high",
@@ -55,14 +56,22 @@ type ExperimentalModelQualityRule = {
   efforts: readonly ExperimentalReasoningEffort[];
 };
 
-// Reasoning-effort options mirror the levels Copilot Chat actually exposes per
-// model. The public `vscode.lm` API does not surface reasoning capabilities, so
-// this table is verified against Copilot Chat's model catalog (VS Code 1.125,
-// 2026-06-18) and must be revisited when Copilot updates its model lineup.
+// The public `vscode.lm` API does not surface reasoning capabilities. These
+// levels follow Copilot Chat's catalog where known; when public docs confirm
+// configurability but not the exact levels, expose only low/medium/high.
+// Revisit the table when Copilot updates its model lineup.
 // Order matters: specific families must precede the generic fallbacks because
 // the first matching rule wins.
 const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] =
   [
+    {
+      familyPattern: /^gpt-6-(?:astra|luna)(?:$|-)/u,
+      efforts: ["low", "medium", "high"],
+    },
+    {
+      familyPattern: /^gpt-6-sol(?:$|-)/u,
+      efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    },
     // GPT-5 mini exposes low/medium/high only (no xhigh); keep it before gpt-5.
     {
       familyPattern: /^gpt-5-mini(?:$|-)/u,
@@ -114,6 +123,9 @@ const EXPERIMENTAL_MODEL_QUALITY_RULES: readonly ExperimentalModelQualityRule[] 
   ];
 
 const EXPERIMENTAL_MODEL_QUALITY_EXCLUDED_FAMILY_PATTERNS: readonly RegExp[] = [
+  /^auto$/u,
+  /^copilot-utility(?:$|-)/u,
+  /^copilot-dictation-cleanup(?:$|-)/u,
   // Legacy Internal-only models bake the reasoning level into a distinct model
   // id (e.g. claude-opus-4.7-high / -xhigh). They must stay as single picker
   // entries rather than gaining synthesized reasoning-effort sub-variants.

@@ -5,6 +5,20 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] - 2026-09-23
+
+### Added
+
+- GPT-6 Sol now offers explicit `none`, `low`, `medium`, `high`, `xhigh`, and `max` reasoning levels in the model picker and scheduler tools. GPT-6 Astra and Luna offer the conservative `low`, `medium`, and `high` options.
+
+### Fixed
+
+- Auto and internal utility model IDs no longer inherit reasoning-effort options from the model named in their metadata.
+
+### Internal
+
+- Create/update tool schemas are tested against the runtime reasoning-level list. Migration and recovery tests now wait for startup saves and verify the stored tasks before deleting test storage.
+
 ## [1.7.2] - 2026-09-23
 
 ### Fixed

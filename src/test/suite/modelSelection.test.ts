@@ -726,6 +726,65 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(selection.modelReasoningEffort, "high");
   });
 
+  test("normalizeModelSelection retains explicit GPT-6 Sol reasoning after model migration", () => {
+    for (const effort of ["none", "xhigh"]) {
+      const selection = normalizeModelSelection({
+        model: "gpt-6-sol",
+        modelVendor: "copilot",
+        modelFamily: "gpt-6-sol",
+        modelReasoningEffort: effort,
+      });
+
+      assert.strictEqual(selection.modelReasoningEffort, effort);
+    }
+  });
+
+  test("normalizeModelSelection accepts verified GPT-6 Astra and Luna levels only", () => {
+    for (const family of ["gpt-6-astra", "gpt-6-luna"]) {
+      for (const [effort, expected] of [
+        ["high", "high"],
+        ["max", undefined],
+      ] as const) {
+        const selection = normalizeModelSelection({
+          model: family,
+          modelVendor: "copilot",
+          modelFamily: family,
+          modelReasoningEffort: effort,
+        });
+
+        assert.strictEqual(selection.modelReasoningEffort, expected);
+      }
+    }
+  });
+
+  test("normalizeModelSelection drops reasoning effort for automatic and utility aliases", () => {
+    for (const model of [
+      { model: "auto", modelName: "Auto", modelFamily: "claude-opus-4.7" },
+      {
+        model: "copilot-utility",
+        modelName: "GPT-5.3-Codex",
+        modelFamily: "copilot-utility",
+      },
+      {
+        model: "copilot-dictation-cleanup-luna",
+        modelName: "GPT-5.6 Luna",
+        modelFamily: "copilot-dictation-cleanup-luna",
+      },
+    ]) {
+      const selection = normalizeModelSelection({
+        ...model,
+        modelVendor: "copilot",
+        modelReasoningEffort: "high",
+      });
+
+      assert.strictEqual(
+        selection.modelReasoningEffort,
+        undefined,
+        model.model,
+      );
+    }
+  });
+
   test("normalizeModelSelection clears unsupported reasoning effort for Claude Opus 4.6", () => {
     const selection = normalizeModelSelection({
       model: "claude-opus-4.6",

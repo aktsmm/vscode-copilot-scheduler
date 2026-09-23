@@ -78,6 +78,41 @@ function fakeCatalogProvider(): SchedulerCatalogProvider {
       vendor: "copilot",
       family: "gpt-5-codex",
     },
+    {
+      id: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      description: "",
+      vendor: "copilot",
+      family: "gpt-6-sol",
+    },
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      description: "",
+      vendor: "copilot",
+      family: "gpt-6-astra",
+    },
+    {
+      id: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      description: "",
+      vendor: "copilot",
+      family: "gpt-6-luna",
+    },
+    {
+      id: "auto",
+      name: "Auto",
+      description: "",
+      vendor: "copilot",
+      family: "claude-opus-4.7",
+    },
+    {
+      id: "copilot-utility",
+      name: "GPT-5.3-Codex",
+      description: "",
+      vendor: "copilot",
+      family: "copilot-utility",
+    },
   ];
   const agents: AgentInfo[] = [
     {
@@ -341,9 +376,33 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.ok, true);
     assert.strictEqual(payload.source, "api");
     const models = payload.models as Array<Record<string, unknown>>;
-    assert.strictEqual(models.length, 2);
+    assert.strictEqual(models.length, 7);
     assert.strictEqual(models[1]?.id, "gpt-5-codex");
     assert.ok(Array.isArray(models[1]?.supportedReasoningEfforts));
+    assert.deepStrictEqual(models[2]?.supportedReasoningEfforts, [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    for (const model of models.slice(3, 5)) {
+      assert.deepStrictEqual(model.supportedReasoningEfforts, [
+        "low",
+        "medium",
+        "high",
+      ]);
+    }
+    assert.deepStrictEqual(
+      models
+        .slice(5)
+        .map((model) => [model.id, model.supportedReasoningEfforts]),
+      [
+        ["auto", []],
+        ["copilot-utility", []],
+      ],
+    );
   });
 
   test("kind=list_agents hides file paths and subagent-only entries", async () => {

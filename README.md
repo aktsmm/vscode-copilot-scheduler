@@ -94,6 +94,8 @@ For `kind=history`, the response includes `total`, returned `count`, `hasMore`, 
 
 `kind=list_models` returns the selectable model `id`s together with `supportedReasoningEfforts`, and `kind=list_agents` returns the selectable agent ids without exposing file paths. The model list is the same one the Copilot Scheduler view offers, so Chat can never pin a model you cannot see or change in the UI. Create/update accept `model` (plus optional `modelReasoningEffort`), `agent`, and the execution controls `autoMode`, `jitterSeconds`, `maxExecutionsPerDay`, `allowedTimeStart`, and `allowedTimeEnd`. A `model` id that is not in that list is rejected with the list of valid ids instead of silently falling back to the default model; passing an empty `model` clears the selection and returns the task to the default model. When the Language Model API is unavailable and only the built-in fallback catalog is known, the requested model is saved with a warning instead of being rejected.
 
+`Auto` and internal utility model ids remain selectable but do not inherit reasoning-effort options from the model named in their metadata.
+
 Create/update also accept `attachments`: up to 10 entries of `{ source: "local" | "global", path }`, where the path is relative to the task's workspace folder or to the global prompts folder. Absolute paths, `..`, denied files, and `local` attachments on a global task are rejected instead of being saved.
 
 In agent mode, Copilot can also choose these tools from natural-language requests. Examples:

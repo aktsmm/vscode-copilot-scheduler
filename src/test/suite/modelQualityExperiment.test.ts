@@ -45,6 +45,36 @@ suite("Model Quality Experiment Tests", () => {
     ]);
   });
 
+  test("updateLanguageModelsConfigText preserves explicit none separately from default", () => {
+    const nextText = updateLanguageModelsConfigText(undefined, {
+      vendor: "copilot",
+      modelId: "gpt-6-sol",
+      reasoningEffort: "none",
+    });
+
+    assert.strictEqual(
+      JSON.parse(nextText)[0].settings["gpt-6-sol"].reasoningEffort,
+      "none",
+    );
+    assert.strictEqual(
+      updateLanguageModelsConfigText(nextText, {
+        vendor: "copilot",
+        modelId: "gpt-6-sol",
+        reasoningEffort: "none",
+      }),
+      nextText,
+    );
+    assert.deepStrictEqual(
+      JSON.parse(
+        updateLanguageModelsConfigText(nextText, {
+          vendor: "copilot",
+          modelId: "gpt-6-sol",
+        }),
+      ),
+      [{ name: "copilot", vendor: "copilot" }],
+    );
+  });
+
   test("updateLanguageModelsConfigText clears only the reasoning effort override", () => {
     const existingText = JSON.stringify(
       [
@@ -156,9 +186,94 @@ suite("Model Quality Experiment Tests", () => {
 
   test("normalizeExperimentalReasoningEffort accepts xhigh", () => {
     assert.strictEqual(normalizeExperimentalReasoningEffort("xhigh"), "xhigh");
+    assert.strictEqual(normalizeExperimentalReasoningEffort("none"), "none");
+  });
+
+  test("recent Copilot models expose only their supported reasoning levels", () => {
+    const cases: Array<[string, readonly string[]]> = [
+      ["gpt-5.6-luna", ["low", "medium", "high", "xhigh"]],
+      ["gpt-5.6-sol", ["low", "medium", "high", "xhigh"]],
+      ["gpt-5.6-terra", ["low", "medium", "high", "xhigh"]],
+      ["gpt-6-astra", ["low", "medium", "high"]],
+      ["gpt-6-luna", ["low", "medium", "high"]],
+      ["gpt-6-sol", ["none", "low", "medium", "high", "xhigh", "max"]],
+      ["claude-opus-5", ["low", "medium", "high"]],
+      ["claude-opus-5.5", ["low", "medium", "high"]],
+      ["claude-sonnet-5", ["low", "medium", "high"]],
+      ["gpt-6-unknown", []],
+    ];
+
+    for (const [family, expected] of cases) {
+      assert.deepStrictEqual(
+        getSupportedExperimentalReasoningEfforts({ vendor: "copilot", family }),
+        expected,
+        family,
+      );
+    }
+  });
+
+  test("automatic and utility aliases do not inherit fixed-model reasoning levels", () => {
+    for (const model of [
+      { id: "auto", name: "Auto", family: "claude-opus-4.7" },
+      {
+        id: "copilot-utility",
+        name: "GPT-5.3-Codex",
+        family: "copilot-utility",
+      },
+      {
+        id: "copilot-utility-small",
+        name: "GPT-5.3-Codex",
+        family: "copilot-utility-small",
+      },
+      {
+        id: "copilot-dictation-cleanup-luna",
+        name: "GPT-5.6 Luna",
+        family: "copilot-dictation-cleanup-luna",
+      },
+    ]) {
+      assert.deepStrictEqual(
+        getSupportedExperimentalReasoningEfforts({
+          vendor: "copilot",
+          ...model,
+        }),
+        [],
+        model.id,
+      );
+    }
+
+    assert.deepStrictEqual(
+      getSupportedExperimentalReasoningEfforts({
+        id: "claude-opus-4.7",
+        vendor: "copilot",
+        family: "claude-opus-4.7",
+      }),
+      ["low", "medium", "high", "xhigh", "max"],
+    );
   });
 
   test("getExperimentalModelQualityVariants uses the family rules", () => {
+    assert.deepStrictEqual(
+      getExperimentalModelQualityVariants({
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
+        description: "",
+        vendor: "copilot",
+        family: "gpt-6-sol",
+      }).map((variant) => [
+        variant.label,
+        variant.reasoningEffort || "default",
+      ]),
+      [
+        ["Default", "default"],
+        ["None", "none"],
+        ["Low", "low"],
+        ["Medium", "medium"],
+        ["High", "high"],
+        ["Xhigh", "xhigh"],
+        ["Max", "max"],
+      ],
+    );
+
     assert.deepStrictEqual(
       getExperimentalModelQualityVariants({
         id: "copilot-gpt-5.5",

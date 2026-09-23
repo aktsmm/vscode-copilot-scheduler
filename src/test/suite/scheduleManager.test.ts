@@ -115,6 +115,10 @@ function createManagerWithInvalidTimezone(
   return manager;
 }
 
+async function waitForStartupSave(manager: ScheduleManager): Promise<void> {
+  await (manager as unknown as { saveQueue: Promise<void> }).saveQueue;
+}
+
 function overrideWorkspaceFoldersForTest(
   value: Array<{ uri: vscode.Uri }> | undefined,
 ): () => void {
@@ -452,7 +456,7 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
     };
   }
 
-  test("migrates missing promptSource to local when promptPath is under .github/prompts", () => {
+  test("migrates missing promptSource to local when promptPath is under .github/prompts", async () => {
     const wsRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "copilot-scheduler-ws-"),
     );
@@ -491,6 +495,14 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
         assert.ok(loaded);
         assert.strictEqual(loaded?.promptSource, "local");
         assert.strictEqual(loaded?.promptPath, templatePath);
+        await waitForStartupSave(manager);
+        const persisted = JSON.parse(
+          fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+        ) as Array<{ id: string; promptSource?: string }>;
+        assert.strictEqual(
+          persisted.find((task) => task.id === rawTask.id)?.promptSource,
+          "local",
+        );
       } finally {
         try {
           fs.rmSync(tmp, {
@@ -518,7 +530,7 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
     }
   });
 
-  test("heals inline promptSource to local when promptPath exists under .github/prompts", () => {
+  test("heals inline promptSource to local when promptPath exists under .github/prompts", async () => {
     const wsRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "copilot-scheduler-ws-"),
     );
@@ -557,6 +569,14 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
         assert.ok(loaded);
         assert.strictEqual(loaded?.promptSource, "local");
         assert.strictEqual(loaded?.promptPath, templatePath);
+        await waitForStartupSave(manager);
+        const persisted = JSON.parse(
+          fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+        ) as Array<{ id: string; promptSource?: string }>;
+        assert.strictEqual(
+          persisted.find((task) => task.id === rawTask.id)?.promptSource,
+          "local",
+        );
       } finally {
         try {
           fs.rmSync(tmp, {
@@ -586,7 +606,7 @@ suite("ScheduleManager Prompt Source Migration Tests", () => {
 });
 
 suite("ScheduleManager Jitter Migration Tests", () => {
-  test("keeps jitterSeconds undefined for legacy tasks that do not have the field", () => {
+  test("keeps jitterSeconds undefined for legacy tasks that do not have the field", async () => {
     const now = new Date();
     const rawTask = {
       id: "t-jitter-legacy",
@@ -608,6 +628,13 @@ suite("ScheduleManager Jitter Migration Tests", () => {
       const loaded = manager.getTask(rawTask.id);
       assert.ok(loaded);
       assert.strictEqual(loaded?.jitterSeconds, undefined);
+      await waitForStartupSave(manager);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; jitterSeconds?: number }>;
+      const persistedTask = persisted.find((task) => task.id === rawTask.id);
+      assert.ok(persistedTask);
+      assert.strictEqual(persistedTask.jitterSeconds, undefined);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -650,17 +677,7 @@ suite("ScheduleManager Scope Migration Persistence Tests", () => {
       assert.ok(loaded);
       assert.strictEqual(loaded?.scope, "global");
 
-      for (let i = 0; i < 20; i++) {
-        const persisted = JSON.parse(
-          fs.readFileSync(storageFile, "utf8"),
-        ) as Array<{ id?: string; scope?: string }>;
-        const persistedTask = persisted.find((t) => t.id === rawTask.id);
-        if (persistedTask?.scope === "global") {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-
+      await waitForStartupSave(manager);
       const finalPersisted = JSON.parse(
         fs.readFileSync(storageFile, "utf8"),
       ) as Array<{ id?: string; scope?: string }>;
@@ -683,7 +700,7 @@ suite("ScheduleManager Scope Migration Persistence Tests", () => {
 });
 
 suite("ScheduleManager Empty File Recovery Tests", () => {
-  test("loads legacy globalState tasks when the file snapshot is whitespace", () => {
+  test("loads legacy globalState tasks when the file snapshot is whitespace", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     const rawTask = {
       id: "legacy-global-task",
@@ -703,12 +720,17 @@ suite("ScheduleManager Empty File Recovery Tests", () => {
         createMockContextWithGlobalTasks(tmp, [rawTask]),
       );
       assert.ok(manager.getTask(rawTask.id));
+      await waitForStartupSave(manager);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string }>;
+      assert.ok(persisted.some((task) => task.id === rawTask.id));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  test("loads legacy globalState tasks when a meta-less file contains an empty array", () => {
+  test("loads legacy globalState tasks when a meta-less file contains an empty array", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     const rawTask = {
       id: "legacy-global-empty-array",
@@ -728,6 +750,11 @@ suite("ScheduleManager Empty File Recovery Tests", () => {
         createMockContextWithGlobalTasks(tmp, [rawTask]),
       );
       assert.ok(manager.getTask(rawTask.id));
+      await waitForStartupSave(manager);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string }>;
+      assert.ok(persisted.some((task) => task.id === rawTask.id));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

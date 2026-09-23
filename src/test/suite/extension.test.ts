@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import { parseExpression } from "cron-parser";
 import type { ExecutionHistoryEntry } from "../../executionHistoryStore";
 import { messages } from "../../i18n";
+import { EXPERIMENTAL_REASONING_EFFORT_LEVELS } from "../../modelQualityExperiment";
 import type { ScheduledTask } from "../../types";
 import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
 
@@ -979,6 +980,16 @@ suite("Extension Test Suite", () => {
       assert.ok(
         updates?.properties?.[key],
         `scheduler_update_task updates must expose '${key}'.`,
+      );
+    }
+    for (const [toolName, schema] of [
+      ["scheduler_create_task", createProperties.modelReasoningEffort],
+      ["scheduler_update_task", updates?.properties?.modelReasoningEffort],
+    ] as const) {
+      assert.deepStrictEqual(
+        (schema as { enum?: unknown } | undefined)?.enum,
+        [...EXPERIMENTAL_REASONING_EFFORT_LEVELS],
+        `${toolName} reasoning efforts must match the runtime levels.`,
       );
     }
     assert.ok(updates?.properties?.scope);
