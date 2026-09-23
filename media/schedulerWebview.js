@@ -5,6 +5,8 @@
   var MAX_SANITIZE_INPUT_CHARS = 16000;
   var REDACTED_PLACEHOLDER = "[REDACTED]";
   var formErrorHideTimer = null;
+  var successToastFadeTimer = null;
+  var successToastHideTimer = null;
   var invalidFieldElement = null;
 
   // Initial data (JSON from inline script tag)
@@ -3522,16 +3524,24 @@
           if (message.successMessage) {
             var toast = document.getElementById("success-toast");
             if (toast) {
+              if (successToastFadeTimer !== null) {
+                clearTimeout(successToastFadeTimer);
+              }
+              if (successToastHideTimer !== null) {
+                clearTimeout(successToastHideTimer);
+              }
               var prefix = strings.webviewSuccessPrefix || "\u2714 ";
               toast.textContent = prefix + message.successMessage;
               toast.style.display = "block";
               toast.style.opacity = "1";
-              setTimeout(function () {
+              successToastFadeTimer = setTimeout(function () {
                 toast.style.opacity = "0";
+                successToastFadeTimer = null;
               }, 3000);
-              setTimeout(function () {
+              successToastHideTimer = setTimeout(function () {
                 toast.style.display = "none";
                 toast.style.opacity = "1";
+                successToastHideTimer = null;
               }, 3500);
             }
           }

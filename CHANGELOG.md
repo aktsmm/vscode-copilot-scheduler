@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-09-23
+
+### Fixed
+
+- `scheduler_update_task` now rejects array-valued `updates` before mutation instead of accepting an empty array as a successful no-op. Invalid update shapes return an explicit object-type validation error.
+- Success notifications now restart their display and fade timers when another task is saved, preventing an earlier notification from hiding the latest one prematurely.
+
+### Internal
+
+- Release verification now compares packaged runtime, Webview, localized strings and icons byte-for-byte with the build, and checks the complete package manifest structurally. It rejects stale same-name payloads and incorrectly cased runtime paths before publishing.
+
 ## [1.7.1] - 2026-09-23
 
 ### Changed

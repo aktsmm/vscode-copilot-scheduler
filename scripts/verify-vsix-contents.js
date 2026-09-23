@@ -2,6 +2,8 @@
 
 const fs = require("fs");
 const path = require("path");
+const { isDeepStrictEqual, parseArgs } = require("util");
+const yauzl = require("yauzl");
 
 const FORBIDDEN_PATTERNS = [
   /^extension\/research\//,
@@ -192,6 +194,111 @@ function verifyVsix(filePath) {
   return true;
 }
 
+async function verifyVsixBuild(
+  filePath,
+  buildRoot = path.resolve(__dirname, ".."),
+) {
+  if (!verifyVsix(filePath)) return false;
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(buildRoot, "package.json"), "utf8"),
+  );
+  const expected = new Map(
+    [
+      "out/extension.js",
+      "media/schedulerWebview.js",
+      "package.nls.json",
+      "package.nls.ja.json",
+      "images/icon.png",
+      "images/scheduler-icon.svg",
+    ].map((name) => [
+      `extension/${name}`,
+      fs.readFileSync(path.join(buildRoot, name)),
+    ]),
+  );
+  const seen = new Set();
+  const manifestEntry = "extension/package.json";
+
+  await new Promise((resolve, reject) => {
+    yauzl.open(
+      filePath,
+      { lazyEntries: true, validateEntrySizes: true },
+      (openError, zip) => {
+        if (openError) return reject(openError);
+        let failed = false;
+        const fail = (error) => {
+          if (failed) return;
+          failed = true;
+          zip.close();
+          reject(error);
+        };
+        zip.on("error", fail);
+        zip.on("end", () => {
+          if (failed) return;
+          for (const name of [...expected.keys(), manifestEntry]) {
+            if (!seen.has(name))
+              return fail(new Error(`Build entry missing: ${name}`));
+          }
+          resolve();
+        });
+        zip.on("entry", (entry) => {
+          if (failed) return;
+          const name = entry.fileName;
+          if (!expected.has(name) && name !== manifestEntry) {
+            zip.readEntry();
+            return;
+          }
+          const expectedBytes = expected.get(name);
+          const limit = expectedBytes ? expectedBytes.length : 1024 * 1024;
+          if (
+            entry.uncompressedSize > limit ||
+            (expectedBytes && entry.uncompressedSize !== limit)
+          ) {
+            return fail(new Error(`Build content mismatch: ${name}`));
+          }
+          zip.openReadStream(entry, (streamError, stream) => {
+            if (streamError) return fail(streamError);
+            const chunks = [];
+            let size = 0;
+            stream.on("error", fail);
+            stream.on("data", (chunk) => {
+              size += chunk.length;
+              if (size > limit) {
+                stream.destroy();
+                fail(new Error(`Build content mismatch: ${name}`));
+                return;
+              }
+              chunks.push(chunk);
+            });
+            stream.on("end", () => {
+              if (failed) return;
+              try {
+                const content = Buffer.concat(chunks);
+                if (name === manifestEntry) {
+                  const packaged = JSON.parse(content.toString("utf8"));
+                  if (!isDeepStrictEqual(packaged, manifest)) {
+                    throw new Error("Manifest mismatch: package.json");
+                  }
+                } else if (!content.equals(expectedBytes)) {
+                  throw new Error(`Build content mismatch: ${name}`);
+                }
+                seen.add(name);
+                zip.readEntry();
+              } catch (error) {
+                fail(error);
+              }
+            });
+          });
+        });
+        zip.readEntry();
+      },
+    );
+  });
+  console.log(
+    `Verified build identity: ${expected.size} runtime assets and manifest fields match.`,
+  );
+  return true;
+}
+
 /** The VSIX this repository builds for the current manifest version. */
 function findDefaultVsixPaths() {
   const manifest = JSON.parse(
@@ -205,13 +312,17 @@ function findDefaultVsixPaths() {
   return candidates.filter((candidate) => fs.existsSync(candidate));
 }
 
-if (require.main === module) {
-  let vsixPaths = process.argv.slice(2);
+async function main() {
+  const { values, positionals } = parseArgs({
+    options: { "verify-build": { type: "boolean", default: false } },
+    allowPositionals: true,
+  });
+  let vsixPaths = positionals;
   if (vsixPaths.length === 0) {
     vsixPaths = findDefaultVsixPaths();
     if (vsixPaths.length === 0) {
       console.error(
-        "Usage: node scripts/verify-vsix-contents.js [path-to.vsix ...]",
+        "Usage: node scripts/verify-vsix-contents.js [--verify-build] [path-to.vsix ...]",
       );
       console.error(
         "No argument was given and no VSIX for the current version was found in artifacts/vsix/ or the repository root. Run `npx @vscode/vsce package` first.",
@@ -224,7 +335,10 @@ if (require.main === module) {
   let ok = true;
   try {
     for (const vsixPath of vsixPaths) {
-      ok = verifyVsix(vsixPath) && ok;
+      ok =
+        (values["verify-build"]
+          ? await verifyVsixBuild(vsixPath)
+          : verifyVsix(vsixPath)) && ok;
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -233,4 +347,11 @@ if (require.main === module) {
   process.exitCode = ok ? 0 : 1;
 }
 
-module.exports = { listZipEntries, verifyVsix };
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { listZipEntries, verifyVsix, verifyVsixBuild };

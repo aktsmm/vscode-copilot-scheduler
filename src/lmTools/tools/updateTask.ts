@@ -101,11 +101,15 @@ export function createSchedulerUpdateTaskTool(
           message: "Missing required field: id.",
         });
       }
-      if (!input.updates || typeof input.updates !== "object") {
+      if (
+        !input.updates ||
+        typeof input.updates !== "object" ||
+        Array.isArray(input.updates)
+      ) {
         return buildJsonTextResult({
           ok: false,
           reason: "validation",
-          message: "Missing required field: updates (object).",
+          message: "Field 'updates' must be an object (not null or an array).",
         });
       }
       const unexpected = findUnexpectedUpdateKeys(input.updates);

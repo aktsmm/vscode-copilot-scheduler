@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -878,7 +878,7 @@
     "test": "node ./out/test/runTest.js",
     "lint": "eslint src --ext ts",
     "verify:nls": "node scripts/verify-nls-consistency.js",
-    "verify:vsix": "node scripts/verify-vsix-contents.js"
+    "verify:vsix": "node scripts/verify-vsix-contents.js --verify-build"
   },
   "dependencies": {
     "cron-parser": "^4.9.0",
@@ -898,7 +898,9 @@
     "eslint": "^8.0.0",
     "glob": "^10.0.0",
     "mocha": "^11.7.5",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "yauzl": "3.4.0",
+    "yazl": "2.5.1"
   },
   "overrides": {
     "serialize-javascript": "7.0.5",

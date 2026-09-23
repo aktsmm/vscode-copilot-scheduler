@@ -1975,6 +1975,107 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  for (const replacementDelay of [2500, 3250]) {
+    test(`success toast restarts its lifetime after replacement at ${replacementDelay}ms`, () => {
+      const source = fs.readFileSync(
+        path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+        "utf8",
+      );
+      const stateEnd = source.indexOf("// Initial data");
+      const caseStart = source.indexOf('case "switchToList":');
+      const caseEnd = source.indexOf('case "focusTask":', caseStart);
+      assert.ok(stateEnd > 0 && caseStart > stateEnd && caseEnd > caseStart);
+
+      const toast = {
+        textContent: "",
+        style: { display: "none", opacity: "1" },
+      };
+      let now = 0;
+      let nextTimerId = 0;
+      const timers = new Map<number, { dueAt: number; callback: () => void }>();
+      const setTimer = (callback: () => void, delay: number): number => {
+        const timerId = ++nextTimerId;
+        timers.set(timerId, { dueAt: now + delay, callback });
+        return timerId;
+      };
+      const clearTimer = (timerId: number): void => {
+        timers.delete(timerId);
+      };
+      const advanceClock = (duration: number): void => {
+        const target = now + duration;
+        while (true) {
+          const pending = [...timers.entries()]
+            .filter(([, timer]) => timer.dueAt <= target)
+            .sort((first, second) => first[1].dueAt - second[1].dueAt)[0];
+          if (!pending) break;
+          now = pending[1].dueAt;
+          timers.delete(pending[0]);
+          pending[1].callback();
+        }
+        now = target;
+      };
+      const documentStub = {
+        getElementById: (id: string) => (id === "success-toast" ? toast : null),
+      };
+      const factory = new Function(
+        "document",
+        "setTimeout",
+        "clearTimeout",
+        [
+          source.slice(source.indexOf("{") + 1, stateEnd),
+          "function clearPendingSubmitState() {}",
+          "function resetForm() {}",
+          "function switchTab() {}",
+          "return function(message) { switch (message.type) {",
+          source.slice(caseStart, caseEnd),
+          "} };",
+        ].join("\n"),
+      ) as (
+        doc: typeof documentStub,
+        schedule: typeof setTimer,
+        cancel: typeof clearTimer,
+      ) => (message: { type: string; successMessage: string }) => void;
+      const onMessage = factory(documentStub, setTimer, clearTimer);
+      const showToast = (successMessage: string): void => {
+        onMessage({ type: "switchToList", successMessage });
+      };
+
+      showToast("First saved");
+      advanceClock(replacementDelay);
+      showToast("Second saved");
+      assert.ok(toast.textContent.endsWith("Second saved"));
+      assert.strictEqual(toast.style.display, "block");
+      assert.strictEqual(toast.style.opacity, "1");
+
+      advanceClock(3500 - replacementDelay);
+      assert.strictEqual(
+        toast.style.display,
+        "block",
+        "old hide must not hide the replacement",
+      );
+      assert.strictEqual(
+        toast.style.opacity,
+        "1",
+        "old fade must not fade the replacement",
+      );
+      advanceClock(replacementDelay - 501);
+      assert.strictEqual(toast.style.opacity, "1");
+      advanceClock(1);
+      assert.strictEqual(toast.style.opacity, "0");
+      assert.strictEqual(toast.style.display, "block");
+      advanceClock(500);
+      assert.strictEqual(toast.style.display, "none");
+      assert.strictEqual(toast.style.opacity, "1");
+      assert.strictEqual(timers.size, 0);
+
+      showToast("Third saved");
+      assert.strictEqual(toast.style.display, "block");
+      advanceClock(3500);
+      assert.strictEqual(toast.style.display, "none");
+      assert.strictEqual(timers.size, 0);
+    });
+  }
+
   test("tabs support keyboard navigation and keep selection, tab stops and focus aligned", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

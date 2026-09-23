@@ -250,6 +250,23 @@ function confirmationMessageText(
 }
 
 suite("lmTools write wrappers", () => {
+  test("update task rejects non-object updates without mutation", async () => {
+    for (const updates of [undefined, null, [], ["name"], "name", 1, true]) {
+      const client = new FakeClient();
+      const tool = createSchedulerUpdateTaskTool(client);
+      const payload = parseJson(
+        await invoke(tool, { id: "task-1", updates: updates as never }),
+      );
+      assert.strictEqual(payload.ok, false);
+      assert.strictEqual(payload.reason, "validation");
+      assert.strictEqual(
+        payload.message,
+        "Field 'updates' must be an object (not null or an array).",
+      );
+      assert.strictEqual(client.updateArgs, undefined);
+    }
+  });
+
   test("run task rejects unknown fields and whitespace ids without dispatch", async () => {
     let calls = 0;
     const tool = createSchedulerRunTaskTool(

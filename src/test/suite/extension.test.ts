@@ -595,6 +595,106 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("VSIX build verification rejects stale payloads and runtime metadata", async () => {
+    const root = path.resolve(__dirname, "../../..");
+    const verifier = require(
+      path.join(root, "scripts/verify-vsix-contents.js"),
+    ) as {
+      verifyVsixBuild(filePath: string, buildRoot: string): Promise<boolean>;
+    };
+    const { ZipFile } = require("yazl");
+    const fixtureRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-vsix-build-"),
+    );
+    const fixturePath = path.join(fixtureRoot, "test.vsix");
+    const manifest = {
+      name: "fixture",
+      publisher: "fixture",
+      version: "1.0.0",
+      engines: { vscode: "^1.95.0" },
+      main: "./out/extension.js",
+      contributes: { commands: [] },
+    };
+    const files: Record<string, Buffer> = {
+      "package.json": Buffer.from(JSON.stringify(manifest)),
+      "package.nls.json": Buffer.from('{"title":"Current title"}'),
+      "package.nls.ja.json": Buffer.from('{"title":"Current title"}'),
+      "out/extension.js": Buffer.from("current-runtime"),
+      "media/schedulerWebview.js": Buffer.from("current-webview"),
+      "images/icon.png": Buffer.from("current-icon"),
+      "images/scheduler-icon.svg": Buffer.from("current-sidebar-icon"),
+      "README.md": Buffer.from("readme"),
+      "README_ja.md": Buffer.from("readme"),
+      "LICENSE.txt": Buffer.from("license"),
+    };
+    const writeArchive = async (
+      overrides: Record<string, Buffer> = {},
+      names: Record<string, string> = {},
+    ) => {
+      const zip = new ZipFile();
+      for (const [name, content] of Object.entries({
+        ...files,
+        ...overrides,
+      })) {
+        zip.addBuffer(content, `extension/${names[name] ?? name}`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        const output = fs.createWriteStream(fixturePath);
+        output.on("close", resolve).on("error", reject);
+        zip.outputStream.on("error", reject).pipe(output);
+        zip.end();
+      });
+    };
+    try {
+      for (const [name, content] of Object.entries(files)) {
+        const target = path.join(fixtureRoot, name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content);
+      }
+      await writeArchive();
+      assert.strictEqual(
+        await verifier.verifyVsixBuild(fixturePath, fixtureRoot),
+        true,
+      );
+      for (const name of [
+        "out/extension.js",
+        "media/schedulerWebview.js",
+        "package.nls.json",
+        "package.nls.ja.json",
+        "images/icon.png",
+        "images/scheduler-icon.svg",
+      ]) {
+        await writeArchive({ [name]: Buffer.alloc(files[name].length, 0x78) });
+        await assert.rejects(
+          verifier.verifyVsixBuild(fixturePath, fixtureRoot),
+          /Build content mismatch/,
+        );
+      }
+      for (const overrides of [
+        { version: "0.9.0" },
+        { engines: { vscode: "^1.139.0" } },
+        { contributes: { commands: [{ command: "unexpected" }] } },
+        { type: "module" },
+      ]) {
+        await writeArchive({
+          "package.json": Buffer.from(
+            JSON.stringify({ ...manifest, ...overrides }),
+          ),
+        });
+        await assert.rejects(
+          verifier.verifyVsixBuild(fixturePath, fixtureRoot),
+          /Manifest mismatch/,
+        );
+      }
+      await writeArchive({}, { "media/schedulerWebview.js": "media/SchedulerWebview.js" });
+      await assert.rejects(verifier.verifyVsixBuild(fixturePath, fixtureRoot), /Build entry missing/);
+      await writeArchive({ "package.json": Buffer.from(JSON.stringify(manifest, null, 4)) });
+      assert.strictEqual(await verifier.verifyVsixBuild(fixturePath, fixtureRoot), true);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   test("README command tables stay aligned with contributed commands", () => {
     const root = path.resolve(__dirname, "../../..");
     const packageJson = JSON.parse(
