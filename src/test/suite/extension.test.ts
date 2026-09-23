@@ -686,10 +686,21 @@ suite("Extension Test Suite", () => {
           /Manifest mismatch/,
         );
       }
-      await writeArchive({}, { "media/schedulerWebview.js": "media/SchedulerWebview.js" });
-      await assert.rejects(verifier.verifyVsixBuild(fixturePath, fixtureRoot), /Build entry missing/);
-      await writeArchive({ "package.json": Buffer.from(JSON.stringify(manifest, null, 4)) });
-      assert.strictEqual(await verifier.verifyVsixBuild(fixturePath, fixtureRoot), true);
+      await writeArchive(
+        {},
+        { "media/schedulerWebview.js": "media/SchedulerWebview.js" },
+      );
+      await assert.rejects(
+        verifier.verifyVsixBuild(fixturePath, fixtureRoot),
+        /Build entry missing/,
+      );
+      await writeArchive({
+        "package.json": Buffer.from(JSON.stringify(manifest, null, 4)),
+      });
+      assert.strictEqual(
+        await verifier.verifyVsixBuild(fixturePath, fixtureRoot),
+        true,
+      );
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
