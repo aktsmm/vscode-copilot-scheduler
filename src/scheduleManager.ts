@@ -86,6 +86,7 @@ type ManualRunFailureReason =
   | "taskNotFound"
   | "executorUnavailable"
   | "alreadyRunning"
+  | "oneTimeCompleted"
   | "promptBlocked"
   | "executionFailed"
   | "saveFailed";
@@ -636,7 +637,7 @@ export class ScheduleManager {
     }
 
     if (changed > 0) {
-      await this.saveTasks();
+      await this.saveTasksOrRestore();
     }
 
     return changed;
@@ -915,6 +916,10 @@ export class ScheduleManager {
         task.lastFiredDueAt = undefined;
         needsSave = true;
       }
+      if (task.runAt && task.lastFiredDueAt && task.enabled) {
+        task.enabled = false;
+        needsSave = true;
+      }
 
       // Migration/Safety: normalize persisted enabled flag.
       // Corrupted values like "false" (string) are truthy at runtime and may
@@ -1061,10 +1066,18 @@ export class ScheduleManager {
             : undefined;
       }
 
-      // Safety: if a stored task has an invalid cron expression (e.g., manual edits or corruption),
+      // Safety: if a stored task has an invalid schedule (e.g., manual edits or corruption),
       // disable it to prevent runaway execution loops.
       try {
-        this.validateCronExpression(task.cronExpression);
+        if (task.runAt !== undefined) {
+          task.runAt = this.parseRunAt(task.runAt).toISOString();
+          if (task.afterRun !== "delete" && task.afterRun !== "disable") {
+            task.afterRun = "disable";
+            needsSave = true;
+          }
+        } else {
+          this.validateCronExpression(task.cronExpression);
+        }
       } catch {
         if (task.enabled) {
           task.enabled = false;
@@ -1091,7 +1104,11 @@ export class ScheduleManager {
           task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime());
         if (!hasValidNextRun) {
           const now = new Date();
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          task.nextRun = task.runAt
+            ? task.lastFiredDueAt
+              ? undefined
+              : new Date(task.runAt)
+            : this.getNextRunForTask(task.cronExpression, now);
           needsSave = true;
         }
       } else if (task.nextRun !== undefined) {
@@ -1141,6 +1158,17 @@ export class ScheduleManager {
       );
     });
     return op;
+  }
+
+  private async saveTasksOrRestore(): Promise<void> {
+    try {
+      await this.saveTasks();
+    } catch (error) {
+      this.tasks.clear();
+      this.loadTasks();
+      this.notifyTasksChanged();
+      throw error;
+    }
   }
 
   private async saveTasksInternal(options?: {
@@ -1408,6 +1436,53 @@ export class ScheduleManager {
     }
   }
 
+  private parseRunAt(value: string): Date {
+    if (
+      typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        value,
+      )
+    ) {
+      throw new Error(
+        "runAt must be an ISO 8601 date-time with a timezone offset.",
+      );
+    }
+    const timestamp = new Date(value);
+    if (Number.isNaN(timestamp.getTime())) {
+      throw new Error("runAt must be a valid date-time.");
+    }
+    const offset = value.endsWith("Z")
+      ? 0
+      : (value.slice(-6, -5) === "+" ? 1 : -1) *
+        (Number(value.slice(-5, -3)) * 60 + Number(value.slice(-2))) *
+        60000;
+    if (
+      (!value.endsWith("Z") &&
+        (Number(value.slice(-5, -3)) > 23 || Number(value.slice(-2)) > 59)) ||
+      new Date(timestamp.getTime() + offset).toISOString().slice(0, 19) !==
+        value.slice(0, 19)
+    ) {
+      throw new Error("runAt must be a valid date-time.");
+    }
+    return timestamp;
+  }
+
+  private nextRunForTask(task: ScheduledTask, now: Date): Date | undefined {
+    return task.runAt
+      ? task.lastFiredDueAt
+        ? undefined
+        : new Date(task.runAt)
+      : this.getNextRunForTask(task.cronExpression, now);
+  }
+
+  private skipDueTask(task: ScheduledTask, now: Date): void {
+    task.nextRun = this.nextRunForTask(task, now);
+    if (task.runAt) {
+      task.enabled = false;
+      task.nextRun = undefined;
+    }
+  }
+
   /**
    * Create a new task
    */
@@ -1419,8 +1494,22 @@ export class ScheduleManager {
       throw new Error(messages.promptRequired());
     }
 
-    // Validate cron expression
-    this.validateCronExpression(input.cronExpression);
+    if (input.runAt !== undefined) {
+      this.parseRunAt(input.runAt);
+      if (input.cronExpression.trim() || input.runFirstInOneMinute) {
+        throw new Error(
+          "runAt cannot be combined with cronExpression or runFirstInOneMinute.",
+        );
+      }
+    } else {
+      this.validateCronExpression(input.cronExpression);
+    }
+    if (
+      input.afterRun !== undefined &&
+      (!input.runAt || !["disable", "delete"].includes(input.afterRun))
+    ) {
+      throw new Error("afterRun requires runAt and must be disable or delete.");
+    }
 
     const maxExecutionsPerDay = this.clampTaskMaxExecutionsPerDay(
       input.maxExecutionsPerDay,
@@ -1458,7 +1547,9 @@ export class ScheduleManager {
     // Calculate next run (disabled tasks must not keep nextRun)
     let nextRun: Date | undefined;
     if (enabled) {
-      if (input.runFirstInOneMinute) {
+      if (input.runAt) {
+        nextRun = this.parseRunAt(input.runAt);
+      } else if (input.runFirstInOneMinute) {
         nextRun = this.truncateToMinute(
           new Date(
             now.getTime() + ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
@@ -1473,6 +1564,10 @@ export class ScheduleManager {
       id,
       name: input.name,
       cronExpression: input.cronExpression,
+      runAt: input.runAt
+        ? this.parseRunAt(input.runAt).toISOString()
+        : undefined,
+      afterRun: input.runAt ? (input.afterRun ?? "disable") : undefined,
       prompt: input.prompt,
       enabled,
       agent: input.agent,
@@ -1503,7 +1598,7 @@ export class ScheduleManager {
     };
 
     this.tasks.set(id, task);
-    await this.saveTasks();
+    await this.saveTasksOrRestore();
 
     return task;
   }
@@ -1553,7 +1648,7 @@ export class ScheduleManager {
     }
 
     if (changed > 0) {
-      await this.saveTasks();
+      await this.saveTasksOrRestore();
     }
 
     return changed;
@@ -1569,14 +1664,14 @@ export class ScheduleManager {
     let changed = false;
     for (const task of this.tasks.values()) {
       if (!task.enabled) continue;
-      const newNextRun = this.getNextRunForTask(task.cronExpression, now);
-      if (!task.nextRun || task.nextRun.getTime() !== newNextRun.getTime()) {
+      const newNextRun = this.nextRunForTask(task, now);
+      if (task.nextRun?.getTime() !== newNextRun?.getTime()) {
         task.nextRun = newNextRun;
         changed = true;
       }
     }
     if (changed) {
-      await this.saveTasks();
+      await this.saveTasksOrRestore();
     }
   }
 
@@ -1606,9 +1701,32 @@ export class ScheduleManager {
       throw new Error(messages.promptRequired());
     }
 
-    // Validate cron expression if being updated (including empty string)
-    if (updates.cronExpression !== undefined) {
-      this.validateCronExpression(updates.cronExpression);
+    const nextRunAt =
+      updates.runAt === "" ? undefined : (updates.runAt ?? task.runAt);
+    if (updates.runAt && updates.cronExpression?.trim()) {
+      throw new Error("runAt cannot be combined with cronExpression.");
+    }
+    const effectiveRunAt = updates.cronExpression?.trim()
+      ? undefined
+      : nextRunAt;
+    const normalizedRunAt = effectiveRunAt
+      ? this.parseRunAt(effectiveRunAt).toISOString()
+      : undefined;
+    const nextCronExpression = effectiveRunAt
+      ? ""
+      : (updates.cronExpression ?? task.cronExpression);
+    if (normalizedRunAt) {
+      if (updates.runFirstInOneMinute) {
+        throw new Error("runAt cannot be combined with runFirstInOneMinute.");
+      }
+    } else {
+      this.validateCronExpression(nextCronExpression);
+    }
+    if (
+      updates.afterRun !== undefined &&
+      (!effectiveRunAt || !["disable", "delete"].includes(updates.afterRun))
+    ) {
+      throw new Error("afterRun requires runAt and must be disable or delete.");
     }
     if (updates.allowedTimeStart !== undefined) {
       this.normalizeTimeWindowOrThrow(updates.allowedTimeStart);
@@ -1621,9 +1739,16 @@ export class ScheduleManager {
     // This prevents invalid persisted cron values from being re-enabled via
     // update paths that do not edit cronExpression directly.
     const nextEnabled = updates.enabled ?? task.enabled;
-    const nextCronExpression = updates.cronExpression ?? task.cronExpression;
-    if (!task.enabled && nextEnabled) {
-      this.validateCronExpression(nextCronExpression);
+    if (
+      !task.enabled &&
+      nextEnabled &&
+      normalizedRunAt &&
+      task.lastFiredDueAt &&
+      normalizedRunAt === task.runAt
+    ) {
+      throw new Error(
+        "A completed one-time task must be rescheduled before enabling.",
+      );
     }
 
     const now = new Date();
@@ -1634,9 +1759,17 @@ export class ScheduleManager {
     if (updates.name !== undefined) {
       task.name = updates.name;
     }
-    if (updates.cronExpression !== undefined) {
-      task.cronExpression = updates.cronExpression;
-      cronChanged = true;
+    if (updates.cronExpression !== undefined || updates.runAt !== undefined) {
+      cronChanged =
+        nextCronExpression !== task.cronExpression ||
+        normalizedRunAt !== task.runAt;
+      task.cronExpression = nextCronExpression;
+      task.runAt = normalizedRunAt;
+      task.afterRun = task.runAt
+        ? (updates.afterRun ?? task.afterRun ?? "disable")
+        : undefined;
+    } else if (updates.afterRun !== undefined) {
+      task.afterRun = updates.afterRun;
     }
     if (updates.prompt !== undefined) {
       task.prompt = updates.prompt;
@@ -1753,7 +1886,12 @@ export class ScheduleManager {
       task.nextRun = undefined;
     } else {
       // One-time immediate scheduling on update (only for enabled tasks)
-      if (updates.runFirstInOneMinute) {
+      if (task.runAt) {
+        task.nextRun =
+          cronChanged || !task.lastFiredDueAt
+            ? new Date(task.runAt)
+            : undefined;
+      } else if (updates.runFirstInOneMinute) {
         task.nextRun = this.truncateToMinute(
           new Date(
             now.getTime() + ScheduleManager.FIRST_RUN_DELAY_MINUTES * 60 * 1000,
@@ -1774,7 +1912,7 @@ export class ScheduleManager {
 
     task.updatedAt = now;
 
-    await this.saveTasks();
+    await this.saveTasksOrRestore();
 
     return task;
   }
@@ -1785,7 +1923,7 @@ export class ScheduleManager {
   async deleteTask(id: string): Promise<boolean> {
     const deleted = this.tasks.delete(id);
     if (deleted) {
-      await this.saveTasks();
+      await this.saveTasksOrRestore();
     }
     return deleted;
   }
@@ -1800,8 +1938,12 @@ export class ScheduleManager {
     }
 
     const nextEnabled = !task.enabled;
-    if (nextEnabled) {
+    if (nextEnabled && !task.runAt) {
       this.validateCronExpression(task.cronExpression);
+    } else if (nextEnabled && task.lastFiredDueAt) {
+      throw new Error(
+        "A completed one-time task must be rescheduled before enabling.",
+      );
     }
 
     task.enabled = nextEnabled;
@@ -1809,12 +1951,12 @@ export class ScheduleManager {
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
+      task.nextRun = this.nextRunForTask(task, new Date());
     } else {
       task.nextRun = undefined;
     }
 
-    await this.saveTasks();
+    await this.saveTasksOrRestore();
 
     return task;
   }
@@ -1831,8 +1973,12 @@ export class ScheduleManager {
       return undefined;
     }
 
-    if (enabled) {
+    if (enabled && !task.runAt) {
       this.validateCronExpression(task.cronExpression);
+    } else if (enabled && task.lastFiredDueAt) {
+      throw new Error(
+        "A completed one-time task must be rescheduled before enabling.",
+      );
     }
 
     task.enabled = enabled;
@@ -1840,12 +1986,12 @@ export class ScheduleManager {
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
-      task.nextRun = this.getNextRunForTask(task.cronExpression, new Date());
+      task.nextRun = this.nextRunForTask(task, new Date());
     } else {
       task.nextRun = undefined;
     }
 
-    await this.saveTasks();
+    await this.saveTasksOrRestore();
 
     return task;
   }
@@ -1862,6 +2008,8 @@ export class ScheduleManager {
     const input: CreateTaskInput = {
       name: `${original.name} ${messages.taskCopySuffix()}`,
       cronExpression: original.cronExpression,
+      runAt: original.runAt,
+      afterRun: original.afterRun,
       prompt: original.prompt,
       enabled: false, // Start disabled
       agent: original.agent,
@@ -1899,7 +2047,7 @@ export class ScheduleManager {
       if (!sameWorkspacePath) {
         duplicated.workspacePath = originalWorkspacePath;
         duplicated.updatedAt = new Date();
-        await this.saveTasks();
+        await this.saveTasksOrRestore();
       }
     }
 
@@ -1942,7 +2090,7 @@ export class ScheduleManager {
 
     task.workspacePath = workspaceRoot;
     task.updatedAt = new Date();
-    await this.saveTasks();
+    await this.saveTasksOrRestore();
     return task;
   }
 
@@ -2086,16 +2234,18 @@ export class ScheduleManager {
       }
 
       // Truncate nextRun to minute
-      const nextRunMinute = new Date(
-        task.nextRun.getFullYear(),
-        task.nextRun.getMonth(),
-        task.nextRun.getDate(),
-        task.nextRun.getHours(),
-        task.nextRun.getMinutes(),
-      );
+      const nextRunMinute = task.runAt
+        ? task.nextRun
+        : new Date(
+            task.nextRun.getFullYear(),
+            task.nextRun.getMonth(),
+            task.nextRun.getDate(),
+            task.nextRun.getHours(),
+            task.nextRun.getMinutes(),
+          );
 
       // Check if due
-      if (nextRunMinute.getTime() <= nowMinute.getTime()) {
+      if (nextRunMinute.getTime() <= (task.runAt ? now : nowMinute).getTime()) {
         if (
           missedRunPolicy === "skip" &&
           schedulerStartedAt &&
@@ -2104,7 +2254,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Skipping missed run from before scheduler startup: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          this.skipDueTask(task, now);
           needsSave = true;
           continue;
         }
@@ -2119,7 +2269,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Due time already executed, skipping duplicate run: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          this.skipDueTask(task, now);
           needsSave = true;
           continue;
         }
@@ -2135,7 +2285,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Outside allowed time window, skipping task: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          this.skipDueTask(task, now);
           needsSave = true;
           continue;
         }
@@ -2144,7 +2294,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Per-task daily limit reached, skipping task: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          this.skipDueTask(task, now);
           needsSave = true;
           continue;
         }
@@ -2174,7 +2324,7 @@ export class ScheduleManager {
             );
           }
           // Still advance nextRun so it doesn't keep retrying
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          this.skipDueTask(task, now);
           needsSave = true;
           continue;
         }
@@ -2190,7 +2340,9 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
           );
-          task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          if (!task.runAt) {
+            task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+          }
           needsSave = true;
           continue;
         }
@@ -2198,7 +2350,9 @@ export class ScheduleManager {
         claims.push({
           taskId: task.id,
           dueAt: nextRunMinute,
-          nextRun: this.getNextRunForTask(task.cronExpression, now),
+          nextRun: task.runAt
+            ? undefined
+            : this.getNextRunForTask(task.cronExpression, now),
         });
         this.automaticRunsInFlight++;
         needsSave = true;
@@ -2251,7 +2405,7 @@ export class ScheduleManager {
       await this.persistRunResults(runResults);
     } else if (needsSave) {
       try {
-        await this.saveTasks();
+        await this.saveTasksOrRestore();
       } catch (error) {
         // A conflicting save reloads the store; the next tick re-evaluates it.
         logDebug(
@@ -2341,6 +2495,9 @@ export class ScheduleManager {
           continue;
         }
         task.lastRun = executedAt;
+        if (task.runAt && task.afterRun === "delete") {
+          this.tasks.delete(taskId);
+        }
         applied++;
       }
       if (applied === 0) {
@@ -2355,6 +2512,11 @@ export class ScheduleManager {
           `[CopilotScheduler] Failed to persist run results (attempt ${attempt}/${ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS}):`,
           toSafeErrorDetails(error),
         );
+        if ([...results.keys()].some((taskId) => !this.tasks.has(taskId))) {
+          this.tasks.clear();
+          this.loadTasks();
+          this.notifyTasksChanged();
+        }
       }
     }
   }
@@ -2416,6 +2578,10 @@ export class ScheduleManager {
       const latestTask = this.tasks.get(claim.taskId);
       if (latestTask) {
         latestTask.lastRun = executedAt;
+        if (latestTask.runAt) {
+          latestTask.enabled = false;
+          latestTask.nextRun = undefined;
+        }
       }
       return executedAt;
     } finally {
@@ -2440,6 +2606,9 @@ export class ScheduleManager {
     if (!task) {
       return { ok: false, reason: "taskNotFound" };
     }
+    if (task.runAt && task.lastFiredDueAt) {
+      return { ok: false, reason: "oneTimeCompleted" };
+    }
     if (!this.onExecuteCallback) {
       return { ok: false, reason: "executorUnavailable" };
     }
@@ -2455,6 +2624,8 @@ export class ScheduleManager {
       task.lastRun instanceof Date && !Number.isNaN(task.lastRun.getTime())
         ? new Date(task.lastRun.getTime())
         : undefined;
+    const previousEnabled = task.enabled;
+    const previousLastFiredDueAt = task.lastFiredDueAt;
 
     try {
       try {
@@ -2487,7 +2658,11 @@ export class ScheduleManager {
       // Update lastRun and nextRun after manual execution
       const executedAt = new Date();
       task.lastRun = executedAt;
-      if (task.enabled) {
+      if (task.runAt) {
+        task.enabled = false;
+        task.nextRun = undefined;
+        task.lastFiredDueAt = previousNextRun ?? new Date(task.runAt);
+      } else if (task.enabled) {
         const policy = this.getManualRunNextRunPolicy();
         const shouldAdvanceFromExisting =
           policy === "advance" &&
@@ -2509,6 +2684,8 @@ export class ScheduleManager {
         task.nextRun = previousNextRun
           ? new Date(previousNextRun.getTime())
           : undefined;
+        task.enabled = previousEnabled;
+        task.lastFiredDueAt = previousLastFiredDueAt;
 
         const details = toSafeErrorDetails(error);
         logError("[CopilotScheduler] runTaskNow save failed:", details);

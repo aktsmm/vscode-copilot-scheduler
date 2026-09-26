@@ -7,7 +7,7 @@
 [![GitHub](https://badgen.net/badge/GitHub/Source/black)](https://github.com/aktsmm/vscode-copilot-scheduler)
 [![Stars](https://badgen.net/github/stars/aktsmm/vscode-copilot-scheduler)](https://github.com/aktsmm/vscode-copilot-scheduler)
 
-VS Code で Cron 式を使って AI プロンプトを自動スケジュール実行
+VS Code で AI プロンプトを Cron 式で定期実行、または日時指定で一度だけ実行
 
 [**📥 VS Code Marketplace からインストール**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 
@@ -19,7 +19,7 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 
 ## ✨ 機能
 
-🗓️ **Cron スケジューリング** - Cron 式で特定の時刻にプロンプトを実行
+🗓️ **定期・単発スケジューリング** - Cron 式による定期実行と日時指定による一度きりの実行に対応
 
 🤖 **Agent & モデル選択** - 組み込みAgent (@workspace, @terminal) と AI モデル (GPT-4o, Claude Sonnet 4) を選択可能。利用可能な場合は runtime quality や experimental quality variant も選べます
 
@@ -41,6 +41,8 @@ VS Code で Cron 式を使って AI プロンプトを自動スケジュール�
 2. 「+」ボタンをクリックして新規タスクを作成
 3. タスク名、プロンプト、Cron スケジュールを入力
 4. スケジュールされた時刻に自動で Copilot にプロンプトが送信されます
+
+一度だけ実行したい場合は、フォームの「一度だけ実行する日時」を選び、日時と実行後の処理を指定します。既定では送信後にタスクを無効化し、「タスクを削除（履歴は保持）」を選ぶと履歴保存後に削除します。取りこぼした日時は既存の catch-up / skip 設定に従います。実行済みの無効タスクは、新しい `runAt` を設定するまで再有効化できません。
 
 タスク画面では、Tabキーで選択中のタブへ移動できます。左右キーでタブを切り替え、Home/Endで先頭・末尾のタブを選択し、Tabキーで選択中のパネル内へ移動します。Enter/Spaceは通常のボタン操作として使えます。
 
@@ -95,9 +97,13 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 | `#scheduler_update_task`      | `model` / `agent` / `scope` / 実行制御を含めてタスクの項目を更新します。有効/無効の変更は `#scheduler_set_task_enabled` を使います。  |
 | `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                                                     |
 | `#scheduler_set_task_enabled` | タスクを有効化または無効化します。                                                                                                    |
-| `#scheduler_run_task`         | タスクの有効/無効状態を変更せず、今すぐ1回だけ実行します。                                                                            |
+| `#scheduler_run_task`         | タスクを今すぐ実行します。定期タスクの有効/無効は維持し、単発タスクには実行後の処理を適用します。                                     |
+
+単発タスクの手動実行後、ツールは `enabledStateChanged` と `taskDeleted` を返します。実行済みの単発タスクは `oneTimeCompleted` と再設定の案内を返し、再送信しません。
 
 `kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、`statusSemantics`、新しい順の `entries` が含まれます。`status: "success"` はモデルの応答完了ではなくプロンプト送信成功を示します。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
+
+単発タスクの作成では `cronExpression` の代わりにタイムゾーンオフセット付き ISO 8601 日時の `runAt`（例: `2030-09-26T21:00:00+09:00`）を指定し、必要なら `afterRun: "disable" | "delete"` を渡します。更新でも同じ項目を使えます。Cron に戻す場合は `runAt: ""` と `cronExpression` を同時に指定します。`kind=list` / `kind=get` に設定が含まれ、`kind=history` は自動削除後もタスク名と `runAt` を保持します。Webview の日時選択はマシンのローカルタイムゾーンです。
 
 `kind=list` は prompt 本文の代わりに短い `promptPreview` と `promptLength` を返します。`local` / `global` のタスクは prompt ファイル全体のスナップショットを保持するためです。write 系ツールの成功レスポンスも同じ形で返します。全文が必要なときは `kind=get` を使い、preview をタスクに書き戻さないでください。
 

@@ -637,6 +637,27 @@
   var agentRefreshBtn = document.getElementById("agent-refresh-btn");
   var cronPreset = document.getElementById("cron-preset");
   var cronExpression = document.getElementById("cron-expression");
+  var runAtInput = document.getElementById("run-at");
+  var afterRunSelect = document.getElementById("after-run");
+  var onceFields = document.getElementById("once-fields");
+  var cronFields = document.getElementById("cron-fields");
+  var scheduleModes = document.querySelectorAll('input[name="schedule-mode"]');
+  function isOneTimeMode() {
+    var selected = document.querySelector(
+      'input[name="schedule-mode"]:checked',
+    );
+    return !!selected && selected.value === "once";
+  }
+  function updateScheduleMode() {
+    var once = isOneTimeMode();
+    if (onceFields) onceFields.hidden = !once;
+    if (cronFields) cronFields.hidden = once;
+    if (runAtInput) runAtInput.required = once;
+    if (cronExpression) cronExpression.required = !once;
+  }
+  Array.prototype.forEach.call(scheduleModes, function (radio) {
+    radio.addEventListener("change", updateScheduleMode);
+  });
   var agentSelect = document.getElementById("agent-select");
   var modelSelect = document.getElementById("model-select");
   var modelVariantGroup = document.getElementById("model-variant-group");
@@ -867,6 +888,8 @@
       name: String(source.name || ""),
       prompt: typeof source.prompt === "string" ? source.prompt : "",
       cronExpression: String(source.cronExpression || ""),
+      runAt: String(source.runAt || ""),
+      afterRun: source.runAt ? source.afterRun || "disable" : "",
       agent: String(source.agent || ""),
       model: String(source.model || ""),
       modelName: String(source.modelName || ""),
@@ -1793,7 +1816,16 @@
       var taskData = {
         name: taskNameEl ? taskNameEl.value : "",
         prompt: promptTextEl ? promptTextEl.value : "",
-        cronExpression: cronExpression ? cronExpression.value : "",
+        cronExpression:
+          !isOneTimeMode() && cronExpression ? cronExpression.value : "",
+        runAt:
+          isOneTimeMode() && runAtInput && runAtInput.value
+            ? new Date(runAtInput.value).toISOString()
+            : editingTaskId && editingTaskSnapshot && editingTaskSnapshot.runAt
+              ? ""
+              : undefined,
+        afterRun:
+          isOneTimeMode() && afterRunSelect ? afterRunSelect.value : undefined,
         agent: agentValue,
         model: modelValue,
         modelName: modelNameValue,
@@ -1804,7 +1836,8 @@
         scope: scopeEl ? scopeEl.value : "workspace",
         promptSource: promptSourceValue,
         promptPath: promptPathValue,
-        runFirstInOneMinute: runFirstEl ? runFirstEl.checked : false,
+        runFirstInOneMinute:
+          !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
         jitterSeconds: jitterSecondsInput
@@ -1875,7 +1908,11 @@
       }
 
       var cronValue = (taskData.cronExpression || "").trim();
-      if (!cronValue) {
+      if (isOneTimeMode() && !taskData.runAt) {
+        failValidation(strings.labelRunOnceAt || "", runAtInput);
+        return;
+      }
+      if (!isOneTimeMode() && !cronValue) {
         failValidation(
           strings.cronExpressionRequired || strings.invalidCronExpression || "",
           cronExpression,
@@ -2215,7 +2252,7 @@
       var cronText = escapeHtml(
         cronSummary || strings.labelFriendlyFallback || "",
       );
-      var cronRaw = escapeAttr(task.cronExpression || "");
+      var cronRaw = escapeAttr(task.runAt || task.cronExpression || "");
       var taskName = escapeHtml(task.name || "");
       var promptSourceLabel = getPromptSourceLabel(task);
 
@@ -2904,6 +2941,7 @@
 
   function resetForm() {
     if (taskForm) taskForm.reset();
+    updateScheduleMode();
     setEditingMode(null);
     clearInvalidField();
     setTemplatePromptBaseline(null);
@@ -3122,6 +3160,25 @@
     setAttachments(task.attachments);
     announceAttachmentStatus("");
     if (cronExpression) cronExpression.value = task.cronExpression || "";
+    var scheduleMode = document.querySelector(
+      'input[name="schedule-mode"][value="' +
+        (task.runAt ? "once" : "cron") +
+        '"]',
+    );
+    if (scheduleMode) scheduleMode.checked = true;
+    if (runAtInput) {
+      var runAtDate = task.runAt ? new Date(task.runAt) : null;
+      runAtInput.value =
+        runAtDate && !isNaN(runAtDate.getTime())
+          ? new Date(
+              runAtDate.getTime() - runAtDate.getTimezoneOffset() * 60000,
+            )
+              .toISOString()
+              .slice(0, 16)
+          : "";
+    }
+    if (afterRunSelect) afterRunSelect.value = task.afterRun || "disable";
+    updateScheduleMode();
     if (cronPreset) cronPreset.value = "";
     if (friendlyFrequency) friendlyFrequency.value = "";
     updateFriendlyVisibility();

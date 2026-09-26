@@ -28,6 +28,8 @@ export type ExecutionHistoryEntry = {
   executedAt: string;
   /** Scheduled due time for an automatic run. */
   dueAt?: string;
+  /** Original one-time schedule, retained after task deletion. */
+  runAt?: string;
   /** True when a legacy executedAt value could not be parsed. */
   executedAtInvalid?: true;
   nextRunAt?: string;
@@ -85,6 +87,7 @@ export function isExecutionHistoryEntry(
     (status === "success" || status === "failed" || status === "blocked") &&
     typeof record.executedAt === "string" &&
     isOptionalString(record.dueAt) &&
+    isOptionalString(record.runAt) &&
     (record.executedAtInvalid === undefined ||
       record.executedAtInvalid === true) &&
     (record.nextRunAt === undefined || typeof record.nextRunAt === "string") &&
@@ -217,6 +220,7 @@ function normalizeExecutionHistoryEntry(
     status: entry.status,
     executedAt,
     dueAt,
+    runAt: normalizeHistoryTimestamp(entry.runAt),
     executedAtInvalid,
     nextRunAt,
     nextRunAtInvalid,

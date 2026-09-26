@@ -7,7 +7,7 @@
 [![GitHub](https://badgen.net/badge/GitHub/Source/black)](https://github.com/aktsmm/vscode-copilot-scheduler)
 [![Stars](https://badgen.net/github/stars/aktsmm/vscode-copilot-scheduler)](https://github.com/aktsmm/vscode-copilot-scheduler)
 
-Schedule automatic AI prompts with cron expressions in VS Code.
+Schedule recurring or one-time AI prompts in VS Code.
 
 [**📥 Install from VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 
@@ -19,7 +19,7 @@ Schedule automatic AI prompts with cron expressions in VS Code.
 
 ## ✨ Features
 
-🗓️ **Cron Scheduling** - Schedule prompts to run at specific times using cron expressions
+🗓️ **Cron and One-Time Scheduling** - Run recurring prompts with cron or dispatch a task once at a specified date and time
 
 🤖 **Agent & Model Selection** - Choose from built-in agents (@workspace, @terminal) and AI models (GPT-4o, Claude Sonnet 4), including runtime quality or experimental quality variants when available
 
@@ -47,6 +47,8 @@ In the task panel, Tab focuses the selected tab. Left/Right arrows switch tabs, 
 | `0 * * * *`    | Every hour              |
 
 The friendly cron builder applies your selected frequency, interval, time, weekday, or day-of-month to the cron expression as soon as you change the helper controls. The **Generate** button remains available as an explicit re-apply action, but you do not need to press it before saving.
+
+For a single execution, select **Run once at** in the task form and choose a date and time. The task is disabled after dispatch by default; choose **Delete task (keep history)** to remove it after its history is saved. Missed one-time schedules follow the configured catch-up/skip policy. A completed disabled task must be assigned a new `runAt` before it can be enabled again.
 
 The friendly cron builder only offers interval choices that can be represented exactly with standard cron. Intervals such as 40 or 90 minutes are generated as multiple cron lines instead of inaccurate expressions like `*/40 * * * *`. All generated lines belong to the same task, and the scheduler runs the task at the earliest matching next time across those lines.
 
@@ -86,9 +88,13 @@ In Copilot Chat agent mode, use the scheduler tools with `#` references:
 | `#scheduler_update_task`      | Update task fields, including `model`, `agent`, `scope`, and the execution controls. Use `#scheduler_set_task_enabled` for enable/disable changes. |
 | `#scheduler_delete_task`      | Delete a task after a strong confirmation that shows its name, scope, and workspace.                                                               |
 | `#scheduler_set_task_enabled` | Enable or disable a task.                                                                                                                          |
-| `#scheduler_run_task`         | Run a task once immediately without changing its enabled state.                                                                                    |
+| `#scheduler_run_task`         | Run a task immediately. Recurring tasks keep their enabled state; one-time tasks apply their after-run action.                                     |
+
+For a one-time manual run, the tool reports `enabledStateChanged` and `taskDeleted` after dispatch. A completed one-time task returns `oneTimeCompleted` with instructions to set a new run time; no second dispatch is attempted.
 
 For `kind=history`, the response includes `total`, returned `count`, `hasMore`, `statusSemantics`, and newest-first `entries`. `status: "success"` confirms prompt dispatch rather than model response completion. Legacy malformed timestamps are preserved or omitted without inventing audit times and are marked with `executedAtInvalid` / `nextRunAtInvalid` when applicable.
+
+Create a one-time task by sending `runAt` as an ISO 8601 date-time with an explicit offset (for example, `2030-09-26T21:00:00+09:00`) instead of `cronExpression`, and optionally `afterRun: "disable" | "delete"`. Update accepts the same fields; to switch back to a recurring schedule, set `runAt: ""` and provide `cronExpression`. `kind=list` / `kind=get` return these settings, and `kind=history` retains the task name and `runAt` even after automatic deletion. The Webview time picker uses the machine's local timezone; tools can specify any explicit offset.
 
 `kind=list` returns task metadata with a short `promptPreview` and `promptLength` instead of the prompt body, because a `local` or `global` task stores a snapshot of the whole prompt file. The write tools return the same shape in their success payloads. Use `kind=get` when the full prompt is needed; a preview must never be written back to a task.
 

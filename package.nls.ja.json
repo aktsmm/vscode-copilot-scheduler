@@ -74,6 +74,6 @@
   "tool.scheduler_set_task_enabled.displayName": "スケジューラ: タスク有効/無効切替",
   "tool.scheduler_set_task_enabled.modelDescription": "ユーザーが既存のスケジュールタスクの有効化、無効化、一時停止、再開、オン、またはオフを依頼したときに使います。id 指定でタスクを有効化または無効化します。有効化には Copilot Scheduler ビュー上での初回実行同意が事前に必要です。",
   "tool.scheduler_run_task.displayName": "スケジューラ: タスクを今すぐ実行",
-  "tool.scheduler_run_task.modelDescription": "ユーザーが既存のタスクを今すぐ1回実行、起動、テストするよう依頼したときに使います。先に scheduler_query で id を特定してください。有効/無効の状態は変更しませんが、有効なタスクの nextRun は manualRunNextRunPolicy に従って進みます。成功はプロンプト送信を示し、モデル応答完了は意味しません。saveFailed は送信済みなので自動再試行しないでください。キャンセルは実行開始前に確認し、開始済みの送信は取り消せません。workspace タスクは現在のワークスペースに属する場合だけ実行でき、それ以外は対象ワークスペースを開くか Scheduler ビューを利用してください。",
+  "tool.scheduler_run_task.modelDescription": "ユーザーが既存のタスクを今すぐ1回実行、起動、テストするよう依頼したときに使います。先に scheduler_query で id を特定してください。定期タスクの有効/無効は維持されますが、単発タスクには afterRun（無効化または削除）が適用され、再スケジュールするまで再実行できません。有効な定期タスクの nextRun は manualRunNextRunPolicy に従って進みます。成功はプロンプト送信を示し、モデル応答完了は意味しません。saveFailed は送信済みなので自動再試行しないでください。キャンセルは実行開始前に確認し、開始済みの送信は取り消せません。workspace タスクは現在のワークスペースに属する場合だけ実行でき、それ以外は対象ワークスペースを開くか Scheduler ビューを利用してください。",
   "view.tasks": "スケジュールタスク"
 }

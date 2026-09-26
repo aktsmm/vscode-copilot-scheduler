@@ -431,7 +431,9 @@ export class SchedulerWebview {
   ): WebviewScheduledTask[] {
     return tasks.map((task) => ({
       ...task,
-      scheduleSummary: formatCronForDisplay(task.cronExpression),
+      scheduleSummary: task.runAt
+        ? `${messages.labelRunOnceAt()}: ${new Date(task.runAt).toLocaleString()}`
+        : formatCronForDisplay(task.cronExpression),
     }));
   }
 
@@ -1564,6 +1566,10 @@ export class SchedulerWebview {
       labelPrompt: messages.labelPrompt(),
       labelSchedule: messages.labelSchedule(),
       labelCronExpression: messages.labelCronExpression(),
+      labelRunOnceAt: messages.labelRunOnceAt(),
+      labelAfterRun: messages.labelAfterRun(),
+      labelAfterRunDisable: messages.labelAfterRunDisable(),
+      labelAfterRunDelete: messages.labelAfterRunDelete(),
       labelPreset: messages.labelPreset(),
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
@@ -1958,9 +1964,31 @@ export class SchedulerWebview {
       margin-bottom: 6px;
       font-weight: 500;
     }
+
+    .schedule-mode {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 10px;
+    }
+
+    .schedule-mode label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #once-fields[hidden], #cron-fields[hidden] {
+      display: none;
+    }
+
+    #once-fields select {
+      margin-bottom: 10px;
+    }
     
     input[type="text"],
     input[type="number"],
+    input[type="datetime-local"],
     textarea,
     select {
       width: 100%;
@@ -2616,6 +2644,20 @@ export class SchedulerWebview {
           </div>
           <div class="form-grid">
             <div class="form-group col-12">
+              <div class="schedule-mode" role="group" aria-label="${escapeHtmlAttr(strings.labelSchedule)}">
+                <label><input type="radio" name="schedule-mode" value="cron" checked> ${escapeHtml(strings.labelCronExpression)}</label>
+                <label><input type="radio" name="schedule-mode" value="once"> ${escapeHtml(strings.labelRunOnceAt)}</label>
+              </div>
+              <div id="once-fields" hidden>
+                <label for="run-at">${escapeHtml(strings.labelRunOnceAt)}</label>
+                <input id="run-at" type="datetime-local" step="60">
+                <label for="after-run">${escapeHtml(strings.labelAfterRun)}</label>
+                <select id="after-run">
+                  <option value="disable">${escapeHtml(strings.labelAfterRunDisable)}</option>
+                  <option value="delete">${escapeHtml(strings.labelAfterRunDelete)}</option>
+                </select>
+              </div>
+              <div id="cron-fields">
               <label for="cron-preset">${escapeHtml(strings.labelPreset)}</label>
               <div class="preset-select">
                 <select id="cron-preset">
@@ -2684,6 +2726,7 @@ export class SchedulerWebview {
                 <div class="friendly-actions">
                   <button type="button" class="btn-secondary" id="friendly-generate">${escapeHtml(strings.labelFriendlyGenerate)}</button>
                 </div>
+              </div>
               </div>
             </div>
           </div>

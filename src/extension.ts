@@ -506,6 +506,12 @@ function buildExecutionHistoryDetail(entry: ExecutionHistoryEntry): string {
     lines.push(entry.detail.trim());
   }
 
+  if (entry.runAt) {
+    lines.push(
+      `${messages.labelRunOnceAt()}: ${formatHistoryTimestamp(entry.runAt)}`,
+    );
+  }
+
   if (entry.dueAt) {
     lines.push(
       `${messages.executionHistoryDueAt()}: ${formatHistoryTimestamp(entry.dueAt)}`,
@@ -660,6 +666,7 @@ type ManualRunFailureResult = {
     | "taskNotFound"
     | "executorUnavailable"
     | "alreadyRunning"
+    | "oneTimeCompleted"
     | "promptBlocked"
     | "executionFailed"
     | "saveFailed";
@@ -691,6 +698,15 @@ function handleManualRunFailure(
 
   if (runResult.reason === "alreadyRunning") {
     const msg = messages.taskAlreadyRunning(taskName);
+    notifyInfo(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "oneTimeCompleted") {
+    const msg = messages.oneTimeTaskCompleted(taskName);
     notifyInfo(msg);
     if (showWebviewError) {
       SchedulerWebview.showError(msg);
@@ -1024,16 +1040,32 @@ async function appendManualRunHistory(
       !Number.isNaN(latestTask.nextRun.getTime())
         ? latestTask.nextRun.toISOString()
         : undefined;
-    await recordExecutionHistoryBestEffort({
+    const entry: ExecutionHistoryEntry = {
       taskId: task.id,
       taskName: task.name,
       trigger: "manual",
       status: "success",
       executedAt: new Date().toISOString(),
+      runAt: task.runAt,
       nextRunAt,
       attachmentCount: latestTask.attachments?.length,
       ...promptMetadata,
-    });
+    };
+    if (task.runAt && task.afterRun === "delete") {
+      try {
+        await enqueueExecutionHistory(entry);
+        await scheduleManager.deleteTask(task.id);
+      } catch (error) {
+        logError(
+          "[CopilotScheduler] One-time task history or cleanup failed:",
+          sanitizeErrorDetailsForLog(
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    } else {
+      await recordExecutionHistoryBestEffort(entry);
+    }
     return;
   }
 
@@ -1395,19 +1427,29 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
       notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
-      void recordExecutionHistoryBestEffort({
+      const entry: ExecutionHistoryEntry = {
         taskId: task.id,
         taskName: task.name,
         trigger,
         status: "success",
         executedAt: new Date().toISOString(),
         dueAt,
+        runAt: task.runAt,
         nextRunAt: nextRunDate?.toISOString(),
         attachmentCount: task.attachments?.length,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
-      });
+      };
+      if (task.runAt && task.afterRun === "delete") {
+        try {
+          await enqueueExecutionHistory(entry);
+        } catch {
+          task.afterRun = "disable";
+        }
+      } else {
+        void recordExecutionHistoryBestEffort(entry);
+      }
     }
   } catch (error) {
     if (isPromptBlockedError(error)) {
@@ -1439,6 +1481,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
           status: "blocked",
           executedAt: new Date().toISOString(),
           dueAt,
+          runAt: task.runAt,
           nextRunAt: nextRunDate?.toISOString(),
           detail: resolveDisplayErrorMessage(
             error instanceof Error ? error.message : String(error),
@@ -1471,6 +1514,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         status: "failed",
         executedAt: new Date().toISOString(),
         dueAt,
+        runAt: task.runAt,
         nextRunAt: nextRunDate?.toISOString(),
         detail: resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
         ...buildPromptHistoryMetadata(
@@ -1975,6 +2019,7 @@ async function runTaskManually(
     if (
       !runResult.ok &&
       (runResult.reason === "alreadyRunning" ||
+        runResult.reason === "oneTimeCompleted" ||
         runResult.reason === "taskNotFound" ||
         runResult.reason === "executorUnavailable")
     ) {

@@ -900,12 +900,31 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
       [
         "window.editTask = function (id)",
         'if (cronExpression) cronExpression.value = task.cronExpression || "";',
+        "updateScheduleMode();",
         'if (cronPreset) cronPreset.value = "";',
         'if (friendlyFrequency) friendlyFrequency.value = "";',
         "updateFriendlyVisibility();",
         "updateCronPreview();",
       ],
       "edit mode should clear stale friendly cron selection before showing task cron",
+    );
+  });
+
+  test("one-time form validates runAt instead of requiring a cron expression", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    assertTokensInOrder(
+      source,
+      [
+        "function updateScheduleMode()",
+        "if (runAtInput) runAtInput.required = once;",
+        "if (cronExpression) cronExpression.required = !once;",
+        "if (isOneTimeMode() && !taskData.runAt)",
+        "if (!isOneTimeMode() && !cronValue)",
+      ],
+      "one-time form must not reject an empty cron expression",
     );
   });
 
@@ -1053,6 +1072,19 @@ suite("SchedulerWebview Message Queue Tests", () => {
           createdAt: new Date("2026-05-15T00:00:00Z"),
           updatedAt: new Date("2026-05-15T00:00:00Z"),
         },
+        {
+          id: "task-webview-once",
+          name: "Once",
+          cronExpression: "",
+          runAt: "2030-09-26T12:00:00.000Z",
+          afterRun: "disable",
+          prompt: "hello",
+          enabled: true,
+          scope: "global",
+          promptSource: "inline",
+          createdAt: new Date("2026-05-15T00:00:00Z"),
+          updatedAt: new Date("2026-05-15T00:00:00Z"),
+        },
       ]);
 
       assert.strictEqual(sent.length, 1);
@@ -1069,6 +1101,11 @@ suite("SchedulerWebview Message Queue Tests", () => {
       assert.strictEqual(
         m.tasks?.[0]?.scheduleSummary,
         messages.cronPreviewEveryNMinutes().replace("{n}", "20"),
+      );
+      assert.ok(
+        String(m.tasks?.[1]?.scheduleSummary).startsWith(
+          messages.labelRunOnceAt(),
+        ),
       );
     } finally {
       wv.panel = originalPanel;

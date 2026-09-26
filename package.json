@@ -1,8 +1,8 @@
 {
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
-  "description": "Schedule automatic AI prompts with cron expressions",
-  "version": "1.7.3",
+  "description": "Schedule recurring and one-time AI prompts in VS Code",
+  "version": "1.7.4",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -431,7 +431,19 @@
             },
             "cronExpression": {
               "type": "string",
-              "description": "Cron expression. Supports multiple lines separated by newlines."
+              "description": "Cron expression for recurring tasks. Omit when runAt is set. Supports multiple lines separated by newlines."
+            },
+            "runAt": {
+              "type": "string",
+              "description": "One-time execution instant as ISO 8601 with explicit timezone offset, e.g. 2026-09-26T21:00:00+09:00. Mutually exclusive with cronExpression."
+            },
+            "afterRun": {
+              "type": "string",
+              "enum": [
+                "disable",
+                "delete"
+              ],
+              "description": "After a one-time task is dispatched, disable it (default) or delete it after its history is saved. Requires runAt."
             },
             "scope": {
               "type": "string",
@@ -543,7 +555,6 @@
           },
           "required": [
             "name",
-            "cronExpression",
             "prompt",
             "scope"
           ]
@@ -576,6 +587,17 @@
                 },
                 "cronExpression": {
                   "type": "string"
+                },
+                "runAt": {
+                  "type": "string",
+                  "description": "One-time ISO 8601 instant with timezone offset. Pass an empty string when switching back to cronExpression."
+                },
+                "afterRun": {
+                  "type": "string",
+                  "enum": [
+                    "disable",
+                    "delete"
+                  ]
                 },
                 "promptSource": {
                   "type": "string",

@@ -5,6 +5,18 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.4] - 2026-09-26
+
+### Added
+
+- One-time tasks accept an ISO 8601 `runAt` instead of cron in the task form and create/update tools. After dispatch, they disable by default or delete after saving their execution history; missed runs follow the existing catch-up policy.
+- Task lists and history retain the one-time schedule, and Chat tools report the applied after-run action.
+
+### Fixed
+
+- Completed one-time tasks refuse a second dispatch with rescheduling guidance instead of a misleading "already running" message. Manual-run confirmations and results show whether the task is disabled or deleted.
+- Transient task-save failures restore persisted state before retrying a deletion or accepting another task mutation, preventing unsaved enablement and lost task changes.
+
 ## [1.7.3] - 2026-09-23
 
 ### Added

@@ -22,6 +22,7 @@ export type ManualTaskRunResult =
         | "taskNotFound"
         | "executorUnavailable"
         | "alreadyRunning"
+        | "oneTimeCompleted"
         | "promptBlocked"
         | "executionFailed"
         | "saveFailed"
@@ -52,7 +53,10 @@ export function createSchedulerRunTaskTool(
         prepared.confirmationMessages = {
           title: messages.lmToolRunTitle(),
           message: new vscode.MarkdownString().appendText(
-            messages.lmToolRunConfirmation(taskLabel),
+            messages.lmToolRunConfirmation(
+              taskLabel,
+              task?.runAt ? (task.afterRun ?? "disable") : undefined,
+            ),
           ),
         };
       }
@@ -96,6 +100,7 @@ export function createSchedulerRunTaskTool(
           message: `Task not found: ${id}`,
         });
       }
+      const wasEnabled = task.enabled;
 
       if (
         task.scope === "workspace" &&
@@ -123,6 +128,13 @@ export function createSchedulerRunTaskTool(
         });
       }
       if (!result.ok) {
+        if (result.reason === "oneTimeCompleted") {
+          return buildJsonTextResult({
+            ...result,
+            retrySafe: false,
+            message: messages.oneTimeTaskCompleted(task.name),
+          });
+        }
         if (result.reason === "saveFailed") {
           return buildJsonTextResult({
             ...result,
@@ -134,14 +146,24 @@ export function createSchedulerRunTaskTool(
         }
         return buildJsonTextResult(result);
       }
-      const latestTask = scheduleManager.getTask(id) ?? task;
+      const latestTask = scheduleManager.getTask(id);
       return buildJsonTextResult({
         ok: true,
         action: "run",
         executionSemantics: "prompt_dispatched",
-        enabledStateChanged: false,
+        enabledStateChanged: latestTask
+          ? latestTask.enabled !== wasEnabled
+          : wasEnabled,
+        taskDeleted: !latestTask,
         promptTextOmitted: true,
-        task: toTaskSummary(latestTask),
+        task: latestTask
+          ? toTaskSummary(latestTask)
+          : {
+              id: task.id,
+              name: task.name,
+              runAt: task.runAt,
+              afterRun: task.afterRun,
+            },
       });
     },
   };

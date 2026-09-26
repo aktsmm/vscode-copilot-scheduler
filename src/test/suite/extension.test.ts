@@ -865,9 +865,15 @@ suite("Extension Test Suite", () => {
       /有効化|無効化|一時停止|再開|オン|オフ/,
     );
     assert.match(runDescription, /run|execute|trigger|test/i);
-    assert.match(runDescription, /without enabling|enabled state/i);
+    assert.match(
+      runDescription,
+      /Recurring tasks keep their enabled state.*one-time tasks apply afterRun/i,
+    );
     assert.match(runDescriptionJa, /今すぐ1回実行|起動|テスト/);
-    assert.match(runDescriptionJa, /有効\/無効の状態は変更しません/);
+    assert.match(
+      runDescriptionJa,
+      /定期タスクの有効\/無効は維持.*単発タスクには afterRun/,
+    );
     assert.match(runDescription, /not model response completion/);
     assert.match(runDescription, /saveFailed.*do not retry automatically/);
     assert.match(runDescription, /manualRunNextRunPolicy/);
@@ -970,6 +976,8 @@ suite("Extension Test Suite", () => {
       "autoMode",
       "jitterSeconds",
       "maxExecutionsPerDay",
+      "runAt",
+      "afterRun",
       "allowedTimeStart",
       "allowedTimeEnd",
     ]) {
@@ -1457,6 +1465,7 @@ suite("Manual Run Workspace Confirmation Tests", () => {
     const selectedTask = task("global");
     for (const reason of [
       "alreadyRunning",
+      "oneTimeCompleted",
       "taskNotFound",
       "executorUnavailable",
     ] as const) {
@@ -2007,7 +2016,9 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const source = fs.readFileSync(sourcePath, "utf8");
 
     const payloads = [
-      ...source.matchAll(/recordExecutionHistoryBestEffort\(\{([^}]*)\}\)/g),
+      ...source.matchAll(
+        /(?:recordExecutionHistoryBestEffort\(|const entry: ExecutionHistoryEntry = )\{([^}]*)\}/g,
+      ),
     ].map((match) => match[1]);
 
     const successPayloads = payloads.filter((payload) =>
@@ -2030,7 +2041,9 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
     const source = fs.readFileSync(sourcePath, "utf8");
     const payloads = [
-      ...source.matchAll(/recordExecutionHistoryBestEffort\(\{([^}]*)\}\)/g),
+      ...source.matchAll(
+        /(?:recordExecutionHistoryBestEffort\(|const entry: ExecutionHistoryEntry = )\{([^}]*)\}/g,
+      ),
     ].map((match) => match[1]);
     const automaticPayloads = payloads.filter((payload) =>
       payload.includes("trigger,"),

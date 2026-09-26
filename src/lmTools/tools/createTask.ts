@@ -16,6 +16,8 @@ import {
 interface CreateTaskToolInput {
   name?: string;
   cronExpression?: string;
+  runAt?: string;
+  afterRun?: "disable" | "delete";
   prompt?: string;
   scope?: string;
   promptSource?: string;
@@ -37,6 +39,8 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
   return {
     name: input.name ?? "",
     cronExpression: input.cronExpression ?? "",
+    runAt: input.runAt,
+    afterRun: input.afterRun,
     prompt: input.prompt ?? "",
     scope: input.scope as CreateTaskInput["scope"],
     promptSource:
@@ -66,7 +70,9 @@ export function createSchedulerCreateTaskTool(
       const input = options.input ?? {};
       const detail = [
         `**${escapeConfirmationText(input.name || "(unnamed)")}**`,
-        `- cron: ${formatConfirmationCode(input.cronExpression || "(missing)")}`,
+        input.runAt
+          ? `- runAt: ${formatConfirmationCode(input.runAt)}; afterRun: ${formatConfirmationCode(input.afterRun ?? "disable")}`
+          : `- cron: ${formatConfirmationCode(input.cronExpression || "(missing)")}`,
         `- scope: ${escapeConfirmationText(input.scope || "(missing)")}`,
         `- promptSource: ${escapeConfirmationText(input.promptSource || "inline")}`,
         input.promptPath
@@ -109,7 +115,7 @@ export function createSchedulerCreateTaskTool(
       const input = options.input ?? {};
       if (
         !input.name ||
-        !input.cronExpression ||
+        (!input.cronExpression && !input.runAt) ||
         !input.prompt ||
         !input.scope
       ) {
@@ -117,7 +123,7 @@ export function createSchedulerCreateTaskTool(
           ok: false,
           reason: "validation",
           message:
-            "Missing required fields: name, cronExpression, prompt, scope.",
+            "Missing required fields: name, cronExpression or runAt, prompt, scope.",
         });
       }
       const result = await client.createTask(toCreateInput(input));

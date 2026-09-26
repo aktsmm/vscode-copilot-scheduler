@@ -108,6 +108,12 @@ export interface ScheduledTask {
   /** Cron expression, or multiple newline-separated expressions. */
   cronExpression: string;
 
+  /** Absolute one-time execution instant (ISO 8601 with timezone offset). */
+  runAt?: string;
+
+  /** Action after a one-time task is dispatched. */
+  afterRun?: "disable" | "delete";
+
   /** Prompt text to send to Copilot (when promptSource is "inline") */
   prompt: string;
 
@@ -196,6 +202,12 @@ export interface CreateTaskInput {
 
   /** Cron expression */
   cronExpression: string;
+
+  /** Absolute one-time execution instant (ISO 8601 with timezone offset). */
+  runAt?: string;
+
+  /** Action after a one-time task is dispatched. */
+  afterRun?: "disable" | "delete";
 
   /** Prompt text */
   prompt: string;

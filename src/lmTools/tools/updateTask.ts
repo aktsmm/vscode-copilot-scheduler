@@ -24,6 +24,8 @@ interface UpdateTaskToolInput {
 const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "name",
   "cronExpression",
+  "runAt",
+  "afterRun",
   "prompt",
   "promptSource",
   "promptPath",

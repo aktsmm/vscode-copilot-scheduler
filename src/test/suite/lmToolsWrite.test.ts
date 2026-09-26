@@ -540,6 +540,72 @@ suite("lmTools write wrappers", () => {
     assert.strictEqual(task.enabled, false);
   });
 
+  test("run task explains why a completed one-time task cannot run again", async () => {
+    const task = fakeTask({
+      cronExpression: "",
+      runAt: "2030-09-26T12:00:00Z",
+      enabled: false,
+    });
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => ({
+        ok: false,
+        reason: "oneTimeCompleted",
+      }),
+    );
+    const payload = parseJson(await invoke(tool, { id: task.id }));
+    assert.strictEqual(payload.reason, "oneTimeCompleted");
+    assert.strictEqual(
+      payload.message,
+      messages.oneTimeTaskCompleted(task.name),
+    );
+    assert.strictEqual(payload.retrySafe, false);
+  });
+
+  test("run task reports one-time auto-disable and auto-delete outcomes", async () => {
+    const disabled = fakeTask({
+      cronExpression: "",
+      runAt: "2030-09-26T12:00:00Z",
+      enabled: true,
+    });
+    const disableTool = createSchedulerRunTaskTool(
+      fakeScheduleManager(disabled),
+      async () => {
+        disabled.enabled = false;
+        return { ok: true };
+      },
+    );
+    const disabledResult = parseJson(
+      await invoke(disableTool, { id: disabled.id }),
+    );
+    assert.strictEqual(disabledResult.enabledStateChanged, true);
+    assert.strictEqual(disabledResult.taskDeleted, false);
+
+    const deleted = fakeTask({
+      cronExpression: "",
+      runAt: "2030-09-26T12:00:00Z",
+      afterRun: "delete",
+    });
+    let existing: ScheduledTask | undefined = deleted;
+    const manager = {
+      getTask: (id: string) => (id === deleted.id ? existing : undefined),
+      shouldTaskRunInCurrentWorkspace: () => true,
+    } as unknown as ScheduleManager;
+    const deleteTool = createSchedulerRunTaskTool(manager, async () => {
+      existing = undefined;
+      return { ok: true };
+    });
+    const deletedResult = parseJson(
+      await invoke(deleteTool, { id: deleted.id }),
+    );
+    assert.strictEqual(deletedResult.taskDeleted, true);
+    assert.strictEqual(deletedResult.enabledStateChanged, true);
+    assert.deepStrictEqual(
+      (deletedResult.task as { id: string }).id,
+      deleted.id,
+    );
+  });
+
   test("run task rejects missing and unknown ids", async () => {
     let calls = 0;
     const tool = createSchedulerRunTaskTool(
@@ -593,6 +659,32 @@ suite("lmTools write wrappers", () => {
         messages.lmToolRunConfirmation(task.name),
       ).value,
     );
+  });
+
+  test("run task confirmation distinguishes one-time disable and delete", async () => {
+    const task = fakeTask({
+      cronExpression: "",
+      runAt: "2030-09-26T12:00:00Z",
+    });
+    const tool = createSchedulerRunTaskTool(
+      fakeScheduleManager(task),
+      async () => ({ ok: true }),
+    );
+    const disabled = confirmationMessageText(
+      await withConfirmationMode("always", () =>
+        prepare(tool, { id: task.id }),
+      ),
+    );
+    task.afterRun = "delete";
+    const deleted = confirmationMessageText(
+      await withConfirmationMode("always", () =>
+        prepare(tool, { id: task.id }),
+      ),
+    );
+    assert.match(disabled, /disabled|無効化/);
+    assert.match(deleted, /deleted|削除/);
+    assert.notStrictEqual(disabled, deleted);
+    assert.ok(!deleted.includes(messages.lmToolRunConfirmation(task.name)));
   });
 
   test("create task prepareInvocation includes explicit missing scope", async () => {
@@ -680,6 +772,29 @@ suite("lmTools write wrappers", () => {
     assert.strictEqual(client.createInput?.prompt, "Review the workspace");
     assert.strictEqual(client.createInput?.scope, "workspace");
     assert.strictEqual(client.createInput?.enabled, false);
+  });
+
+  test("one-time create and update tools forward runAt and afterRun", async () => {
+    const client = new FakeClient();
+    const runAt = "2030-09-26T21:00:00+09:00";
+    const create = await invoke(createSchedulerCreateTaskTool(client), {
+      name: "One-time review",
+      runAt,
+      afterRun: "delete",
+      prompt: "Review",
+      scope: "global",
+    });
+    assert.strictEqual(parseJson(create).ok, true);
+    assert.strictEqual(client.createInput?.cronExpression, "");
+    assert.strictEqual(client.createInput?.runAt, runAt);
+    assert.strictEqual(client.createInput?.afterRun, "delete");
+    const update = await invoke(createSchedulerUpdateTaskTool(client), {
+      id: "task-1",
+      updates: { runAt, afterRun: "disable" },
+    });
+    assert.strictEqual(parseJson(update).ok, true);
+    assert.strictEqual(client.updateArgs?.updates.runAt, runAt);
+    assert.strictEqual(client.updateArgs?.updates.afterRun, "disable");
   });
 
   test("create task write-disabled gate blocks before calling client", async () => {

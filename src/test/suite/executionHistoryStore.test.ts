@@ -98,6 +98,21 @@ suite("executionHistoryStore", () => {
     assert.deepStrictEqual(getExecutionHistoryEntries(), []);
   });
 
+  test("retains one-time schedule and task name without the task", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "deleted-task",
+        taskName: "One-time review",
+        runAt: "2030-09-26T21:00:00+09:00",
+      }),
+    );
+    const [record] = getExecutionHistoryEntries();
+    assert.strictEqual(record.taskName, "One-time review");
+    assert.strictEqual(record.runAt, "2030-09-26T12:00:00.000Z");
+  });
+
   test("filters invalid entries when reading", async () => {
     const ctx = stubContext();
     setExecutionHistoryContextForTests(ctx);

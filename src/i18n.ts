@@ -64,11 +64,16 @@ export const messages = {
   taskExecuting: (name: string) =>
     t(`Executing task "${name}"...`, `タスク「${name}」を実行中...`),
   lmToolRunTitle: () => t("Run scheduler task now", "タスクを今すぐ実行"),
-  lmToolRunConfirmation: (name: string) =>
-    t(
-      `Copilot Chat wants to run task "${name}" once now. Its enabled state will not change. Success confirms prompt dispatch, not response completion.`,
-      `Copilot Chat がタスク「${name}」を今すぐ1回実行します。有効/無効の状態は変更しません。成功はプロンプト送信を示し、応答完了を意味しません。`,
-    ),
+  lmToolRunConfirmation: (name: string, afterRun?: "disable" | "delete") =>
+    afterRun
+      ? t(
+          `Copilot Chat wants to run task "${name}" once now. After dispatch, it will be ${afterRun === "delete" ? "deleted (history retained)" : "disabled"}. Success confirms prompt dispatch, not response completion.`,
+          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。送信後に${afterRun === "delete" ? "削除します（履歴は保持）" : "無効化します"}。成功はプロンプト送信を示し、応答完了を意味しません。`,
+        )
+      : t(
+          `Copilot Chat wants to run task "${name}" once now. Its enabled state will not change. Success confirms prompt dispatch, not response completion.`,
+          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。有効/無効の状態は変更しません。成功はプロンプト送信を示し、応答完了を意味しません。`,
+        ),
   taskExecutionSummary: (name: string, result: string, nextRun: string) =>
     t(
       `Task "${name}": ${result} (Next run: ${nextRun})`,
@@ -183,6 +188,11 @@ export const messages = {
     t(
       `Task "${name}" is already running`,
       `タスク「${name}」はすでに実行中です`,
+    ),
+  oneTimeTaskCompleted: (name: string) =>
+    t(
+      `Task "${name}" has already run. Set a new run time before enabling it.`,
+      `タスク「${name}」は実行済みです。新しい実行日時を設定してから有効化してください。`,
     ),
   taskStoreBusy: () =>
     t(
@@ -470,6 +480,11 @@ export const messages = {
   labelPrompt: () => t("Prompt", "プロンプト"),
   labelSchedule: () => t("Schedule", "スケジュール"),
   labelCronExpression: () => t("Cron Expression", "Cron式"),
+  labelRunOnceAt: () => t("Run once at", "一度だけ実行する日時"),
+  labelAfterRun: () => t("After running", "実行後の処理"),
+  labelAfterRunDisable: () => t("Disable task", "タスクを無効化"),
+  labelAfterRunDelete: () =>
+    t("Delete task (keep history)", "タスクを削除（履歴は保持）"),
   labelPreset: () => t("Preset", "プリセット"),
   labelCustom: () => t("Custom", "カスタム"),
   labelAdvanced: () => t("Advanced", "詳細設定"),

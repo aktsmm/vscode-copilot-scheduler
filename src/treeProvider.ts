@@ -91,7 +91,9 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     this.contextValue = contextValue;
 
     // Set description with cron and next run
-    const cronDisplay = formatCronForDisplay(task.cronExpression);
+    const cronDisplay = task.runAt
+      ? `${messages.labelRunOnceAt()}: ${messages.formatDateTime(new Date(task.runAt))}${task.lastRun && !task.enabled ? ` (${messages.labelDisabled()})` : ""}`
+      : formatCronForDisplay(task.cronExpression);
     if (task.nextRun && task.enabled) {
       const nextRunStr = messages.formatDateTime(task.nextRun);
       this.description = `${cronDisplay} → ${nextRunStr}`;
@@ -159,12 +161,25 @@ export class ScheduledTaskItem extends vscode.TreeItem {
     md.appendMarkdown(`**${messages.labelStatus()}:** ${statusValue}\n\n`);
 
     md.appendMarkdown(`**${messages.labelSchedule()}:** `);
-    md.appendText(formatCronForDisplay(task.cronExpression));
+    md.appendText(
+      task.runAt
+        ? `${messages.labelRunOnceAt()}: ${messages.formatDateTime(new Date(task.runAt))}`
+        : formatCronForDisplay(task.cronExpression),
+    );
     md.appendMarkdown("\n\n");
 
-    const cronExpressionForDisplay = toSingleLine(task.cronExpression);
-    md.appendMarkdown(`**${messages.labelCronExpression()}:**\n\n`);
-    appendSafeCodeblock(cronExpressionForDisplay);
+    if (task.runAt) {
+      md.appendMarkdown(`**${messages.labelAfterRun()}:** `);
+      md.appendText(
+        task.afterRun === "delete"
+          ? messages.labelAfterRunDelete()
+          : messages.labelAfterRunDisable(),
+      );
+    } else {
+      const cronExpressionForDisplay = toSingleLine(task.cronExpression);
+      md.appendMarkdown(`**${messages.labelCronExpression()}:**\n\n`);
+      appendSafeCodeblock(cronExpressionForDisplay);
+    }
     md.appendMarkdown("\n");
 
     // Scope / workspace
