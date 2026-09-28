@@ -5,6 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.5] - 2026-09-28
+
+### Fixed
+
+- One-time task dates now reject invalid or nonexistent calendar dates in the form, with a localized field error instead of silently shifting the date or failing during conversion.
+- Short-cron warnings appear after a successful task creation or schedule change, not when saving an unrelated edit or cancelling creation.
+
 ## [1.7.4] - 2026-09-26
 
 ### Added

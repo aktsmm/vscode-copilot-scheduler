@@ -1607,6 +1607,7 @@ export class SchedulerWebview {
       placeholderCron: messages.placeholderCron(),
       invalidCronExpression: messages.invalidCronExpression(),
       invalidTimeWindowFormat: messages.invalidTimeWindowFormat(),
+      invalidRunAt: messages.invalidRunAt(),
       taskNameRequired: messages.taskNameRequired(),
       promptRequired: messages.promptRequired(),
       templateRequired: messages.templateRequired(),

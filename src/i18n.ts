@@ -240,6 +240,11 @@ export const messages = {
       "Invalid time window format. Use HH:mm (e.g., 22:00)",
       "時間帯の形式が不正です。HH:mm（例: 22:00）で入力してください",
     ),
+  invalidRunAt: () =>
+    t(
+      "Invalid run date and time. Enter a valid date and time.",
+      "実行日時が不正です。有効な日時を入力してください。",
+    ),
 
   // ==================== Attachments ====================
   attachmentInvalidPath: (attachmentPath: string) =>

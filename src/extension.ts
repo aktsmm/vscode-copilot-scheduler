@@ -223,6 +223,13 @@ async function maybeWarnCronInterval(cronExpression?: string): Promise<void> {
   }
 }
 
+function shouldWarnCronInterval(
+  previous: string | undefined,
+  current: string | undefined,
+): boolean {
+  return Boolean(current && current !== previous);
+}
+
 async function maybeShowDisclaimerOnce(task: ScheduledTask): Promise<boolean> {
   if (!task.enabled) return true;
   if (scheduleManager.isDisclaimerAccepted()) return true;
@@ -1962,6 +1969,7 @@ export const __testOnly = {
   buildExecutionSummary,
   showExecutionHistoryView,
   confirmManualRunIfWorkspaceMismatch,
+  shouldWarnCronInterval,
   runTaskManually,
   setExtensionContextForTests,
   resetExecutionHistoryQueueForTests,
@@ -2167,7 +2175,6 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
       case "edit": {
         if (action.taskId === "__create__" && action.data) {
-          await maybeWarnCronInterval(action.data.cronExpression);
           const task = await scheduleManager.createTask(
             action.data as CreateTaskInput,
           );
@@ -2176,12 +2183,15 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             SchedulerWebview.switchToList();
             break;
           }
+          await maybeWarnCronInterval(task.cronExpression);
           const createdMsg = messages.taskCreated(task.name);
           notifyInfo(createdMsg);
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           SchedulerWebview.switchToList(createdMsg);
         } else if (action.data) {
-          await maybeWarnCronInterval(action.data.cronExpression);
+          const previousCronExpression = scheduleManager.getTask(
+            action.taskId,
+          )?.cronExpression;
           const task = await scheduleManager.updateTask(
             action.taskId,
             action.data,
@@ -2198,6 +2208,11 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
               SchedulerWebview.switchToList();
               break;
             }
+          }
+          if (
+            shouldWarnCronInterval(previousCronExpression, task.cronExpression)
+          ) {
+            await maybeWarnCronInterval(task.cronExpression);
           }
           const updatedMsg = messages.taskUpdated(task.name);
           notifyInfo(updatedMsg);
@@ -2304,7 +2319,6 @@ function registerCreateTaskCommand(): vscode.Disposable {
         });
         if (!cronExpression) return;
 
-        await maybeWarnCronInterval(cronExpression);
         const task = await scheduleManager.createTask({
           name,
           prompt,
@@ -2314,6 +2328,7 @@ function registerCreateTaskCommand(): vscode.Disposable {
         if (!accepted) {
           return;
         }
+        await maybeWarnCronInterval(task.cronExpression);
         notifyInfo(messages.taskCreated(task.name));
         SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
       } catch (error) {

@@ -1602,6 +1602,14 @@ suite("Execution History View Routing Tests", () => {
 });
 
 suite("Cron Expression Tests", () => {
+  test("minimum interval warning only follows a new or changed cron", async () => {
+    const { __testOnly } = await import("../../extension");
+    const shouldWarn = __testOnly.shouldWarnCronInterval;
+    assert.strictEqual(shouldWarn(undefined, "* * * * *"), true);
+    assert.strictEqual(shouldWarn("* * * * *", "* * * * *"), false);
+    assert.strictEqual(shouldWarn("0 9 * * *", "* * * * *"), true);
+    assert.strictEqual(shouldWarn("* * * * *", ""), false);
+  });
   test("Valid cron expressions should be accepted", () => {
     const validCronExpressions = [
       "* * * * *",

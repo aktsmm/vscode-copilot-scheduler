@@ -926,6 +926,59 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
       ],
       "one-time form must not reject an empty cron expression",
     );
+    assertTokensInOrder(
+      source,
+      [
+        "var parsedRunAt =",
+        "var runAtDateParts =",
+        "!Number.isFinite(parsedRunAt.getTime())",
+        "parsedRunAt.getDate() !== Number(runAtDateParts[3])",
+        'failValidation(strings.invalidRunAt || "", runAtInput);',
+        "var taskData =",
+        "parsedRunAt.toISOString()",
+      ],
+      "invalid one-time dates must be rejected before ISO conversion",
+    );
+    const webviewSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    assert.ok(
+      sourceContainsToken(
+        webviewSource,
+        "invalidRunAt: messages.invalidRunAt()",
+      ),
+      "one-time date errors must be localized before reaching the form",
+    );
+    const guardStart = source.indexOf("var parsedRunAt =");
+    const guardEnd = source.indexOf("var taskData =", guardStart);
+    assert.ok(guardStart >= 0 && guardEnd > guardStart);
+    const validate = new Function(
+      "runAtInput",
+      "failValidation",
+      `var strings = { invalidRunAt: "invalid date" }; function isOneTimeMode() { return true; } ${source.slice(guardStart, guardEnd)} return parsedRunAt && parsedRunAt.toISOString();`,
+    ) as (
+      input: { value: string },
+      onInvalid: (message: string, input: { value: string }) => void,
+    ) => string | undefined;
+    for (const value of ["not-a-date", "2026-02-31T12:00"]) {
+      let error = "";
+      const input = { value };
+      assert.strictEqual(
+        validate(input, (message, field) => {
+          error = message;
+          assert.strictEqual(field, input);
+        }),
+        undefined,
+      );
+      assert.strictEqual(error, "invalid date");
+    }
+    assert.strictEqual(
+      validate({ value: "2030-09-26T21:00" }, () =>
+        assert.fail("valid date rejected"),
+      ),
+      new Date("2030-09-26T21:00").toISOString(),
+    );
   });
 
   test("webview cron preview stays aligned with extension display formatter", async () => {

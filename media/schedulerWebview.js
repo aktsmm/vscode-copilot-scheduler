@@ -1813,17 +1813,35 @@
             (allowedTimeEndInput && allowedTimeEndInput.value)
           );
 
+      var parsedRunAt =
+        isOneTimeMode() && runAtInput && runAtInput.value
+          ? new Date(runAtInput.value)
+          : null;
+      var runAtDateParts = parsedRunAt
+        ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(runAtInput.value)
+        : null;
+      if (
+        parsedRunAt &&
+        (!Number.isFinite(parsedRunAt.getTime()) ||
+          (runAtDateParts &&
+            (parsedRunAt.getFullYear() !== Number(runAtDateParts[1]) ||
+              parsedRunAt.getMonth() + 1 !== Number(runAtDateParts[2]) ||
+              parsedRunAt.getDate() !== Number(runAtDateParts[3]))))
+      ) {
+        failValidation(strings.invalidRunAt || "", runAtInput);
+        return;
+      }
+
       var taskData = {
         name: taskNameEl ? taskNameEl.value : "",
         prompt: promptTextEl ? promptTextEl.value : "",
         cronExpression:
           !isOneTimeMode() && cronExpression ? cronExpression.value : "",
-        runAt:
-          isOneTimeMode() && runAtInput && runAtInput.value
-            ? new Date(runAtInput.value).toISOString()
-            : editingTaskId && editingTaskSnapshot && editingTaskSnapshot.runAt
-              ? ""
-              : undefined,
+        runAt: parsedRunAt
+          ? parsedRunAt.toISOString()
+          : editingTaskId && editingTaskSnapshot && editingTaskSnapshot.runAt
+            ? ""
+            : undefined,
         afterRun:
           isOneTimeMode() && afterRunSelect ? afterRunSelect.value : undefined,
         agent: agentValue,
