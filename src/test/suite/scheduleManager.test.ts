@@ -266,6 +266,63 @@ suite("ScheduleManager Time Window Helper Tests", () => {
 });
 
 suite("ScheduleManager Minimum Interval Tests", () => {
+  test("cron collection stops at the requested count before iterator exhaustion", () => {
+    for (const count of [1, 2]) {
+      const options = {
+        currentDate: new Date("2026-05-09T00:00:00Z"),
+        endDate: new Date(`2026-05-09T00:0${count}:00Z`),
+        tz: "UTC",
+      };
+      const runs = getFirstDistinctCronRuns("* * * * *", options, count);
+      assert.deepStrictEqual(
+        runs.map((run) => run.toISOString()),
+        Array.from(
+          { length: count },
+          (_, index) => `2026-05-09T00:0${index + 1}:00.000Z`,
+        ),
+      );
+    }
+  });
+
+  test("cron collection stops without advancing duplicate or second-level schedules", () => {
+    const options = {
+      currentDate: new Date("2026-05-09T00:00:00Z"),
+      endDate: new Date("2026-05-09T00:02:00Z"),
+      tz: "UTC",
+    };
+    const duplicates = getFirstDistinctCronRuns(
+      "* * * * *\n* * * * *",
+      options,
+      2,
+    );
+    assert.deepStrictEqual(
+      duplicates.map((run) => run.toISOString()),
+      ["2026-05-09T00:01:00.000Z", "2026-05-09T00:02:00.000Z"],
+    );
+    const secondOptions = {
+      ...options,
+      endDate: new Date("2026-05-09T00:00:01Z"),
+    };
+    const seconds = getFirstDistinctCronRuns("* * * * * *", secondOptions, 1);
+    assert.deepStrictEqual(
+      seconds.map((run) => run.toISOString()),
+      ["2026-05-09T00:00:01.000Z"],
+    );
+  });
+
+  test("cron collection skips parsing for non-positive or non-finite counts", () => {
+    for (const count of [0, -1, NaN, Infinity, -Infinity]) {
+      assert.deepStrictEqual(
+        getFirstDistinctCronRuns(
+          "invalid cron expression",
+          { currentDate: new Date("2026-05-09T00:00:00Z"), tz: "UTC" },
+          count,
+        ),
+        [],
+      );
+    }
+  });
+
   test("multi-line cron expressions produce distinct strict 40 minute runs", () => {
     const expression = [
       "0,40 0,2,4,6,8,10,12,14,16,18,20,22 * * *",
@@ -2493,6 +2550,49 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("task mutations reject NUL prompt paths without changing persisted state", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-path-"));
+    const context = createMockContext(tmp);
+    const manager = new ScheduleManager(context);
+    try {
+      await waitForStartupSave(manager);
+      const input = {
+        name: "original",
+        prompt: "snapshot",
+        cronExpression: "*/5 * * * *",
+        enabled: false,
+        scope: "global" as const,
+        promptSource: "global" as const,
+        promptPath: "valid.prompt.md",
+      };
+      const task = await manager.createTask(input);
+      const before = JSON.stringify(manager.getAllTasks());
+      const storedPath = path.join(tmp, "scheduledTasks.json");
+      const storedBefore = fs.readFileSync(storedPath, "utf8");
+      const mementoBefore = JSON.stringify(context.globalState.get("scheduledTasks"));
+      for (const promptSource of ["local", "global"] as const) {
+        await assert.rejects(() => manager.createTask({
+          ...input,
+          name: "must not be created",
+          promptSource,
+          promptPath: "bad\0.prompt.md",
+        }));
+        await assert.rejects(() => manager.updateTask(task.id, {
+          name: "must not change",
+          promptSource,
+          promptPath: "bad\0.prompt.md",
+        }));
+        assert.strictEqual(JSON.stringify(manager.getAllTasks()), before);
+        assert.strictEqual(fs.readFileSync(storedPath, "utf8"), storedBefore);
+        assert.strictEqual(JSON.stringify(context.globalState.get("scheduledTasks")), mementoBefore);
+      }
+    } finally {
+      await waitForStartupSave(manager);
+      manager.stopScheduler();
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   test("updateTask rejects switching to global scope while local attachments remain", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
@@ -2519,9 +2619,25 @@ suite("ScheduleManager RunNow Tests", () => {
         [{ source: "local", path: "docs/a.md" }],
       );
 
-      await assert.rejects(() =>
-        manager.updateTask("task-scope-switch", { scope: "global" }),
-      );
+      const before = { ...manager.getTask("task-scope-switch")! };
+      for (const invalidUpdate of [
+        { scope: "global" as const },
+        { attachments: [{ source: "local" as const, path: "../outside.md" }] },
+      ]) {
+        await assert.rejects(() =>
+          manager.updateTask("task-scope-switch", {
+            name: "must not leak",
+            prompt: "changed prompt",
+            cronExpression: "*/10 * * * *",
+            enabled: true,
+            model: "changed-model",
+            promptSource: "local",
+            promptPath: "changed.prompt.md",
+            ...invalidUpdate,
+          }),
+        );
+        assert.deepStrictEqual(manager.getTask("task-scope-switch"), before);
+      }
     } finally {
       try {
         fs.rmSync(tmp, {

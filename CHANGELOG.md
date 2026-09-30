@@ -5,6 +5,19 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.6] - 2026-10-01
+
+### Fixed
+
+- File-backed prompts no longer silently become inline copies when saving unrelated edits, including CRLF prompt files. The form hides file-backed prompt text and retains the selected file and open-file action; switching to Inline is explicit.
+- Rejected scope or attachment updates leave the original task unchanged in memory, preventing invalid edits from leaking into a later save.
+- Task creation/updates, template loading, prompt resolution and attachment normalization reject NUL-containing paths before treating them as allowed or persisting them.
+- Cron date collection stops as soon as the requested results are available, avoiding unnecessary iterator advances and errors after the final result. Non-finite result counts are rejected before starting iteration.
+
+### Internal
+
+- Execution history regression tests now cover rejected-write recovery, best-effort recording, preservation of existing entries, and ordering while persistence is still in flight.
+
 ## [1.7.5] - 2026-09-28
 
 ### Fixed

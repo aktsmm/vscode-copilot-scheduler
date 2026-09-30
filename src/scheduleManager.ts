@@ -1493,6 +1493,9 @@ export class ScheduleManager {
     if (!input.prompt || !input.prompt.trim()) {
       throw new Error(messages.promptRequired());
     }
+    if (input.promptPath?.includes("\0")) {
+      throw new Error(messages.templateLoadError());
+    }
 
     if (input.runAt !== undefined) {
       this.parseRunAt(input.runAt);
@@ -1700,6 +1703,9 @@ export class ScheduleManager {
     if (updates.prompt !== undefined && !updates.prompt.trim()) {
       throw new Error(messages.promptRequired());
     }
+    if (updates.promptPath?.includes("\0")) {
+      throw new Error(messages.templateLoadError());
+    }
 
     const nextRunAt =
       updates.runAt === "" ? undefined : (updates.runAt ?? task.runAt);
@@ -1750,6 +1756,25 @@ export class ScheduleManager {
         "A completed one-time task must be rescheduled before enabling.",
       );
     }
+
+    const nextScope = updates.scope ?? task.scope;
+    const workspaceRoot =
+      updates.scope !== undefined
+        ? this.getPreferredWorkspaceRootPath()
+        : undefined;
+    if (updates.scope === "workspace" && !workspaceRoot) {
+      throw new Error(messages.noWorkspaceOpen());
+    }
+    const shouldUpdateAttachments =
+      updates.attachments !== undefined || (task.attachments?.length ?? 0) > 0;
+    const nextAttachments = shouldUpdateAttachments
+      ? normalizeAttachmentsOrThrow(
+          updates.attachments !== undefined
+            ? updates.attachments
+            : task.attachments,
+          nextScope,
+        )
+      : undefined;
 
     const now = new Date();
     const enabledBefore = task.enabled;
@@ -1811,13 +1836,6 @@ export class ScheduleManager {
       });
     }
     if (updates.scope !== undefined) {
-      const nextScope = updates.scope;
-      const workspaceRoot = this.getPreferredWorkspaceRootPath();
-
-      if (nextScope === "workspace" && !workspaceRoot) {
-        throw new Error(messages.noWorkspaceOpen());
-      }
-
       // Only adjust workspacePath when scope actually changes (or workspacePath is missing).
       // Webview submits scope on every save; we must not overwrite workspacePath on edits.
       if (nextScope !== task.scope) {
@@ -1837,17 +1855,7 @@ export class ScheduleManager {
     if (updates.promptPath !== undefined) {
       task.promptPath = updates.promptPath;
     }
-    // Re-validate on every edit: switching to global scope invalidates local attachments.
-    if (
-      updates.attachments !== undefined ||
-      (task.attachments?.length ?? 0) > 0
-    ) {
-      const nextAttachments = normalizeAttachmentsOrThrow(
-        updates.attachments !== undefined
-          ? updates.attachments
-          : task.attachments,
-        task.scope,
-      );
+    if (nextAttachments) {
       task.attachments =
         nextAttachments.length > 0 ? nextAttachments : undefined;
     }

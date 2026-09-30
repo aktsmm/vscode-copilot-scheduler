@@ -5,6 +5,7 @@ import {
   enqueueExecutionHistoryEntry,
   getExecutionHistoryEntries,
   isExecutionHistoryEntry,
+  recordExecutionHistoryBestEffort,
   resetExecutionHistoryQueueForTests,
   setExecutionHistoryContextForTests,
   type ExecutionHistoryEntry,
@@ -89,6 +90,54 @@ suite("executionHistoryStore", () => {
       frequentEntries[49].executedAt,
       "2026-07-08T00:01:00.000Z",
       "the oldest entry for one task should be evicted without removing other tasks",
+    );
+  });
+
+  test("a rejected history write does not block an already queued append", async () => {
+    const ctx = stubContext();
+    const update = ctx.globalState.update.bind(ctx.globalState);
+    await update("executionHistory", [entry({ taskId: "existing" })]);
+    let attempts = 0;
+    ctx.globalState.update = (key, value) => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error("history write rejected"))
+        : update(key, value);
+    };
+    setExecutionHistoryContextForTests(ctx);
+    const failed = enqueueExecutionHistoryEntry(entry({ taskId: "failed" }));
+    const recovered = enqueueExecutionHistoryEntry(
+      entry({ taskId: "recovered" }),
+    );
+    await assert.rejects(failed, /history write rejected/);
+    await recovered;
+    assert.strictEqual(attempts, 2);
+    assert.deepStrictEqual(
+      getExecutionHistoryEntries().map((historyEntry) => historyEntry.taskId),
+      ["recovered", "existing"],
+    );
+  });
+
+  test("best-effort history failure resolves and later records still persist", async () => {
+    const ctx = stubContext();
+    const update = ctx.globalState.update.bind(ctx.globalState);
+    let rejectNext = true;
+    ctx.globalState.update = (key, value) => {
+      if (rejectNext) {
+        rejectNext = false;
+        return Promise.reject(new Error("best-effort history write rejected"));
+      }
+      return update(key, value);
+    };
+    setExecutionHistoryContextForTests(ctx);
+    await assert.doesNotReject(
+      recordExecutionHistoryBestEffort(entry({ taskId: "failed" })),
+    );
+    assert.deepStrictEqual(getExecutionHistoryEntries(), []);
+    await recordExecutionHistoryBestEffort(entry({ taskId: "recovered" }));
+    assert.deepStrictEqual(
+      getExecutionHistoryEntries().map((historyEntry) => historyEntry.taskId),
+      ["recovered"],
     );
   });
 
@@ -322,6 +371,44 @@ suite("executionHistoryStore", () => {
       (item) => item.taskId === "invalid-next-run",
     );
     assert.strictEqual(roundTripped?.nextRunAtInvalid, true);
+  });
+
+  test("queued history append waits for in-flight persistence before reading", async () => {
+    const ctx = stubContext();
+    const update = ctx.globalState.update.bind(ctx.globalState);
+    let releaseFirst: (() => void) | undefined;
+    let attempts = 0;
+    ctx.globalState.update = (key, value) => {
+      attempts += 1;
+      if (attempts !== 1) return update(key, value);
+      return new Promise<void>((resolve, reject) => {
+        releaseFirst = () => {
+          void Promise.resolve(update(key, value)).then(resolve, reject);
+        };
+      });
+    };
+    setExecutionHistoryContextForTests(ctx);
+    const first = enqueueExecutionHistoryEntry(entry({ taskId: "first" }));
+    const second = enqueueExecutionHistoryEntry(entry({ taskId: "second" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    try {
+      assert.strictEqual(
+        attempts,
+        1,
+        "second write must not overtake the first",
+      );
+      assert.deepStrictEqual(getExecutionHistoryEntries(), []);
+    } finally {
+      assert.ok(releaseFirst, "first persistence must have started");
+      releaseFirst();
+      await Promise.all([first, second]);
+    }
+    assert.strictEqual(attempts, 2);
+    assert.deepStrictEqual(
+      getExecutionHistoryEntries().map((historyEntry) => historyEntry.taskId),
+      ["second", "first"],
+    );
   });
 
   test("serialises concurrent appends via internal queue", async () => {

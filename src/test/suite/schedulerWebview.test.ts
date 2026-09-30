@@ -1757,7 +1757,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("submit converts edited template prompt to inline source", () => {
+  test("submit never implicitly converts a file-backed prompt to inline", () => {
     const scriptPath = path.resolve(
       __dirname,
       "../../../media/schedulerWebview.js",
@@ -1771,18 +1771,155 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
     const expectedTokens = [
       "templatePromptBaseline === null",
-      "templatePromptBaseline !== null",
-      "taskData.prompt !== templatePromptBaseline",
       "strings.promptFileNotLoadedNote",
-      'taskData.promptSource = "inline"',
-      'taskData.promptPath = ""',
+      "promptSource: promptSourceValue",
+      "promptPath: promptPathValue",
     ];
 
     for (const token of expectedTokens) {
       assert.ok(
         sourceContainsToken(submitSource, token),
-        `Expected token not found in submit inline-convert flow: ${token}`,
+        `Expected token not found in submit source-preservation flow: ${token}`,
       );
+    }
+    assert.ok(!submitSource.includes('taskData.promptSource = "inline"'));
+    assert.ok(!submitSource.includes('taskData.promptPath = ""'));
+  });
+
+  test("submit handler preserves file references across model and prompt refresh changes", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const submitSource = extractBlockFromStartToken(
+      source,
+      'taskForm.addEventListener("submit", function (e) {',
+    );
+    const callback = submitSource.slice(submitSource.indexOf("function (e)"));
+    for (const promptSource of ["local", "global", "inline"]) {
+      for (const baseline of ["old\r\ntext", "latest file text", "", null]) {
+        const posted: Array<{ type: string; data: Partial<ScheduledTask> }> =
+          [];
+        const errors: string[] = [];
+        const original = {
+          id: "edit-file",
+          name: "file task",
+          prompt: "old\r\ntext",
+          cronExpression: "*/5 * * * *",
+          promptSource: promptSource === "inline" ? "local" : promptSource,
+          promptPath: "review.prompt.md",
+          scope: "workspace",
+          model: "old-model",
+          modelReasoningEffort: "low",
+          enabled: false,
+        };
+        const fields: Record<string, { value?: string; checked?: boolean }> = {
+          "task-name": { value: original.name },
+          "prompt-text": { value: baseline === "" ? "" : "old\ntext" },
+          "run-first": { checked: false },
+        };
+        const context = {
+          document: {
+            getElementById: (id: string) => fields[id] ?? null,
+            querySelector: (selector: string) => ({
+              value: selector.includes("prompt-source")
+                ? promptSource
+                : "workspace",
+            }),
+          },
+          pendingSubmit: false,
+          formErr: null,
+          agentSelect: null,
+          editingTaskId: original.id,
+          pendingAgentValue: "",
+          getCurrentModelSelection: () => ({
+            model: "new-model",
+            modelReasoningEffort: "high",
+          }),
+          pendingModelName: "",
+          pendingModelVendor: "",
+          pendingModelFamily: "",
+          pendingModelVersion: "",
+          pendingModelReasoningEffort: "",
+          templateSelect: {
+            value: promptSource === "inline" ? "" : original.promptPath,
+          },
+          pendingTemplatePath: original.promptPath,
+          allowedTimeEnabledInput: null,
+          allowedTimeStartInput: null,
+          allowedTimeEndInput: null,
+          isOneTimeMode: () => false,
+          runAtInput: null,
+          editingTaskSnapshot: original,
+          editingTaskNormalizedSnapshot: null,
+          afterRunSelect: null,
+          cronExpression: { value: original.cronExpression },
+          autoModeInput: null,
+          chatSessionSelect: null,
+          jitterSecondsInput: null,
+          maxExecutionsPerDayInput: null,
+          attachmentsState: [],
+          editingTaskEnabled: false,
+          strings: {
+            promptFileNotLoadedNote: "not loaded",
+            promptRequired: "empty prompt",
+          },
+          templateLoadingPath: "",
+          templatePromptBaseline: baseline,
+          submitBtn: { disabled: false },
+          defaultJitterSeconds: 0,
+          serializeAttachments: (value: unknown) => JSON.stringify(value ?? []),
+          clearInvalidField: () => undefined,
+          failValidation: (message: string, field: unknown) => {
+            errors.push(message);
+            assert.strictEqual(
+              field,
+              promptSource === "inline"
+                ? fields["prompt-text"]
+                : context.templateSelect,
+            );
+          },
+          vscode: {
+            postMessage: (message: (typeof posted)[number]) =>
+              posted.push(message),
+          },
+        };
+        const factory = new Function(
+          ...Object.keys(context),
+          [
+            extractFunctionSource(source, "boundedNumber"),
+            extractFunctionSource(source, "normalizeTaskForEditDiff"),
+            extractFunctionSource(source, "buildTaskUpdateData"),
+            `return (${callback});`,
+          ].join("\n"),
+        );
+        const submit = factory(...Object.values(context)) as (event: {
+          preventDefault: () => void;
+        }) => void;
+        submit({ preventDefault: () => undefined });
+        if (promptSource !== "inline" && baseline === null) {
+          assert.deepStrictEqual(errors, ["not loaded"]);
+          assert.strictEqual(posted.length, 0);
+          continue;
+        }
+        if (baseline === "") {
+          assert.deepStrictEqual(errors, ["empty prompt"]);
+          assert.strictEqual(posted.length, 0);
+          continue;
+        }
+        assert.deepStrictEqual(errors, []);
+        assert.strictEqual(posted.length, 1);
+        assert.strictEqual(posted[0].type, "updateTask");
+        assert.strictEqual(posted[0].data.model, "new-model");
+        assert.strictEqual(posted[0].data.modelReasoningEffort, "high");
+        if (promptSource === "inline") {
+          assert.strictEqual(posted[0].data.promptSource, "inline");
+          assert.strictEqual(posted[0].data.promptPath, "");
+        } else {
+          assert.strictEqual(posted[0].data.promptSource, undefined);
+          assert.strictEqual(posted[0].data.promptPath, undefined);
+        }
+      }
     }
   });
 
@@ -1802,9 +1939,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'source === "inline"',
       "loadingCurrentTemplate",
       "templatePromptBaseline === null",
-      'String(promptText.value || "") === templatePromptBaseline',
       "strings.promptFileExecutionNote",
-      "strings.promptFileWillBecomeInline",
       "strings.promptFileNotLoadedNote",
     ];
 
@@ -1975,7 +2110,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
   });
 
-  test("prompt field is read-only for file-backed prompt sources", () => {
+  test("prompt field is hidden and excluded from native validation for file-backed sources", () => {
     const scriptSource = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
       "utf8",
@@ -1988,6 +2123,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const expectedTokens = [
       'var isFileBackedSource = source === "local" || source === "global"',
       "promptText.readOnly = isFileBackedSource",
+      "promptText.disabled = isFileBackedSource",
+      'inlineFields.style.display = isFileBackedSource ? "none" : "block"',
+      "rescueFocusFrom(inlineFields, sourceInput)",
       'promptText.setAttribute("aria-readonly", "true")',
       'promptText.removeAttribute("aria-readonly")',
     ];
@@ -1996,6 +2134,62 @@ suite("SchedulerWebview Script Contract Tests", () => {
         sourceContainsToken(noticeSource, token),
         `Expected token not found in prompt read-only flow: ${token}`,
       );
+    }
+  });
+
+  test("prompt source transitions hide file text and restore inline native validation", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const attributes = new Map<string, string>();
+    const prompt = {
+      value: "snapshot",
+      readOnly: false,
+      disabled: false,
+      setAttribute: (key: string, value: string) => attributes.set(key, value),
+      removeAttribute: (key: string) => attributes.delete(key),
+    };
+    const inlineFields = { style: { display: "block" } };
+    const sourceInput = { value: "inline" };
+    const elements: Record<string, unknown> = {
+      "prompt-file-notice": { style: {}, className: "" },
+      "prompt-file-notice-message": {},
+      "prompt-file-notice-meta": { style: {} },
+      "prompt-text": prompt,
+      "prompt-inline-fields": inlineFields,
+    };
+    const context = {
+      document: {
+        getElementById: (id: string) => elements[id] ?? null,
+        querySelector: () => sourceInput,
+      },
+      strings: { promptFileExecutionNote: "file reference" },
+      templateSelect: { value: "review.prompt.md" },
+      templateLoadingPath: "",
+      templatePromptBaseline: "snapshot",
+      loadLatestPromptBtn: null,
+      openPromptFileBtn: null,
+      getActivePromptFilePreview: () => null,
+      buildPromptFileMeta: () => "",
+      rescueFocusFrom: () => undefined,
+    };
+    const updateNotice = new Function(
+      ...Object.keys(context),
+      `${extractFunctionSource(source, "updatePromptFileNotice")}\nreturn updatePromptFileNotice;`,
+    )(...Object.values(context)) as () => void;
+    for (const promptSource of ["inline", "local", "global", "inline"]) {
+      sourceInput.value = promptSource;
+      updateNotice();
+      const fileBacked = promptSource !== "inline";
+      assert.strictEqual(
+        inlineFields.style.display,
+        fileBacked ? "none" : "block",
+      );
+      assert.strictEqual(prompt.disabled, fileBacked);
+      assert.strictEqual(prompt.readOnly, fileBacked);
+      assert.strictEqual(attributes.has("aria-readonly"), fileBacked);
+      assert.strictEqual(prompt.value, "snapshot");
     }
   });
 
@@ -2014,7 +2208,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "if (templateLoadingPath) return",
       "getActivePromptFilePreview()",
       'preview.source !== "file"',
-      "if (promptTextInput.value !== preview.prompt)",
+      "normalizePromptNewlines(promptTextInput.value) !== normalizePromptNewlines(preview.prompt)",
       "promptTextInput.value = preview.prompt",
       "setTemplatePromptBaseline(preview.prompt)",
     ];
@@ -2036,6 +2230,44 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(
       sourceContainsToken(scriptSource, "syncEditingPromptFromPreview();"),
       "syncEditingPromptFromPreview is never called",
+    );
+  });
+
+  test("file-backed prompt baseline ignores CRLF vs textarea LF differences", () => {
+    const scriptSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const helperSource = extractBlockFromStartToken(
+      scriptSource,
+      "function normalizePromptNewlines(value) {",
+    );
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const normalize = new Function(
+      `${helperSource}; return normalizePromptNewlines;`,
+    )() as (value: unknown) => string;
+    assert.strictEqual(normalize("a\r\nb\rc\nd"), "a\nb\nc\nd");
+    assert.strictEqual(normalize(undefined), "");
+
+    const baselineSource = extractBlockFromStartToken(
+      scriptSource,
+      "function setTemplatePromptBaseline(value) {",
+    );
+    assert.ok(
+      sourceContainsToken(baselineSource, "normalizePromptNewlines(value)"),
+      "Baseline must be stored with LF newlines so it matches textarea.value",
+    );
+
+    const noticeSource = extractBlockFromStartToken(
+      scriptSource,
+      "function updatePromptFileNotice() {",
+    );
+    assert.ok(
+      sourceContainsToken(
+        noticeSource,
+        "normalizePromptNewlines(promptText.value) !== normalizePromptNewlines(preview.prompt)",
+      ),
+      "Latest-prompt availability must compare newline-normalized text",
     );
   });
 
@@ -2394,7 +2626,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     for (const token of [
       "failValidation(strings.taskNameRequired",
       "failValidation(strings.templateRequired",
-      "failValidation(strings.promptRequired",
+      'strings.promptRequired || "", promptSourceValue === "inline" ? promptTextEl : templateSelect',
       "cronExpression,",
       "allowedTimeStartInput,",
       "allowedTimeEndInput,",

@@ -224,8 +224,17 @@
     if (testBtn) testBtn.disabled = !!templateLoadingPath;
   }
 
+  // textarea.value always uses LF, so CRLF file text must be normalized before comparing.
+  function normalizePromptNewlines(value) {
+    return String(value === undefined || value === null ? "" : value).replace(
+      /\r\n?/g,
+      "\n",
+    );
+  }
+
   function setTemplatePromptBaseline(value) {
-    templatePromptBaseline = typeof value === "string" ? value : null;
+    templatePromptBaseline =
+      typeof value === "string" ? normalizePromptNewlines(value) : null;
     updatePromptFileNotice();
   }
 
@@ -295,7 +304,10 @@
       return;
     }
 
-    if (promptTextInput.value !== preview.prompt) {
+    if (
+      normalizePromptNewlines(promptTextInput.value) !==
+      normalizePromptNewlines(preview.prompt)
+    ) {
       promptTextInput.value = preview.prompt;
     }
     // Always re-anchor the baseline: it may have been cleared by an error toast.
@@ -353,6 +365,12 @@
     // File-backed prompts stay read-only so the task keeps following the file.
     var isFileBackedSource = source === "local" || source === "global";
     promptText.readOnly = isFileBackedSource;
+    promptText.disabled = isFileBackedSource;
+    var inlineFields = document.getElementById("prompt-inline-fields");
+    if (inlineFields) {
+      if (isFileBackedSource) rescueFocusFrom(inlineFields, sourceInput);
+      inlineFields.style.display = isFileBackedSource ? "none" : "block";
+    }
     if (isFileBackedSource) {
       promptText.setAttribute("aria-readonly", "true");
     } else {
@@ -380,11 +398,8 @@
     } else if (templatePromptBaseline === null) {
       message = strings.promptFileNotLoadedNote || "";
       isWarning = true;
-    } else if (String(promptText.value || "") === templatePromptBaseline) {
-      message = strings.promptFileExecutionNote || "";
     } else {
-      message = strings.promptFileWillBecomeInline || "";
-      isWarning = true;
+      message = strings.promptFileExecutionNote || "";
     }
 
     var preview = getActivePromptFilePreview();
@@ -393,7 +408,8 @@
       !!preview &&
       preview.source === "file" &&
       typeof preview.prompt === "string" &&
-      String(promptText.value || "") !== preview.prompt;
+      normalizePromptNewlines(promptText.value) !==
+        normalizePromptNewlines(preview.prompt);
 
     messageElement.textContent = message;
     metaElement.textContent = meta;
@@ -1912,17 +1928,11 @@
 
       var promptValue = (taskData.prompt || "").trim();
       if (!promptValue) {
-        failValidation(strings.promptRequired || "", promptTextEl);
+        failValidation(
+          strings.promptRequired || "",
+          promptSourceValue === "inline" ? promptTextEl : templateSelect,
+        );
         return;
-      }
-
-      if (
-        promptSourceValue !== "inline" &&
-        templatePromptBaseline !== null &&
-        taskData.prompt !== templatePromptBaseline
-      ) {
-        taskData.promptSource = "inline";
-        taskData.promptPath = "";
       }
 
       var cronValue = (taskData.cronExpression || "").trim();

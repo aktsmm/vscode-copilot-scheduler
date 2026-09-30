@@ -1543,7 +1543,6 @@ export class SchedulerWebview {
       labelPromptFileDiff: messages.labelPromptFileDiff(),
       labelPromptFileUnavailable: messages.labelPromptFileUnavailable(),
       promptFileExecutionNote: messages.promptFileExecutionNote(),
-      promptFileWillBecomeInline: messages.promptFileWillBecomeInline(),
       promptFileNotLoadedNote: messages.promptFileNotLoadedNote(),
       promptFileStaleHint: messages.promptFileStaleHint(),
       actionLoadLatestPrompt: messages.actionLoadLatestPrompt(),
@@ -2611,8 +2610,10 @@ export class SchedulerWebview {
             </div>
 
             <div class="form-group col-12" id="prompt-group">
-              <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
-              <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
+              <div id="prompt-inline-fields">
+                <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
+                <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
+              </div>
               <div id="prompt-file-notice" class="prompt-file-notice" style="display:none;">
                 <div id="prompt-file-notice-live" role="status" aria-live="polite" aria-atomic="true">
                   <div id="prompt-file-notice-message"></div>

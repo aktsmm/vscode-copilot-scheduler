@@ -49,7 +49,7 @@ export function getFirstDistinctCronRuns(
   count: number,
 ): Date[] {
   const expressions = splitCronExpressions(expression);
-  if (expressions.length === 0 || count <= 0) {
+  if (expressions.length === 0 || !Number.isFinite(count) || count <= 0) {
     return [];
   }
 
@@ -79,6 +79,7 @@ export function getFirstDistinctCronRuns(
     if (!seenMinuteKeys.has(earliestMinuteKey)) {
       seenMinuteKeys.add(earliestMinuteKey);
       runs.push(earliest);
+      if (runs.length >= count) break;
     }
 
     for (const state of states) {

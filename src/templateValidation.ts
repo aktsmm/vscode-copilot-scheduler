@@ -32,7 +32,11 @@ export function validateTemplateLoadRequest(
 ): TemplateLoadValidationResult {
   const { templatePath, source } = input;
 
-  if (!templatePath || typeof templatePath !== "string") {
+  if (
+    !templatePath ||
+    typeof templatePath !== "string" ||
+    templatePath.includes("\0")
+  ) {
     return { ok: false, reason: "invalidPath" };
   }
 

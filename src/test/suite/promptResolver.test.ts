@@ -5,6 +5,7 @@ import * as path from "path";
 import {
   computePromptHash,
   getPromptTemplateDisplayName,
+  isPathInsideBaseDir,
   isPromptTemplateMarkdownFile,
   resolveAllowedPathInBaseDir,
   resolveLocalPromptCandidates,
@@ -83,6 +84,38 @@ function createDirectoryEscapeLink(targetDir: string, linkPath: string): void {
 }
 
 suite("Prompt Resolver Tests", () => {
+  test("NUL paths are rejected by containment and all prompt resolution routes", () => {
+    const workspace = path.resolve("nul-path-workspace");
+    const base = path.join(workspace, ".github", "prompts");
+    const invalidRoot = base + "\0";
+    const relativePath = "bad\0.prompt.md";
+    assert.strictEqual(
+      isPathInsideBaseDir(base, path.join(base, relativePath)),
+      false,
+    );
+    assert.strictEqual(
+      isPathInsideBaseDir(invalidRoot, path.join(invalidRoot, "ok.md")),
+      false,
+    );
+    assert.strictEqual(
+      resolveAllowedPathInBaseDir(base, relativePath),
+      undefined,
+    );
+    assert.strictEqual(
+      resolveAllowedPathInBaseDir(invalidRoot, "ok.md"),
+      undefined,
+    );
+    assert.strictEqual(resolveGlobalPromptPath(base, relativePath), undefined);
+    assert.strictEqual(
+      resolveLocalPromptPath([workspace], relativePath),
+      undefined,
+    );
+    assert.deepStrictEqual(
+      resolveLocalPromptCandidates([workspace], relativePath),
+      [],
+    );
+  });
+
   test("resolveAllowedPathInBaseDir rejects traversal", () => {
     const base = path.join("/tmp", "ws");
     const resolved = resolveAllowedPathInBaseDir(base, "../secret.md");

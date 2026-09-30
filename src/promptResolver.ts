@@ -97,6 +97,7 @@ export function isPathInsideBaseDir(
   baseDir: string,
   targetPath: string,
 ): boolean {
+  if (baseDir.includes("\0") || targetPath.includes("\0")) return false;
   const baseReal = tryResolveRealPathNormalized(baseDir);
   const targetReal = tryResolveRealPathNormalized(targetPath);
 

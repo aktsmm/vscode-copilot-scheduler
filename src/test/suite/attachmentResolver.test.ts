@@ -20,6 +20,20 @@ function makeAttachments(count: number): TaskAttachment[] {
 }
 
 suite("Attachment Resolver", () => {
+  test("NUL attachment paths are rejected before persistence", () => {
+    for (const source of ["local", "global"] as const) {
+      const attachmentPath = "docs/bad\0.md";
+      assert.strictEqual(normalizeAttachmentPath(attachmentPath), undefined);
+      const normalized = normalizeAttachments(
+        [{ source, path: attachmentPath }],
+        "workspace",
+      );
+      assert.deepStrictEqual(normalized.attachments, []);
+      assert.strictEqual(normalized.rejected.length, 1);
+      assert.strictEqual(normalized.rejected[0].reason, "invalidPath");
+    }
+  });
+
   test("normalizeAttachmentPath rejects absolute paths and traversal", () => {
     assert.strictEqual(normalizeAttachmentPath("docs/a.md"), "docs/a.md");
     assert.strictEqual(normalizeAttachmentPath(".\\docs\\a.md"), "docs/a.md");

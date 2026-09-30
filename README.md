@@ -102,7 +102,7 @@ Create a one-time task by sending `runAt` as an ISO 8601 date-time with an expli
 
 `Auto` and internal utility model ids remain selectable but do not inherit reasoning-effort options from the model named in their metadata.
 
-Create/update also accept `attachments`: up to 10 entries of `{ source: "local" | "global", path }`, where the path is relative to the task's workspace folder or to the global prompts folder. Absolute paths, `..`, denied files, and `local` attachments on a global task are rejected instead of being saved.
+Create/update also accept `attachments`: up to 10 entries of `{ source: "local" | "global", path }`, where the path is relative to the task's workspace folder or to the global prompts folder. Absolute paths, `..`, NUL characters, denied files, and `local` attachments on a global task are rejected instead of being saved.
 
 In agent mode, Copilot can also choose these tools from natural-language requests. Examples:
 
@@ -195,9 +195,10 @@ Store prompt templates for reuse:
 
 - **Local**: `.github/prompts/*.md` in your workspace
 - **Global**: VS Code user prompts folder (or the folder set in `copilotScheduler.globalPromptsPath`)
-- The edit form keeps the prompt field **read-only** while `Local`/`Global` is selected, and refreshes it with the current prompt file content when you reopen the form or when the file changes. Use **Open prompt file** to edit the source file. Switch the source to **Inline** if you want to hand-edit the text on the task itself.
+- The edit form shows the selected file and **Open prompt file** action while `Local`/`Global` is selected; the prompt body is hidden. Use that action to edit the source file. Switch the source to **Inline** to show and edit the text on the task itself. Changing the model or other task settings preserves the file reference.
 - The panel preview reads saved disk content only. At execution time, an open editor buffer is preferred; otherwise the latest saved file is read.
 - A task only becomes **Inline** when you select the Inline source. Selecting a template keeps the task following that file.
+- Task creation/updates, template loading and prompt path resolution reject paths containing NUL characters, even when a path is cached or lexically inside an allowed root.
 
 Global custom agents are auto-discovered from the VS Code user prompts/customization folder and `~/.copilot/agents` when `copilotScheduler.globalAgentsPath` is empty.
 

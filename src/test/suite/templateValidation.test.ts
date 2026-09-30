@@ -25,6 +25,24 @@ function createDirectoryEscapeLink(targetDir: string, linkPath: string): void {
 }
 
 suite("Template Load Validation Tests", () => {
+  test("Rejects cached template paths containing NUL before root validation", () => {
+    const ws = path.resolve("template-validation-workspace");
+    const globalRoot = path.resolve("template-validation-global");
+    for (const source of ["local", "global"] as const) {
+      const root =
+        source === "local" ? path.join(ws, ".github", "prompts") : globalRoot;
+      const templatePath = path.join(root, "bad\0.prompt.md");
+      const result = validateTemplateLoadRequest({
+        templatePath,
+        source,
+        cachedTemplates: [{ path: templatePath, name: "bad", source }],
+        workspaceFolderPaths: [ws],
+        globalPromptsPath: globalRoot,
+      });
+      assert.deepStrictEqual(result, { ok: false, reason: "invalidPath" });
+    }
+  });
+
   test("Accepts cached local template under .github/prompts", () => {
     const ws = path.join("/tmp", "ws");
     const templatePath = path.join(ws, ".github", "prompts", "a.md");

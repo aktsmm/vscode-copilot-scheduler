@@ -70,7 +70,7 @@ function toPosixSeparators(value: string): string {
  * Returns undefined for anything that is not a safe workspace-relative path.
  */
 export function normalizeAttachmentPath(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+  if (typeof value !== "string" || value.includes("\0")) {
     return undefined;
   }
 
