@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Task creation/updates, template loading, prompt resolution and attachment normalization reject NUL-containing paths before treating them as allowed or persisting them.
 - Cron date collection stops as soon as the requested results are available, avoiding unnecessary iterator advances and errors after the final result. Non-finite result counts are rejected before starting iteration.
 
+### Security
+
+- Updated development-only transitive dependencies to patched versions of `brace-expansion` (1.1.21 / 2.1.7 / 5.0.12), `fast-uri` (3.1.8) and `markdown-it` (14.3.2).
+
 ### Internal
 
 - Execution history regression tests now cover rejected-write recovery, best-effort recording, preservation of existing entries, and ordering while persistence is still in flight.
