@@ -2551,7 +2551,9 @@ suite("ScheduleManager RunNow Tests", () => {
   });
 
   test("task mutations reject NUL prompt paths without changing persisted state", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-path-"));
+    const tmp = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-scheduler-path-"),
+    );
     const context = createMockContext(tmp);
     const manager = new ScheduleManager(context);
     try {
@@ -2569,27 +2571,41 @@ suite("ScheduleManager RunNow Tests", () => {
       const before = JSON.stringify(manager.getAllTasks());
       const storedPath = path.join(tmp, "scheduledTasks.json");
       const storedBefore = fs.readFileSync(storedPath, "utf8");
-      const mementoBefore = JSON.stringify(context.globalState.get("scheduledTasks"));
+      const mementoBefore = JSON.stringify(
+        context.globalState.get("scheduledTasks"),
+      );
       for (const promptSource of ["local", "global"] as const) {
-        await assert.rejects(() => manager.createTask({
-          ...input,
-          name: "must not be created",
-          promptSource,
-          promptPath: "bad\0.prompt.md",
-        }));
-        await assert.rejects(() => manager.updateTask(task.id, {
-          name: "must not change",
-          promptSource,
-          promptPath: "bad\0.prompt.md",
-        }));
+        await assert.rejects(() =>
+          manager.createTask({
+            ...input,
+            name: "must not be created",
+            promptSource,
+            promptPath: "bad\0.prompt.md",
+          }),
+        );
+        await assert.rejects(() =>
+          manager.updateTask(task.id, {
+            name: "must not change",
+            promptSource,
+            promptPath: "bad\0.prompt.md",
+          }),
+        );
         assert.strictEqual(JSON.stringify(manager.getAllTasks()), before);
         assert.strictEqual(fs.readFileSync(storedPath, "utf8"), storedBefore);
-        assert.strictEqual(JSON.stringify(context.globalState.get("scheduledTasks")), mementoBefore);
+        assert.strictEqual(
+          JSON.stringify(context.globalState.get("scheduledTasks")),
+          mementoBefore,
+        );
       }
     } finally {
       await waitForStartupSave(manager);
       manager.stopScheduler();
-      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      fs.rmSync(tmp, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
     }
   });
 
