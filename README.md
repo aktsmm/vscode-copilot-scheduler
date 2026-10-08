@@ -102,6 +102,20 @@ Create a one-time task by sending `runAt` as an ISO 8601 date-time with an expli
 
 `Auto` and internal utility model ids remain selectable but do not inherit reasoning-effort options from the model named in their metadata.
 
+Models registered with VS Code Chat by additional providers, including Codex Bridge, BYOK and local LLM providers, are available alongside Copilot models. The model picker groups models by provider, then offers their quality variants separately. `kind=list_models` returns each model's `vendor`; create/update accept `modelVendor` to disambiguate identical model ids across providers. Exact ids are preferred over normalized aliases; ambiguous id, alias or name matches across providers require `modelVendor`. Saved provider identities are preserved during model resolution. A failed Copilot-only catalog lookup does not prevent discovery of other providers, and a failed full-catalog lookup retains successfully discovered Copilot models.
+
+For an explicitly selected additional provider, an unavailable model or a rejected Chat dispatch blocks the run rather than retrying with the default model or another provider. Provider authentication, connectivity and support for the selected Chat/Agent mode are still required. A successful dispatch does not prove that the provider completed its response. Additional providers do not inherit Copilot-specific experimental reasoning settings: configure their supported options through the provider's own controls. Native Claude/Codex agent-harness scheduling is not part of this integration.
+
+#### Additional Provider Smoke Check
+
+Automated discovery/selection/dispatch tests use synthetic providers; they do not certify provider authentication, inference or host UI behavior. Verify a provider in an empty isolated VS Code profile with separate storage, without importing saved tasks:
+
+1. Install the candidate Scheduler package and the provider, and complete authentication directly in the provider UI. Compare its picker entry with `scheduler_query` using `kind=list_models` (`id` and `vendor`).
+2. Create one disposable **disabled workspace** task with that `model` and `modelVendor`, no attachments, and a harmless prompt such as `Reply exactly PROVIDER_SMOKE_OK`. Read it back and confirm the same provider.
+3. Run only that task once. Verify the selected provider in Chat and its actual response separately from the tool's dispatch result; the task must remain disabled.
+4. Make that provider unavailable in the isolated profile, then run the same task. Expect a blocked dispatch, not a switch to Copilot or another provider. Restore the provider and confirm the saved selection is retained after a catalog refresh.
+5. Delete only the disposable task and owned isolated profile/storage. Do not test against real saved tasks or export credentials.
+
 Create/update also accept `attachments`: up to 10 entries of `{ source: "local" | "global", path }`, where the path is relative to the task's workspace folder or to the global prompts folder. Absolute paths, `..`, NUL characters, denied files, and `local` attachments on a global task are rejected instead of being saved.
 
 In agent mode, Copilot can also choose these tools from natural-language requests. Examples:

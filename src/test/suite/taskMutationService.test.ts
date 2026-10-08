@@ -540,7 +540,82 @@ suite("taskMutationService model resolution", () => {
     assert.match(result.warning ?? "", /catalog offline/);
   });
 
-  test("resolver rejects models the Webview picker hides", async () => {
+  test("resolver prefers an exact opaque id over another provider's normalized alias", async () => {
+    const resolver = catalogResolver([
+      fakeModel({
+        id: "shared_model",
+        name: "Shared",
+        family: "shared",
+        vendor: "copilot",
+        version: "9",
+      }),
+      fakeModel({
+        id: "shared-model",
+        name: "Shared",
+        family: "shared",
+        vendor: "ollama",
+        version: "1",
+      }),
+    ]);
+    const result = await resolver({ model: "shared-model" });
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.strictEqual(result.selection.model, "shared-model");
+      assert.strictEqual(result.selection.modelVendor, "ollama");
+    }
+  });
+
+  test("resolver rejects cross-provider aliases without a provider", async () => {
+    const resolver = catalogResolver([
+      fakeModel({ id: "shared_model", name: "Shared", vendor: "copilot" }),
+      fakeModel({ id: "shared-model", name: "Shared", vendor: "ollama" }),
+    ]);
+    for (const requested of [
+      { model: "SHARED MODEL" },
+      { modelName: "Shared" },
+    ]) {
+      const result = await resolver(requested);
+      assert.strictEqual(result.ok, false);
+    }
+    const scoped = await resolver({
+      model: "SHARED MODEL",
+      modelVendor: "ollama",
+    });
+    assert.strictEqual(scoped.ok, true);
+    if (scoped.ok) assert.strictEqual(scoped.selection.modelVendor, "ollama");
+  });
+
+  test("resolver warns that unverified explicit providers stop rather than use default", async () => {
+    const resolver = catalogResolver([], "fallback");
+    const result = await resolver({ model: "local", modelVendor: "ollama" });
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.strictEqual(result.selection.modelVendor, "ollama");
+      assert.match(result.warnings.join(" "), /additional providers.*block/i);
+      assert.doesNotMatch(
+        result.warnings.join(" "),
+        /falls back to the default/i,
+      );
+    }
+  });
+
+  test("resolver requires a provider for duplicate model ids", async () => {
+    const resolver = catalogResolver([
+      fakeModel({ id: "shared", vendor: "copilot" }),
+      fakeModel({ id: "shared", vendor: "openai-codex" }),
+    ]);
+    const ambiguous = await resolver({ model: "shared" });
+    assert.strictEqual(ambiguous.ok, false);
+    const scoped = await resolver({
+      model: "shared",
+      modelVendor: "openai-codex",
+    });
+    assert.strictEqual(scoped.ok, true);
+    if (scoped.ok)
+      assert.strictEqual(scoped.selection.modelVendor, "openai-codex");
+  });
+
+  test("resolver accepts additional providers offered by the Webview picker", async () => {
     const rawCatalog: ModelInfo[] = [
       fakeModel(),
       fakeModel({
@@ -561,15 +636,8 @@ suite("taskMutationService model resolution", () => {
       ...baseInput(),
       model: "claude-code-opus",
     });
-    assertFail(hidden);
-    assert.strictEqual(hidden.reason, "validation");
-    const offeredIds = hidden.message.split("Available model ids:")[1] ?? "";
-    assert.match(offeredIds, /claude-sonnet-4/);
-    assert.strictEqual(
-      offeredIds.includes("claude-code-opus"),
-      false,
-      "a picker-hidden model must not be offered back as a valid id",
-    );
+    assertOk(hidden);
+    assert.strictEqual(fake.lastCreateInput?.model, "claude-code-opus");
 
     const visible = await c.createTask({
       ...baseInput(),

@@ -13,7 +13,6 @@ const NAMED_VARIANT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^low(?:[-\s]+reasoning)?$/iu, label: "Low" },
 ];
 
-const NON_DEFAULT_PICKER_PATTERNS: RegExp[] = [/claude(?:[\s-]*)code/iu];
 const COPILOT_VENDOR_KEYS = new Set([
   "copilot",
   "github-copilot",
@@ -30,6 +29,7 @@ export type ModelPickerVariant = {
 export type ModelPickerGroup = {
   key: string;
   label: string;
+  vendor: string;
   variants: ModelPickerVariant[];
 };
 
@@ -114,25 +114,6 @@ export function isCopilotCliModel(model: ModelInfo): boolean {
     (value) =>
       typeof value === "string" && /copilot(?:[\s-]*)cli/iu.test(value),
   );
-}
-
-export function isNonDefaultPickerModel(model: ModelInfo): boolean {
-  const values = [
-    model.id,
-    model.name,
-    model.label,
-    model.vendor,
-    model.family,
-  ];
-  return values.some(
-    (value) =>
-      typeof value === "string" &&
-      NON_DEFAULT_PICKER_PATTERNS.some((pattern) => pattern.test(value)),
-  );
-}
-
-function isCopilotVendorModel(model: ModelInfo): boolean {
-  return COPILOT_VENDOR_KEYS.has(normalizeKey(model.vendor));
 }
 
 function maybeStripDateSuffix(value: string): string | undefined {
@@ -936,45 +917,7 @@ export function normalizeModelCatalog(
 export function filterPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
-  const expandedCatalog = filterExpandedPickerModelCatalog(models);
-  const allowedGroupKeys = new Set(
-    expandedCatalog
-      .filter((model) => {
-        if (!model || typeof model.id !== "string") {
-          return false;
-        }
-
-        if (model.id.trim().length === 0) {
-          return false;
-        }
-
-        return isCopilotVendorModel(model) && !isNonDefaultPickerModel(model);
-      })
-      .map((model) => getModelGroupKey(model)),
-  );
-
-  return expandedCatalog.filter((model) => {
-    if (!model || typeof model.id !== "string") {
-      return false;
-    }
-
-    if (model.id.trim().length === 0) {
-      return true;
-    }
-
-    if (isNonDefaultPickerModel(model)) {
-      return false;
-    }
-
-    if (isCopilotVendorModel(model)) {
-      return true;
-    }
-
-    return (
-      allowedGroupKeys.has(getModelGroupKey(model)) &&
-      isRuntimeVariantModel(model)
-    );
-  });
+  return filterExpandedPickerModelCatalog(models);
 }
 
 export function filterExpandedPickerModelCatalog(
@@ -1000,7 +943,7 @@ export function buildModelPickerGroups(
   const groupedModels = new Map<string, ModelInfo[]>();
 
   for (const model of models) {
-    const groupKey = getModelGroupKey(model);
+    const groupKey = JSON.stringify([model.vendor, getModelGroupKey(model)]);
     const existing = groupedModels.get(groupKey);
     if (existing) {
       existing.push(model);
@@ -1039,7 +982,8 @@ export function buildModelPickerGroups(
             ? index === 0
               ? "Default"
               : model.label || model.name || model.id
-            : buildModelDetailLabel(model, orderedGroupModels) ||
+            : formatModelDetail(getModelVariantKey(model)) ||
+              buildModelDetailLabel(model, orderedGroupModels) ||
               model.label ||
               model.name ||
               model.id
@@ -1067,6 +1011,7 @@ export function buildModelPickerGroups(
     result.push({
       key: groupKey,
       label,
+      vendor: firstModel.vendor,
       variants,
     });
   }
@@ -1127,7 +1072,11 @@ export function findBestMatchingModel(
 
   const selectableModels = availableModels.filter(
     (model) =>
-      !!model && typeof model.id === "string" && model.id.trim().length > 0,
+      !!model &&
+      typeof model.id === "string" &&
+      model.id.trim().length > 0 &&
+      (!normalizedSelection.modelVendor ||
+        model.vendor === normalizedSelection.modelVendor),
   );
   if (selectableModels.length === 0) {
     return undefined;
@@ -1144,7 +1093,11 @@ export function findBestMatchingModel(
     return undefined;
   }
 
-  const ranked = candidateModels
+  const exactModels = candidateModels.filter(
+    (model) => model.id === normalizedSelection.model,
+  );
+  const matchingModels = exactModels.length > 0 ? exactModels : candidateModels;
+  const ranked = matchingModels
     .map((model) => ({
       model,
       score: scoreModelMatch(normalizedSelection, model),
@@ -1166,5 +1119,11 @@ export function findBestMatchingModel(
       return left.model.name.localeCompare(right.model.name);
     });
 
+  if (
+    !normalizedSelection.modelVendor &&
+    new Set(ranked.map((entry) => entry.model.vendor)).size > 1
+  ) {
+    return undefined;
+  }
   return ranked[0]?.model;
 }

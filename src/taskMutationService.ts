@@ -261,14 +261,37 @@ export function createModelSelectionResolver(
       };
     }
 
-    const matched = findBestMatchingModel(normalized, catalog.models);
+    const providerModels = normalized.modelVendor
+      ? catalog.models.filter(
+          (model) => model.vendor === normalized.modelVendor,
+        )
+      : catalog.models;
+    const exactModels = normalized.model
+      ? providerModels.filter((model) => model.id === normalized.model)
+      : [];
+    const candidateModels =
+      exactModels.length > 0 ? exactModels : providerModels;
+    if (!normalized.modelVendor) {
+      const vendors = new Set(
+        candidateModels
+          .filter((model) => !!findBestMatchingModel(normalized, [model]))
+          .map((model) => model.vendor),
+      );
+      if (vendors.size > 1) {
+        return {
+          ok: false,
+          message: `Ambiguous model selection: ${normalized.model || normalized.modelName}. Specify modelVendor from scheduler_query kind=list_models (${Array.from(vendors).join(", ")}).`,
+        };
+      }
+    }
+    const matched = findBestMatchingModel(normalized, candidateModels);
     if (!matched) {
       if (catalog.source !== "api") {
         return {
           ok: true,
           selection: normalized,
           warnings: [
-            "The Language Model API is unavailable, so the requested model could not be verified. It is resolved again at execution time and falls back to the default model when it does not exist.",
+            "The Language Model API is unavailable, so the requested model could not be verified. It is resolved again at execution time; explicitly selected additional providers block the run if unavailable instead of falling back to the default model.",
           ],
         };
       }

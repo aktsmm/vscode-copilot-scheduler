@@ -31,6 +31,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "promptPath",
   "agent",
   "model",
+  "modelVendor",
   "modelReasoningEffort",
   "scope",
   "chatSession",

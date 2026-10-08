@@ -432,6 +432,16 @@ export const messages = {
   agentGlobalDesc: () => t("Global agent", "グローバルエージェント"),
   modelDefaultName: () => t("Default", "デフォルト"),
   modelDefaultDesc: () => t("Use default model", "デフォルトモデルを使用"),
+  providerModelUnavailable: () =>
+    t(
+      "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
+      "選択した提供元のモデルが利用できません。提供元への接続と認証を確認してください。別モデルへの代替は行っていません。",
+    ),
+  providerModelDispatchFailed: () =>
+    t(
+      "Could not dispatch to the selected provider model through VS Code Chat. Check authentication, connectivity and support for the selected chat mode. No fallback model was used.",
+      "選択した提供元のモデルに VS Code Chat 経由で送信できませんでした。認証、接続、選択したチャットモードへの対応を確認してください。別モデルへの代替は行っていません。",
+    ),
 
   // ==================== Execution Errors ====================
   autoExecuteFailed: () =>

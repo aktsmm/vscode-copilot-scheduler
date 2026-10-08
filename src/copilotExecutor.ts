@@ -339,6 +339,17 @@ function formatModelSelectionForLog(
   return parts.length > 0 ? parts.join(", ") : "default";
 }
 
+function hasStrictProviderSelection(
+  selection: NormalizedModelSelection,
+): boolean {
+  return (
+    !!selection.modelVendor &&
+    !["copilot", "github-copilot", "githubcopilot"].includes(
+      selection.modelVendor.toLowerCase(),
+    )
+  );
+}
+
 function buildModelSelectorCandidates(
   selection: NormalizedModelSelection,
 ): Array<Record<string, string>> {
@@ -382,6 +393,7 @@ function buildModelSelectorCandidates(
       });
       pushSelector({
         id: selection.model,
+        vendor: selection.modelVendor,
       });
     }
     return selectors;
@@ -398,10 +410,12 @@ function buildModelSelectorCandidates(
       family: selection.modelFamily,
     });
     pushSelector({
+      vendor: selection.modelVendor,
       family: selection.modelFamily,
       version: selection.modelVersion,
     });
     pushSelector({
+      vendor: selection.modelVendor,
       family: selection.modelFamily,
     });
   }
@@ -503,6 +517,7 @@ export const __testOnly = {
   stripLeadingBuiltInModePrefix,
   buildPromptRouting,
   buildModelSelectorCandidates,
+  hasStrictProviderSelection,
   buildChatOpenArgs,
   buildLegacyModelPickerCandidates,
   mergeChatModelLists,
@@ -600,6 +615,12 @@ export class CopilotExecutor {
         );
       }
       if (!chatOpenResult.opened) {
+        if (hasStrictProviderSelection(resolved.selection)) {
+          throw createPromptBlockedError(
+            messages.providerModelDispatchFailed(),
+            "providerModelDispatchFailed",
+          );
+        }
         if (attachFiles.length > 0) {
           // The legacy path cannot carry attachments, and silently sending the
           // prompt without them would look like a successful run.
@@ -677,6 +698,10 @@ export class CopilotExecutor {
           `[CopilotScheduler] chat.open with model selector failed: ${toSafeErrorDetails(error)}`,
         );
       }
+    }
+
+    if (hasStrictProviderSelection(resolvedSelection)) {
+      return { opened: false, resolvedSelection, resolvedModel };
     }
 
     try {
@@ -827,6 +852,12 @@ export class CopilotExecutor {
     const { models } = await CopilotExecutor.getAvailableModelsWithSource();
     const matched = findBestMatchingModel(selection, models);
     if (!matched) {
+      if (hasStrictProviderSelection(selection)) {
+        throw createPromptBlockedError(
+          messages.providerModelUnavailable(),
+          "providerModelUnavailable",
+        );
+      }
       return { selection };
     }
 
@@ -1288,11 +1319,15 @@ export class CopilotExecutor {
 
   static async getAvailableModelsWithSource(): Promise<AvailableModelsResult> {
     try {
-      // Prefer the Copilot-contributed chat catalog so the picker stays aligned
-      // with GitHub Copilot Chat rather than unrelated providers, but still
-      // merge in the full catalog so matching Low/Medium/High variants remain
-      // available for Copilot-exposed models.
-      let models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      let models: vscode.LanguageModelChat[] = [];
+      try {
+        models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      } catch (error) {
+        logDebug(
+          "[CopilotScheduler] Copilot model catalog lookup unavailable:",
+          toSafeErrorDetails(error),
+        );
+      }
       if (!models || models.length === 0) {
         models = await vscode.lm.selectChatModels({});
       } else {

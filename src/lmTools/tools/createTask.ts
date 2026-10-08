@@ -24,6 +24,7 @@ interface CreateTaskToolInput {
   promptPath?: string;
   agent?: string;
   model?: string;
+  modelVendor?: string;
   modelReasoningEffort?: string;
   enabled?: boolean;
   chatSession?: string;
@@ -48,6 +49,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     promptPath: input.promptPath,
     agent: input.agent,
     model: input.model,
+    modelVendor: input.modelVendor,
     modelReasoningEffort: input.modelReasoningEffort,
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
@@ -83,6 +85,9 @@ export function createSchedulerCreateTaskTool(
           : undefined,
         input.model
           ? `- model: ${escapeConfirmationText(input.model)}`
+          : undefined,
+        input.modelVendor
+          ? `- modelVendor: ${escapeConfirmationText(input.modelVendor)}`
           : undefined,
         describeAttachmentsForConfirmation(input.attachments),
         input.enabled === false

@@ -952,6 +952,7 @@ suite("lmTools write wrappers", () => {
       prompt: "Review the workspace",
       scope: "workspace",
       model: "claude-sonnet-4",
+      modelVendor: "openai-codex",
       modelReasoningEffort: "high",
       autoMode: true,
       jitterSeconds: 120,
@@ -961,6 +962,7 @@ suite("lmTools write wrappers", () => {
     });
     assert.strictEqual(parseJson(result).ok, true);
     assert.strictEqual(client.createInput?.model, "claude-sonnet-4");
+    assert.strictEqual(client.createInput?.modelVendor, "openai-codex");
     assert.strictEqual(client.createInput?.modelReasoningEffort, "high");
     assert.strictEqual(client.createInput?.autoMode, true);
     assert.strictEqual(client.createInput?.jitterSeconds, 120);
@@ -998,6 +1000,19 @@ suite("lmTools write wrappers", () => {
     assert.deepStrictEqual(client.updateArgs, {
       id: "task-1",
       updates: { model: "", scope: "global", maxExecutionsPerDay: 0 },
+    });
+  });
+
+  test("update task forwards the provider identity", async () => {
+    const client = new FakeClient();
+    const result = await invoke(createSchedulerUpdateTaskTool(client), {
+      id: "task-1",
+      updates: { model: "shared", modelVendor: "ollama" },
+    });
+    assert.strictEqual(parseJson(result).ok, true);
+    assert.deepStrictEqual(client.updateArgs?.updates, {
+      model: "shared",
+      modelVendor: "ollama",
     });
   });
 

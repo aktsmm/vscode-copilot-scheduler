@@ -13,6 +13,8 @@ export type PromptBlockedReason =
   | "pathUnresolved"
   | "readFailed"
   | "attachmentMissing"
+  | "providerModelUnavailable"
+  | "providerModelDispatchFailed"
   | "attachmentsRequireChatOpen";
 
 export function createPromptBlockedError(

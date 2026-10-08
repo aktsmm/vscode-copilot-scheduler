@@ -271,6 +271,101 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     ]);
   });
 
+  test("provider selector candidates never discard the vendor", () => {
+    for (const selection of [
+      { model: "shared", modelVendor: "openai-codex", modelFamily: "gpt" },
+      { modelVendor: "ollama", modelFamily: "llama" },
+    ]) {
+      const selectors = __testOnly.buildModelSelectorCandidates(selection);
+      assert.ok(selectors.length > 0);
+      assert.ok(
+        selectors.every(
+          (selector) => selector.vendor === selection.modelVendor,
+        ),
+      );
+      assert.strictEqual(
+        __testOnly.hasStrictProviderSelection(selection),
+        true,
+      );
+    }
+    assert.strictEqual(
+      __testOnly.hasStrictProviderSelection({ modelVendor: "copilot" }),
+      false,
+    );
+    assert.strictEqual(__testOnly.hasStrictProviderSelection({}), false);
+  });
+
+  test("provider dispatch failures never retry without a model selector", async () => {
+    const original = vscode.commands.executeCommand;
+    const attempts: Record<string, unknown>[] = [];
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      value: async (_command: string, args: Record<string, unknown>) => {
+        attempts.push(args);
+        throw new Error("provider offline");
+      },
+      configurable: true,
+    });
+    try {
+      const executor = new CopilotExecutor() as unknown as {
+        tryOpenChatWithPrompt: (
+          prompt: string,
+          mode: string,
+          selection: { model: string; modelVendor: string },
+          model: undefined,
+          attachments: vscode.Uri[],
+        ) => Promise<{ opened: boolean }>;
+      };
+      const result = await executor.tryOpenChatWithPrompt(
+        "synthetic probe",
+        "ask",
+        { model: "shared", modelVendor: "openai-codex" },
+        undefined,
+        [],
+      );
+      assert.strictEqual(result.opened, false);
+      assert.ok(attempts.length > 0);
+      assert.ok(
+        attempts.every(
+          (args) =>
+            (args.modelSelector as { vendor?: string })?.vendor ===
+            "openai-codex",
+        ),
+      );
+    } finally {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+
+  test("missing provider models block rather than resolve to another provider", async () => {
+    const original = CopilotExecutor.getAvailableModelsWithSource;
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [
+        { id: "shared", name: "Shared", vendor: "copilot", description: "" },
+      ],
+    });
+    try {
+      const resolver = CopilotExecutor as unknown as {
+        resolveRequestedModelSelection: (selection: {
+          model: string;
+          modelVendor: string;
+        }) => Promise<unknown>;
+      };
+      await assert.rejects(
+        resolver.resolveRequestedModelSelection({
+          model: "shared",
+          modelVendor: "ollama",
+        }),
+        /unavailable|利用できません/,
+      );
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = original;
+    }
+  });
+
   test("chat.open args include attachFiles only when attachments exist", () => {
     const withoutAttachments = __testOnly.buildChatOpenArgs(
       "Review this",
@@ -458,6 +553,115 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       "claude-opus-4.6-copilot-high",
     ]);
   });
+
+  test("model discovery recovers additional providers after a Copilot lookup failure", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      vscode.lm,
+      "selectChatModels",
+    );
+    assert.ok(descriptor);
+    const calls: vscode.LanguageModelChatSelector[] = [];
+    Object.defineProperty(vscode.lm, "selectChatModels", {
+      configurable: true,
+      value: async (selector: vscode.LanguageModelChatSelector) => {
+        calls.push(selector);
+        if (selector.vendor === "copilot") {
+          throw new Error("synthetic Copilot discovery failure");
+        }
+        return [
+          {
+            id: "local-model",
+            name: "Local Model",
+            vendor: "ollama",
+            family: "local",
+            version: "1",
+          },
+        ];
+      },
+    });
+    try {
+      const result = await CopilotExecutor.getAvailableModelsWithSource();
+      assert.strictEqual(result.source, "api");
+      assert.ok(
+        result.models.some(
+          (model) => model.id === "local-model" && model.vendor === "ollama",
+        ),
+      );
+      assert.deepStrictEqual(calls, [{ vendor: "copilot" }, {}]);
+    } finally {
+      Object.defineProperty(vscode.lm, "selectChatModels", descriptor);
+    }
+  });
+
+  for (const scenario of [
+    {
+      name: "keeps Copilot models when full lookup fails",
+      copilot: "models",
+      all: "error",
+      source: "api",
+      vendor: "copilot",
+    },
+    {
+      name: "discovers providers when Copilot is empty",
+      copilot: "empty",
+      all: "models",
+      source: "api",
+      vendor: "ollama",
+    },
+    {
+      name: "uses fallback when both lookups fail",
+      copilot: "error",
+      all: "error",
+      source: "fallback",
+      vendor: undefined,
+    },
+    {
+      name: "uses fallback when both lookups are empty",
+      copilot: "empty",
+      all: "empty",
+      source: "fallback",
+      vendor: undefined,
+    },
+  ]) {
+    test(`model discovery ${scenario.name}`, async () => {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        vscode.lm,
+        "selectChatModels",
+      );
+      assert.ok(descriptor);
+      let calls = 0;
+      Object.defineProperty(vscode.lm, "selectChatModels", {
+        configurable: true,
+        value: async (selector: vscode.LanguageModelChatSelector) => {
+          calls++;
+          const outcome = selector.vendor ? scenario.copilot : scenario.all;
+          if (outcome === "error")
+            throw new Error("synthetic discovery failure");
+          if (outcome === "empty") return [];
+          return [
+            {
+              id: "test-model",
+              name: "Test Model",
+              vendor: selector.vendor || "ollama",
+              family: "test",
+              version: "1",
+            },
+          ];
+        },
+      });
+      try {
+        const result = await CopilotExecutor.getAvailableModelsWithSource();
+        assert.strictEqual(calls, 2);
+        assert.strictEqual(result.source, scenario.source);
+        assert.strictEqual(result.models[0].id, "");
+        assert.strictEqual(result.models.length, scenario.vendor ? 2 : 1);
+        if (scenario.vendor)
+          assert.strictEqual(result.models[1].vendor, scenario.vendor);
+      } finally {
+        Object.defineProperty(vscode.lm, "selectChatModels", descriptor);
+      }
+    });
+  }
 
   test("vendor-scoped model lists are supplemented with discovered variant entries", () => {
     const merged = __testOnly.mergeChatModelLists(

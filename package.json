@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.7.6",
+  "version": "1.8.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -478,6 +478,10 @@
               "type": "string",
               "description": "AI model id for this task. Use an 'id' returned by scheduler_query kind=list_models. Omit or pass an empty string to use the default model."
             },
+            "modelVendor": {
+              "type": "string",
+              "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
+            },
             "modelReasoningEffort": {
               "type": "string",
               "enum": [
@@ -620,6 +624,10 @@
                 "model": {
                   "type": "string",
                   "description": "AI model id. Use an 'id' returned by scheduler_query kind=list_models, or an empty string to go back to the default model."
+                },
+                "modelVendor": {
+                  "type": "string",
+                  "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
                 },
                 "modelReasoningEffort": {
                   "type": "string",
@@ -917,7 +925,7 @@
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",
     "@vscode/test-electron": "^2.3.0",
-    "@vscode/vsce": "^3.9.2",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.27.2",
     "eslint": "^8.0.0",
     "glob": "^10.0.0",

@@ -5,6 +5,22 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-09
+
+### Added
+
+- Models registered with VS Code Chat by additional providers are selectable in provider-separated groups. Scheduler create/update tools accept `modelVendor` to retain the requested provider.
+
+### Fixed
+
+- A failed Copilot-only catalog lookup no longer prevents discovery of other providers; a failed full lookup retains available Copilot models.
+- Model resolution prefers exact opaque ids and refuses ambiguous cross-provider id, alias or name matches, including startup healing and execution.
+- Explicit additional-provider selections block unavailable or rejected dispatches instead of silently retrying with a default or different provider. Tool warnings describe this behavior, and bilingual docs include an isolated-profile smoke checklist.
+
+### Security
+
+- Updated development-only packaging tool `@vscode/vsce` to 4.0.0, removing the vulnerable `secretlint`/glob dependency chain identified by the release audit. The packaging tool requires Node.js 22 or newer.
+
 ## [1.7.6] - 2026-10-01
 
 ### Fixed

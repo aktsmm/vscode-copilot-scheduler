@@ -1304,33 +1304,55 @@
     var selectText = strings.placeholderSelectModel || "";
     var placeholder =
       '<option value="">' + escapeHtml(selectText) + "</option>";
+    var providerGroups = new Map();
+    groups.forEach(function (group) {
+      var vendor = group.vendor || "";
+      if (!providerGroups.has(vendor)) providerGroups.set(vendor, []);
+      providerGroups.get(vendor).push(group);
+    });
     modelSelect.innerHTML =
       placeholder +
-      groups
-        .map(function (group) {
-          var defaultVariant =
-            group && Array.isArray(group.variants) && group.variants.length > 0
-              ? group.variants[0]
-              : null;
-          var defaultModel =
-            defaultVariant && defaultVariant.model ? defaultVariant.model : {};
-          return (
-            '<option value="' +
-            escapeAttr(group.key || "") +
-            '" data-model-id="' +
-            escapeAttr(defaultModel.id || "") +
-            '" data-model-name="' +
-            escapeAttr(defaultModel.name || "") +
-            '" data-model-vendor="' +
-            escapeAttr(defaultModel.vendor || "") +
-            '" data-model-family="' +
-            escapeAttr(defaultModel.family || "") +
-            '" data-model-version="' +
-            escapeAttr(defaultModel.version || "") +
-            '">' +
-            escapeHtml(group.label || "") +
-            "</option>"
-          );
+      Array.from(providerGroups.entries())
+        .map(function (entry) {
+          var vendor = entry[0];
+          var options = entry[1]
+            .map(function (group) {
+              var defaultVariant =
+                group &&
+                Array.isArray(group.variants) &&
+                group.variants.length > 0
+                  ? group.variants[0]
+                  : null;
+              var defaultModel =
+                defaultVariant && defaultVariant.model
+                  ? defaultVariant.model
+                  : {};
+              return (
+                '<option value="' +
+                escapeAttr(group.key || "") +
+                '" data-model-id="' +
+                escapeAttr(defaultModel.id || "") +
+                '" data-model-name="' +
+                escapeAttr(defaultModel.name || "") +
+                '" data-model-vendor="' +
+                escapeAttr(defaultModel.vendor || "") +
+                '" data-model-family="' +
+                escapeAttr(defaultModel.family || "") +
+                '" data-model-version="' +
+                escapeAttr(defaultModel.version || "") +
+                '">' +
+                escapeHtml(group.label || "") +
+                "</option>"
+              );
+            })
+            .join("");
+          return vendor
+            ? '<optgroup label="' +
+                escapeAttr(vendor) +
+                '">' +
+                options +
+                "</optgroup>"
+            : options;
         })
         .join("");
 

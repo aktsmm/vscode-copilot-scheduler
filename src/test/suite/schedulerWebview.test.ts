@@ -3101,6 +3101,67 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("model options render escaped provider headings with distinct selections", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const render = extractBlockFromStartToken(
+      source,
+      "function updateModelOptions(selection) {",
+    );
+    const groups = ["copilot", "openai-codex", 'ollama\"><script>'].map(
+      (vendor, index) => ({
+        key: `provider-${index}`,
+        vendor,
+        label: "Shared Model",
+        variants: [{ model: { id: "shared", name: "Shared Model", vendor } }],
+      }),
+    );
+    const select = { value: "", innerHTML: "" };
+    const escape = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    const renderOptions = new Function(
+      "modelSelect",
+      "getActiveModelPickerGroups",
+      "strings",
+      "escapeAttr",
+      "escapeHtml",
+      `
+      const clearUnavailableModelOptions = () => {};
+      const findModelPickerSelection = () => null;
+      const clearModelVariantOptions = () => {};
+      const updateModelSelectionStatus = () => {};
+      const selectHasOptionValue = () => false;
+      const findModelPickerGroup = () => null;
+      const updateModelVariantOptions = () => {};
+      const scheduleLayoutRefresh = () => {};
+      ${render}
+      return updateModelOptions();
+    `,
+    );
+    renderOptions(
+      select,
+      () => groups,
+      { placeholderSelectModel: "Select" },
+      escape,
+      escape,
+    );
+    assert.strictEqual((select.innerHTML.match(/<optgroup /g) || []).length, 3);
+    assert.ok(select.innerHTML.includes('<optgroup label="openai-codex">'));
+    assert.ok(
+      select.innerHTML.includes('label="ollama&quot;&gt;&lt;script&gt;"'),
+    );
+    assert.ok(!select.innerHTML.includes("<script>"));
+    for (let index = 0; index < groups.length; index++) {
+      assert.ok(select.innerHTML.includes(`value="provider-${index}"`));
+    }
+  });
+
   test("webview refresh builds default and expanded model picker payloads", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../src/schedulerWebview.ts"),

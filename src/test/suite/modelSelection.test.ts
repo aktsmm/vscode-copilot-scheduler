@@ -41,6 +41,53 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("findBestMatchingModel preserves exact opaque ids and rejects ambiguous providers", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "shared_model",
+        name: "Shared",
+        description: "",
+        vendor: "copilot",
+        family: "shared",
+        version: "9",
+      },
+      {
+        id: "shared-model",
+        name: "Shared",
+        description: "",
+        vendor: "ollama",
+        family: "shared",
+        version: "1",
+      },
+    ]);
+    assert.strictEqual(
+      findBestMatchingModel({ model: "shared-model" }, catalog)?.vendor,
+      "ollama",
+    );
+    assert.strictEqual(
+      findBestMatchingModel({ model: "SHARED MODEL" }, catalog),
+      undefined,
+    );
+    assert.strictEqual(
+      findBestMatchingModel({ modelName: "Shared" }, catalog),
+      undefined,
+    );
+    assert.strictEqual(
+      findBestMatchingModel(
+        { model: "SHARED MODEL", modelVendor: "ollama" },
+        catalog,
+      )?.vendor,
+      "ollama",
+    );
+    assert.strictEqual(
+      findBestMatchingModel(
+        { model: "shared" },
+        catalog.map((model) => ({ ...model, id: "shared" })),
+      ),
+      undefined,
+    );
+  });
+
   test("findBestMatchingModel prefers the exact versioned variant", () => {
     const catalog = normalizeModelCatalog([
       {
@@ -148,7 +195,7 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(pickerCatalog[0]?.id, "claude-opus-4.6-copilot");
   });
 
-  test("filterPickerModelCatalog keeps only Copilot picker models", () => {
+  test("filterPickerModelCatalog includes extension and BYOK providers", () => {
     const catalog = normalizeModelCatalog([
       {
         id: "claude-sonnet-4.6-copilot",
@@ -176,7 +223,56 @@ suite("Model Selection Catalog Tests", () => {
     const pickerCatalog = filterPickerModelCatalog(catalog);
     assert.deepStrictEqual(
       pickerCatalog.map((model) => model.id),
-      ["claude-sonnet-4.6-copilot"],
+      [
+        "claude-sonnet-4.6-copilot",
+        "claude-sonnet-4.6-claude-code",
+        "azure-gpt-5.4",
+      ],
+    );
+  });
+
+  test("provider selections never resolve to a different provider", () => {
+    const models = normalizeModelCatalog([
+      {
+        id: "shared-model",
+        name: "Shared Model",
+        description: "",
+        vendor: "copilot",
+      },
+      {
+        id: "shared-model",
+        name: "Shared Model",
+        description: "",
+        vendor: "openai-codex",
+      },
+      {
+        id: "local-model",
+        name: "Local Model",
+        description: "",
+        vendor: "ollama",
+      },
+    ]);
+    assert.strictEqual(filterPickerModelCatalog(models).length, 3);
+    const groups = buildModelPickerGroups(models);
+    assert.strictEqual(groups.length, 3);
+    assert.strictEqual(new Set(groups.map((group) => group.key)).size, 3);
+    assert.deepStrictEqual(
+      groups.map((group) => group.vendor),
+      ["copilot", "openai-codex", "ollama"],
+    );
+    assert.strictEqual(
+      findBestMatchingModel(
+        { model: "shared-model", modelVendor: "openai-codex" },
+        models,
+      )?.vendor,
+      "openai-codex",
+    );
+    assert.strictEqual(
+      findBestMatchingModel(
+        { model: "shared-model", modelVendor: "missing-provider" },
+        models,
+      ),
+      undefined,
     );
   });
 
@@ -335,13 +431,18 @@ suite("Model Selection Catalog Tests", () => {
 
     assert.deepStrictEqual(
       pickerCatalog.map((model) => model.id),
-      ["copilot-gpt-5-4", "openai/gpt-5-4-low", "openai/gpt-5-4-high"],
+      [
+        "copilot-gpt-5-4",
+        "openai/gpt-5-4-low",
+        "openai/gpt-5-4-high",
+        "azure-gpt-5-4",
+      ],
     );
-    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups.length, 3);
     assert.strictEqual(groups[0]?.label, "GPT-5.4");
     assert.deepStrictEqual(
-      groups[0]?.variants.map((variant) => variant.label),
-      ["Default", "Low", "High"],
+      groups[1]?.variants.map((variant) => variant.label),
+      ["Low", "High"],
     );
   });
 
@@ -383,11 +484,11 @@ suite("Model Selection Catalog Tests", () => {
         "anthropic/claude-opus-4.6/versions/medium",
       ],
     );
-    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups.length, 2);
     assert.strictEqual(groups[0]?.label, "Claude Opus 4.6");
     assert.deepStrictEqual(
-      groups[0]?.variants.map((variant) => variant.label),
-      ["Default", "High", "Medium"],
+      groups[1]?.variants.map((variant) => variant.label),
+      ["High", "Medium"],
     );
   });
 
