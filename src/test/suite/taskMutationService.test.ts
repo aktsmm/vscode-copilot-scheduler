@@ -70,6 +70,9 @@ class FakeScheduleManager {
       modelFamily: input.modelFamily || undefined,
       modelVersion: input.modelVersion || undefined,
       modelReasoningEffort: input.modelReasoningEffort || undefined,
+      ...(input.modelConfiguration !== undefined
+        ? { modelConfiguration: input.modelConfiguration }
+        : {}),
       createdAt: now,
       updatedAt: now,
     } as ScheduledTask;
@@ -424,6 +427,79 @@ suite("taskMutationService model resolution", () => {
         modelVersion: newModel.version,
       },
     );
+  });
+
+  test("reselecting the same model and vendor preserves dynamic task options", async () => {
+    const selected = fakeModel({
+      id: "shared",
+      vendor: "bridge",
+      family: "shared",
+      configurationStatus: "available",
+      configurationOptions: [
+        {
+          key: "mode",
+          label: "Reasoning",
+          choices: [{ value: "normal:high", label: "High" }],
+        },
+      ],
+    });
+    const fake = new FakeScheduleManager();
+    const c = client(fake, catalogResolver([selected]));
+    const created = await c.createTask({
+      ...baseInput(),
+      model: selected.id,
+      modelVendor: selected.vendor,
+      modelConfiguration: { mode: "normal:high" },
+    });
+    assertOk(created);
+    for (const updates of [
+      { model: selected.id },
+      { model: selected.id, modelVendor: selected.vendor },
+      { modelVendor: selected.vendor },
+    ]) {
+      const result = await c.updateTask(created.task.id, updates);
+      assertOk(result);
+      assert.deepStrictEqual(result.task.modelConfiguration, {
+        mode: "normal:high",
+      });
+    }
+  });
+
+  test("changing only the provider clears inherited dynamic options for a shared model id", async () => {
+    const selected = fakeModel({
+      id: "shared",
+      vendor: "bridge",
+      family: "shared",
+      configurationStatus: "available",
+      configurationOptions: [
+        {
+          key: "mode",
+          label: "Reasoning",
+          choices: [{ value: "normal:high", label: "High" }],
+        },
+      ],
+    });
+    const fake = new FakeScheduleManager();
+    const c = client(
+      fake,
+      catalogResolver([selected, { ...selected, vendor: "other" }]),
+    );
+    const created = await c.createTask({
+      ...baseInput(),
+      model: selected.id,
+      modelVendor: selected.vendor,
+      modelConfiguration: { mode: "normal:high" },
+    });
+    assertOk(created);
+    const changed = await c.updateTask(created.task.id, {
+      modelVendor: "other",
+    });
+    assertOk(changed);
+    assert.strictEqual(changed.task.modelVendor, "other");
+    assert.deepStrictEqual(changed.task.modelConfiguration, {});
+    const cleared = await c.updateTask(created.task.id, { model: "" });
+    assertOk(cleared);
+    assert.strictEqual(cleared.task.modelConfiguration, undefined);
   });
 
   test("updateTask clears an inherited reasoning effort unsupported by the new model", async () => {

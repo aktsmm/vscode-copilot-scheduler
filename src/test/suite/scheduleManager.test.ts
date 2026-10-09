@@ -146,6 +146,181 @@ function overrideWorkspaceFoldersForTest(
   };
 }
 
+suite("ScheduleManager Dynamic Model Configuration", () => {
+  test("direct model reset clears saved identity and dynamic options", async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-model-reset-"),
+    );
+    const manager = new ScheduleManager(createMockContext(root));
+    try {
+      await waitForStartupSave(manager);
+      const task = await manager.createTask({
+        name: "reset",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+        model: "shared",
+        modelName: "Shared",
+        modelVendor: "bridge",
+        modelFamily: "shared",
+        modelVersion: "1",
+        modelConfiguration: { mode: "normal:high" },
+      });
+      await manager.updateTask(task.id, {
+        model: "shared",
+        modelVendor: "bridge",
+      });
+      assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {
+        mode: "normal:high",
+      });
+      await manager.updateTask(task.id, { modelVendor: "other" });
+      assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {});
+      await manager.updateTask(task.id, {
+        modelVendor: "third",
+        modelConfiguration: { mode: "normal:high" },
+      });
+      assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {
+        mode: "normal:high",
+      });
+      await manager.updateTask(task.id, { model: "" });
+      for (const key of [
+        "model",
+        "modelName",
+        "modelVendor",
+        "modelFamily",
+        "modelVersion",
+        "modelReasoningEffort",
+        "modelConfiguration",
+      ] as const) {
+        assert.strictEqual(manager.getTask(task.id)?.[key], undefined, key);
+      }
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("retains invalid or future maps without aborting load, healing or unrelated saves", async () => {
+    for (const rawMap of [null, { thinkingBudget: "future" }]) {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), "scheduler-invalid-config-"),
+      );
+      const now = new Date().toISOString();
+      const seed = ["before", "invalid", "after"].map((id) => ({
+        id,
+        name: id,
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        enabled: false,
+        scope: "global",
+        promptSource: "inline",
+        createdAt: now,
+        updatedAt: now,
+        model: "shared",
+        modelVendor: "copilot",
+        ...(id === "invalid" ? { modelConfiguration: rawMap } : {}),
+      }));
+      const manager = new ScheduleManager(
+        createMockContextWithGlobalTasks(root, seed),
+      );
+      try {
+        await waitForStartupSave(manager);
+        assert.strictEqual(manager.getAllTasks().length, 3);
+        assert.deepStrictEqual(
+          manager.getTask("invalid")?.modelConfiguration,
+          rawMap,
+        );
+        await manager.healTaskModelSelections([
+          { id: "shared", name: "Shared", vendor: "copilot", description: "" },
+        ]);
+        assert.strictEqual(manager.getAllTasks().length, 3);
+        assert.deepStrictEqual(
+          manager.getTask("invalid")?.modelConfiguration,
+          rawMap,
+        );
+        const invalidBefore = JSON.stringify(manager.getTask("invalid"));
+        await assert.rejects(
+          manager.updateTask("invalid", {
+            name: "must-not-save",
+            enabled: true,
+            modelVendor: "copilot",
+          }),
+        );
+        assert.strictEqual(
+          JSON.stringify(manager.getTask("invalid")),
+          invalidBefore,
+        );
+        await manager.updateTask("after", { name: "renamed" });
+        const saved = JSON.parse(
+          fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8"),
+        );
+        assert.strictEqual(saved.length, 3);
+        assert.strictEqual(
+          saved.find((task: { id: string }) => task.id === "invalid").enabled,
+          false,
+        );
+        assert.strictEqual(
+          saved.find((task: { id: string }) => task.id === "invalid").name,
+          "invalid",
+        );
+        assert.deepStrictEqual(
+          saved.find((task: { id: string }) => task.id === "invalid")
+            .modelConfiguration,
+          rawMap,
+        );
+        await manager.updateTask("invalid", { modelConfiguration: {} });
+        assert.deepStrictEqual(
+          manager.getTask("invalid")?.modelConfiguration,
+          {},
+        );
+      } finally {
+        manager.stopScheduler();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+  test("preserves typed settings on first save, unrelated update, duplicate and reload", async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-dynamic-store-"),
+    );
+    const storage = path.join(root, "new-profile", "scheduler");
+    const context = createMockContext(storage);
+    const manager = new ScheduleManager(context);
+    let reloaded: ScheduleManager | undefined;
+    try {
+      await waitForStartupSave(manager);
+      const task = await manager.createTask({
+        name: "dynamic store",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+        model: "dynamic",
+        modelVendor: "bridge",
+        modelConfiguration: { mode: "fast:high", contextSize: 4096 },
+      });
+      await manager.updateTask(task.id, { name: "renamed" });
+      const duplicate = await manager.duplicateTask(task.id);
+      assert.deepStrictEqual(duplicate?.modelConfiguration, {
+        mode: "fast:high",
+        contextSize: 4096,
+      });
+      reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      assert.deepStrictEqual(reloaded.getTask(task.id)?.modelConfiguration, {
+        mode: "fast:high",
+        contextSize: 4096,
+      });
+      await reloaded.updateTask(task.id, { model: "another" });
+      assert.deepStrictEqual(reloaded.getTask(task.id)?.modelConfiguration, {});
+    } finally {
+      manager.stopScheduler();
+      reloaded?.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 suite("ScheduleManager Time Window Helper Tests", () => {
   test("normalizeTimeWindowHHMM accepts and pads valid inputs", () => {
     const normalize = __testOnly.normalizeTimeWindowHHMM as

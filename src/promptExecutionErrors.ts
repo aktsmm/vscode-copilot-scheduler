@@ -15,6 +15,7 @@ export type PromptBlockedReason =
   | "attachmentMissing"
   | "providerModelUnavailable"
   | "providerModelDispatchFailed"
+  | "modelConfigurationUnavailable"
   | "attachmentsRequireChatOpen";
 
 export function createPromptBlockedError(

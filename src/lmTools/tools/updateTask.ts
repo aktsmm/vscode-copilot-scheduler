@@ -33,6 +33,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "model",
   "modelVendor",
   "modelReasoningEffort",
+  "modelConfiguration",
   "scope",
   "chatSession",
   "autoMode",

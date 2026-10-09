@@ -5,6 +5,25 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-10-09
+
+### Added
+
+- Schema-derived model option controls and typed `modelConfiguration` values execute through immutable task-configured models on VS Code 1.141 or later. Reasoning, speed and context choices are fixed per request to the original provider without shared-setting writes. Chat/Agent tools, streaming and cancellation are forwarded; invalid/unavailable settings stop without fallback or automatic resend.
+
+### Fixed
+
+- Advertised zero context settings retain the source model's usable input budget instead of registering a zero-token relay; the raw zero option is still forwarded unchanged.
+
+- Configured execution verifies returned provider/model/pinned-version identities, including internal relay registration, before downstream calls while preserving unversioned source compatibility and caller-owned request options.
+
+- Configured-model requests recheck cancellation across source/schema preparation, response-stream completion and token-count results, preventing late-cancelled calls or success reports without weakening fixed settings or retry safety.
+
+- First task saves create missing storage parent directories before acquiring the cross-window task lock.
+- Dynamic configuration values retain numeric types through edits, duplication and reload; invalid or unavailable saved choices do not silently select a replacement.
+- Invalid stored model options remain unchanged in the editor until an explicit repair action; failed or superseded catalog refreshes cannot leave stale dynamic options active. Secret-marked schema options are not exposed as task choices.
+- Reselecting an unchanged model/provider preserves dynamic task settings; provider-only identity changes clear inherited overrides, and direct empty-model resets clear all saved model metadata.
+
 ## [1.8.0] - 2026-10-09
 
 ### Added

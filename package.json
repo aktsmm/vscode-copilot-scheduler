@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -32,6 +32,12 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "copilot-scheduler-configured",
+        "displayName": "%provider.configuredModels%"
+      }
+    ],
     "commands": [
       {
         "command": "copilotScheduler.createTask",
@@ -482,6 +488,28 @@
               "type": "string",
               "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
             },
+            "modelConfiguration": {
+              "type": "object",
+              "description": "Model-specific enum values from list_models configurationOptions. Empty object inherits shared Chat settings. Explicit options execute through a fixed per-request model on VS Code 1.141 or later without changing shared settings. Requires source-provider authorization. Do not combine with modelReasoningEffort.",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string"
+                },
+                "reasoningEffort": {
+                  "type": "string"
+                },
+                "speedMode": {
+                  "type": "string"
+                },
+                "contextSize": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                }
+              }
+            },
             "modelReasoningEffort": {
               "type": "string",
               "enum": [
@@ -628,6 +656,28 @@
                 "modelVendor": {
                   "type": "string",
                   "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
+                },
+                "modelConfiguration": {
+                  "type": "object",
+                  "description": "Model enum values from list_models. Omission preserves existing task options; {} clears task overrides and inherits shared Chat settings. Explicit options are fixed per request on VS Code 1.141 or later without shared-setting writes. Do not combine with modelReasoningEffort.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "type": "string"
+                    },
+                    "reasoningEffort": {
+                      "type": "string"
+                    },
+                    "speedMode": {
+                      "type": "string"
+                    },
+                    "contextSize": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    }
+                  }
                 },
                 "modelReasoningEffort": {
                   "type": "string",

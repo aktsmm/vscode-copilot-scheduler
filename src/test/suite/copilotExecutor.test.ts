@@ -3,6 +3,131 @@ import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("configured model dispatch waits once and never drops its fixed selector after failure", async () => {
+    const original = vscode.commands.executeCommand;
+    const requests: Record<string, unknown>[] = [];
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (_command: string, args: Record<string, unknown>) => {
+        requests.push(args);
+        return { errorDetails: { message: "synthetic failure" } };
+      },
+    });
+    try {
+      const executor = new CopilotExecutor() as unknown as {
+        tryOpenChatWithPrompt(
+          prompt: string,
+          mode: string,
+          selection: unknown,
+          model: undefined,
+          attachments: vscode.Uri[],
+        ): Promise<{ opened: boolean }>;
+      };
+      const result = await executor.tryOpenChatWithPrompt(
+        "prompt",
+        "ask",
+        {
+          model: "binding",
+          modelVendor: "copilot-scheduler-configured",
+          modelConfiguration: { mode: "fast:high" },
+        },
+        undefined,
+        [],
+      );
+      assert.strictEqual(result.opened, false);
+      assert.strictEqual(requests.length, 1);
+      assert.strictEqual(requests[0].blockOnResponse, true);
+      assert.deepStrictEqual(requests[0].modelSelector, {
+        id: "binding",
+        vendor: "copilot-scheduler-configured",
+      });
+    } finally {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: original,
+      });
+    }
+  });
+  test("dynamic overrides block before commands; inherit avoids syncing shared options", async () => {
+    const originalModels = CopilotExecutor.getAvailableModelsWithSource;
+    const originalCommand = vscode.commands.executeCommand;
+    const calls: string[] = [];
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [
+        {
+          id: "dynamic",
+          name: "Dynamic",
+          vendor: "copilot",
+          description: "",
+          configurationStatus: "available",
+          configurationOptions: [
+            {
+              key: "reasoningEffort",
+              label: "Thinking",
+              choices: [{ value: "high", label: "High" }],
+            },
+          ],
+        },
+      ],
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (command: string) => {
+        calls.push(command);
+        return undefined;
+      },
+    });
+    const executor = new CopilotExecutor();
+    const internal = executor as unknown as {
+      syncExperimentalModelQuality: () => Promise<void>;
+    };
+    internal.syncExperimentalModelQuality = async () => {
+      throw new Error("Must not sync inherited shared configuration");
+    };
+    try {
+      await assert.rejects(
+        executor.executePrompt("synthetic", {
+          agent: "ask",
+          model: "dynamic",
+          modelVendor: "copilot",
+          modelConfiguration: { reasoningEffort: "high" },
+          chatSession: "continue",
+        }),
+        (error: unknown) =>
+          (error as Record<string, unknown>).copilotSchedulerPromptBlocked ===
+          "modelConfigurationUnavailable",
+      );
+      assert.strictEqual(calls.length, 0);
+      for (const malformed of [null, { futureBudget: "x" }]) {
+        await assert.rejects(
+          executor.executePrompt("synthetic", {
+            model: "dynamic",
+            modelVendor: "copilot",
+            modelConfiguration: malformed as never,
+          }),
+          (error: unknown) =>
+            (error as Record<string, unknown>).copilotSchedulerPromptBlocked ===
+            "modelConfigurationUnavailable",
+        );
+      }
+      assert.strictEqual(calls.length, 0);
+      await executor.executePrompt("synthetic", {
+        agent: "ask",
+        model: "dynamic",
+        modelVendor: "copilot",
+        modelConfiguration: {},
+        chatSession: "continue",
+      });
+      assert.deepStrictEqual(calls, ["workbench.action.chat.open"]);
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: originalCommand,
+      });
+    }
+  });
   test("task chatSession override wins over configuration", async () => {
     const originalGetConfiguration = vscode.workspace.getConfiguration;
 
@@ -363,6 +488,52 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       );
     } finally {
       CopilotExecutor.getAvailableModelsWithSource = original;
+    }
+  });
+
+  test("Codex Bridge quality sync failures block dispatch instead of ignoring the effort", async () => {
+    const fs = await import("fs");
+    const os = await import("os");
+    const path = await import("path");
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-bridge-block-"),
+    );
+    const executorClass = CopilotExecutor as unknown as {
+      extensionGlobalStorageUri?: vscode.Uri;
+    };
+    const previous = executorClass.extensionGlobalStorageUri;
+    executorClass.extensionGlobalStorageUri = vscode.Uri.file(
+      path.join(root, "globalStorage", "scheduler"),
+    );
+    const executor = new CopilotExecutor() as unknown as {
+      syncExperimentalModelQuality: (
+        selection: {
+          model: string;
+          modelVendor: string;
+          modelFamily: string;
+          modelReasoningEffort: string;
+        },
+        matched: undefined,
+      ) => Promise<void>;
+    };
+    try {
+      await assert.rejects(
+        executor.syncExperimentalModelQuality(
+          {
+            model: "default::gpt-6-luna",
+            modelVendor: "openai-codex",
+            modelFamily: "gpt-6-luna",
+            modelReasoningEffort: "high",
+          },
+          undefined,
+        ),
+        (error: unknown) =>
+          (error as Record<string, unknown>).copilotSchedulerPromptBlocked ===
+          "providerModelDispatchFailed",
+      );
+    } finally {
+      executorClass.extensionGlobalStorageUri = previous;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -432,6 +432,16 @@ export const messages = {
   agentGlobalDesc: () => t("Global agent", "グローバルエージェント"),
   modelDefaultName: () => t("Default", "デフォルト"),
   modelDefaultDesc: () => t("Use default model", "デフォルトモデルを使用"),
+  dynamicConfigurationUnavailable: () =>
+    t(
+      "The saved model options are unavailable or conflict with legacy reasoning settings. Refresh models and select valid options.",
+      "保存したモデル設定が利用不可か、旧思考設定と競合しています。モデルを更新して有効な候補を選んでください。",
+    ),
+  dynamicConfigurationExecutionBlocked: () =>
+    t(
+      "Could not prepare the configured task model. Dynamic execution requires VS Code 1.141 or later and an available, authorized source model. No fallback model was used.",
+      "設定固定タスクモデルを準備できませんでした。動的実行には VS Code 1.141 以降と、利用可能で承認済みの元モデルが必要です。別モデルへの fallback は行っていません。",
+    ),
   providerModelUnavailable: () =>
     t(
       "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
@@ -517,6 +527,26 @@ export const messages = {
       "直接呼び出せるエージェントのみ表示します。フロントマターで `user-invocable: false` のエージェントはサブエージェント専用のため非表示です。",
     ),
   labelModel: () => t("Model", "モデル"),
+  labelDynamicModelOptions: () =>
+    t("Dynamic Model Options (Experimental)", "動的モデル設定（試験的）"),
+  labelUseDynamicModelOptions: () =>
+    t("Use schema-based task options", "スキーマに基づくタスク設定を使う"),
+  labelInheritModelOptions: () =>
+    t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
+  labelDynamicModelOptionsBlocked: () =>
+    t(
+      "Task options are fixed for each request without changing shared Chat settings. Requires VS Code 1.141 or later and source-provider access.",
+      "タスク設定は共有 Chat 設定を変更せず、リクエストごとに固定します。VS Code 1.141 以降と元の提供元へのアクセスが必要です。",
+    ),
+  labelInvalidModelConfiguration: () =>
+    t(
+      "Saved model options are invalid or use an unsupported format. Values are retained; explicitly inherit shared settings to repair them.",
+      "保存したモデル設定が不正か未対応の形式です。値は保持します。修復する場合は共有設定の継承を明示的に選んでください。",
+    ),
+  actionInheritModelConfiguration: () =>
+    t("Use inherited model settings", "共有モデル設定を継承する"),
+  labelModelSchemaUnavailable: () =>
+    t("Model option schema unavailable", "モデル設定スキーマを取得できません"),
   labelModelVariant: () => t("Thinking Effort", "思考の負荷"),
   labelModelVariantDefault: () => t("Default", "既定"),
   labelModelShowAll: () =>

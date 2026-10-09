@@ -1,4 +1,9 @@
-import type { ModelInfo, ModelSelectionFields } from "./types";
+import type {
+  ModelInfo,
+  ModelSelectionFields,
+  ModelConfiguration,
+} from "./types";
+import { normalizeModelConfiguration } from "./model-configuration";
 import {
   getExperimentalModelQualityVariants,
   type ExperimentalReasoningEffort,
@@ -40,6 +45,7 @@ export type NormalizedModelSelection = {
   modelFamily?: string;
   modelVersion?: string;
   modelReasoningEffort?: string;
+  modelConfiguration?: ModelConfiguration;
 };
 
 export type BuildModelPickerGroupsOptions = {
@@ -283,6 +289,8 @@ function normalizeModelInfo(model: ModelInfo): ModelInfo {
     family: trimOptionalText(model.family),
     version: trimOptionalText(model.version),
     maxInputTokens: normalizeOptionalNumber(model.maxInputTokens),
+    configurationOptions: model.configurationOptions,
+    configurationStatus: model.configurationStatus,
   };
 }
 
@@ -861,10 +869,19 @@ export function normalizeModelSelection(
     modelFamily: trimOptionalText(selection?.modelFamily),
     modelVersion: trimOptionalText(selection?.modelVersion),
     modelReasoningEffort: trimOptionalText(selection?.modelReasoningEffort),
+    ...(selection?.modelConfiguration !== undefined
+      ? {
+          modelConfiguration: normalizeModelConfiguration(
+            selection.modelConfiguration,
+          ),
+        }
+      : {}),
   };
 
-  normalized.modelReasoningEffort =
-    normalizeSelectionReasoningEffort(normalized);
+  if (normalized.modelConfiguration === undefined) {
+    normalized.modelReasoningEffort =
+      normalizeSelectionReasoningEffort(normalized);
+  }
 
   return normalized;
 }
@@ -924,6 +941,7 @@ export function filterExpandedPickerModelCatalog(
   models: readonly ModelInfo[],
 ): ModelInfo[] {
   return models.filter((model) => {
+    if (model?.vendor === "copilot-scheduler-configured") return false;
     if (!model || typeof model.id !== "string") {
       return false;
     }
@@ -1029,7 +1047,8 @@ export function hasModelSelection(
     normalized.modelVendor ||
     normalized.modelFamily ||
     normalized.modelVersion ||
-    normalized.modelReasoningEffort
+    normalized.modelReasoningEffort ||
+    normalized.modelConfiguration !== undefined
   );
 }
 
@@ -1057,7 +1076,10 @@ export function areModelSelectionsEqual(
     normalizedLeft.modelVendor === normalizedRight.modelVendor &&
     normalizedLeft.modelFamily === normalizedRight.modelFamily &&
     normalizedLeft.modelVersion === normalizedRight.modelVersion &&
-    normalizedLeft.modelReasoningEffort === normalizedRight.modelReasoningEffort
+    normalizedLeft.modelReasoningEffort ===
+      normalizedRight.modelReasoningEffort &&
+    JSON.stringify(normalizedLeft.modelConfiguration) ===
+      JSON.stringify(normalizedRight.modelConfiguration)
   );
 }
 

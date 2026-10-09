@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { CreateTaskInput, TaskAttachment } from "../../types";
+import type {
+  CreateTaskInput,
+  TaskAttachment,
+  ModelConfiguration,
+} from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
@@ -26,6 +30,7 @@ interface CreateTaskToolInput {
   model?: string;
   modelVendor?: string;
   modelReasoningEffort?: string;
+  modelConfiguration?: ModelConfiguration;
   enabled?: boolean;
   chatSession?: string;
   autoMode?: boolean;
@@ -51,6 +56,8 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     model: input.model,
     modelVendor: input.modelVendor,
     modelReasoningEffort: input.modelReasoningEffort,
+    modelConfiguration:
+      input.modelConfiguration ?? (input.modelReasoningEffort ? undefined : {}),
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
     autoMode: input.autoMode,

@@ -104,9 +104,27 @@ Create a one-time task by sending `runAt` as an ISO 8601 date-time with an expli
 
 Models registered with VS Code Chat by additional providers, including Codex Bridge, BYOK and local LLM providers, are available alongside Copilot models. The model picker groups models by provider, then offers their quality variants separately. `kind=list_models` returns each model's `vendor`; create/update accept `modelVendor` to disambiguate identical model ids across providers. Exact ids are preferred over normalized aliases; ambiguous id, alias or name matches across providers require `modelVendor`. Saved provider identities are preserved during model resolution. A failed Copilot-only catalog lookup does not prevent discovery of other providers, and a failed full-catalog lookup retains successfully discovered Copilot models.
 
-For an explicitly selected additional provider, an unavailable model or a rejected Chat dispatch blocks the run rather than retrying with the default model or another provider. Provider authentication, connectivity and support for the selected Chat/Agent mode are still required. A successful dispatch does not prove that the provider completed its response. Additional providers do not inherit Copilot-specific experimental reasoning settings: configure their supported options through the provider's own controls. Native Claude/Codex agent-harness scheduling is not part of this integration.
+For an explicitly selected additional provider, an unavailable model or a rejected Chat dispatch blocks the run rather than retrying with the default model or another provider. Provider authentication, connectivity and support for the selected Chat/Agent mode are still required. A successful dispatch does not prove that the provider completed its response. Native Claude/Codex agent-harness scheduling is not part of this integration.
 
-#### Additional Provider Smoke Check
+Codex Bridge 1.0.0 GPT 6 Luna (`openai-codex`, `<profile>::gpt-6-luna`) has experimental per-task `Default` / `Low` / `High` choices. The public API does not expose live reasoning capabilities, so this is a scoped compatibility rule, not automatic support for other models. Selections update Chat's shared per-model settings while preserving speed, context options and other profiles. `Default` clears the reasoning override and returns to Bridge's default or workspace fallback. A missing/ambiguous profile, unknown setting format or failed settings write blocks dispatch. Configure other models/providers through their own controls. On 2026-10-09, the candidate on isolated VS Code 1.141.0 verified real Low/High responses and Bridge request logs in Ask mode at normal speed. Live Default/Fast inference, other models and other environments remain unverified.
+
+#### Dynamic Model Options (Experimental)
+
+The task form and `scheduler_query kind=list_models` discover per-model enum values and labels from VS Code's internal `vscode://schemas/language-models` document. Recognized properties are `mode`, `reasoningEffort`, `speedMode`, and `contextSize`; numeric values remain numbers. Fast and context choices appear only when the selected model advertises them. Unsupported or unavailable schemas do not produce guessed options, and unavailable saved choices remain visible. This internal schema contract may change with VS Code updates.
+
+New tasks use `modelConfiguration: {}` to inherit current shared Chat settings without changing them. Omission on update preserves the task's map; `{}` clears only task overrides. **Explicit dynamic options execute on VS Code 1.141 or later.** Scheduler creates an immutable task-configured model that forwards the existing Chat/Agent request to the original model with selected options fixed on that request. It does not rewrite shared model settings, copy credentials, or require a provider fork. Tools, streamed responses and cancellation are forwarded. The original model/provider remains persisted on the task. Missing models, changed/invalid options, failed authorization and rejected dispatch stop without default-model fallback or automatic resend. Native source-model access approval may be required on first use. Existing legacy `modelReasoningEffort` behavior remains available and cannot be combined with the new map.
+
+Configuration maps survive ordinary edits, duplication and reload. Changing the model clears its dynamic overrides. Do not save these tasks in older Scheduler versions: unknown fields may be lost. Selected fields are fixed per request; unselected fields still inherit source-model settings. The schema URI and request-configuration adapter are internal VS Code compatibility contracts, verified on 1.141.0; older hosts reject explicit dynamic execution while retaining legacy/inherited behavior. The internal configured models are hidden from task selection. A real isolated Chat test through Scheduler verified Low/Auto and High Fast/numeric context on a synthetic provider without shared-setting changes; this is not a claim of network inference certification for every provider or proposed-only message type.
+
+#### Additional Provider Verification
+
+Scheduler verifies the returned model identity as well as the lookup selector. A different provider, model ID, or explicitly pinned version stops before source dispatch or token calculation. Unversioned source models remain usable after fresh schema validation; the internally registered configured model is matched against its own declared identity. Preparing request overrides does not mutate the caller's configuration or tool array.
+
+Cancellation is rechecked after asynchronous source/schema preparation and response/token-count completion. A cancellation during preparation does not send or count tokens; a cancellation during an empty response stream or completed token calculation is not returned as success. Fixed-request bindings remain immutable; Scheduler does not retry a cancelled or failed configured request using different settings.
+
+Reselecting the same model ID and provider preserves the task's dynamic options. Changing either identity component clears inherited task overrides unless new options are explicitly supplied and validated. An empty `model` clears the saved ID, name, provider, family, version and option map so old display metadata cannot resolve the cleared selection again.
+
+Invalid stored option values are retained unchanged in the task editor rather than converted into empty overrides. The form disables those choices and offers an explicit **Use inherited model settings** repair action. A failed catalog refresh invalidates cached dynamic options while retaining model identities. Schema properties explicitly marked secret or password are not exposed as task choices.
 
 Automated discovery/selection/dispatch tests use synthetic providers; they do not certify provider authentication, inference or host UI behavior. Verify a provider in an empty isolated VS Code profile with separate storage, without importing saved tasks:
 
@@ -235,7 +253,7 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 
 ## 📋 Requirements
 
-- VS Code 1.95.0 or higher
+- VS Code 1.95.0 or higher for existing scheduling/legacy execution. Per-task dynamic model options require VS Code 1.141.0 or higher and source-model access authorization; older hosts retain legacy/inherited execution but reject explicit dynamic overrides.
 - GitHub Copilot extension
 
 ## Development Tests

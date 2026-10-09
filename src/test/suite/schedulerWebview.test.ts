@@ -5,7 +5,8 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
-import type { PromptPreview, ScheduledTask } from "../../types";
+import type { PromptPreview, ScheduledTask, ModelInfo } from "../../types";
+import { CopilotExecutor } from "../../copilotExecutor";
 import {
   runSanitizerParityCases,
   runSharedSanitizerCases,
@@ -1841,6 +1842,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           pendingModelFamily: "",
           pendingModelVersion: "",
           pendingModelReasoningEffort: "",
+          modelConfigurationState: undefined,
           templateSelect: {
             value: promptSource === "inline" ? "" : original.promptPath,
           },
@@ -1888,6 +1890,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
           ...Object.keys(context),
           [
             extractFunctionSource(source, "boundedNumber"),
+            extractFunctionSource(source, "copyModelConfigurationForForm"),
+            extractFunctionSource(source, "serializeModelConfigurationForDiff"),
             extractFunctionSource(source, "normalizeTaskForEditDiff"),
             extractFunctionSource(source, "buildTaskUpdateData"),
             `return (${callback});`,
@@ -3159,6 +3163,236 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(!select.innerHTML.includes("<script>"));
     for (let index = 0; index < groups.length; index++) {
       assert.ok(select.innerHTML.includes(`value="provider-${index}"`));
+    }
+  });
+
+  test("dynamic model controls retain numeric values and unavailable saved choices", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const render = extractFunctionSource(
+      source,
+      "renderModelConfigurationControls",
+    );
+    class Element {
+      children: Element[] = [];
+      value = "";
+      textContent = "";
+      id = "";
+      htmlFor = "";
+      className = "";
+      checked = false;
+      style: Record<string, string> = {};
+      listeners: Record<string, () => void> = {};
+      set innerHTML(_value: string) {
+        this.children = [];
+      }
+      appendChild(child: Element) {
+        this.children.push(child);
+      }
+      addEventListener(event: string, handler: () => void) {
+        this.listeners[event] = handler;
+      }
+    }
+    const controls = new Element();
+    const group = new Element();
+    const enabled = new Element();
+    const note = new Element();
+    const factory = new Function(
+      "document",
+      "modelConfigurationControls",
+      "modelConfigurationGroup",
+      "modelConfigurationEnabled",
+      "modelConfigurationNote",
+      `
+      var modelConfigurationState = {};
+      var activeConfigurationModel = null;
+      var editingTaskSnapshot = null;
+      var strings = { labelInheritModelOptions: "Inherit", labelModelUnavailableSuffix: "Unavailable", labelDynamicModelOptionsBlocked: "Blocked" };
+      ${render}
+      ${extractFunctionSource(source, "copyModelConfigurationForForm")}
+      ${extractFunctionSource(source, "isEditableModelConfiguration")}
+      var modelConfigurationReset = null;
+      ${extractBlockFromStartToken(source, "if (modelConfigurationReset) {")}
+      return { render: renderModelConfigurationControls, state: () => modelConfigurationState };
+    `,
+    );
+    const api = factory(
+      { createElement: () => new Element() },
+      controls,
+      group,
+      enabled,
+      note,
+    );
+    const model = {
+      configurationStatus: "available",
+      configurationOptions: [
+        {
+          key: "contextSize",
+          label: "Context",
+          choices: [
+            { value: "auto", label: "Auto" },
+            { value: 4096, label: "Maximum" },
+            { value: "4096", label: "String" },
+          ],
+        },
+      ],
+    };
+    api.render(model, { modelConfiguration: { contextSize: 4096 } });
+    const select = controls.children[0].children[1];
+    assert.strictEqual(select.value, "1");
+    select.value = "2";
+    select.listeners.change();
+    assert.strictEqual(api.state().contextSize, "4096");
+    api.render(model, { modelConfiguration: { contextSize: 8192 } });
+    const missing = controls.children[0].children[1];
+    assert.strictEqual(missing.value, "unavailable");
+    assert.strictEqual(api.state().contextSize, 8192);
+    assert.strictEqual(note.textContent, "Blocked");
+    for (const rawConfiguration of [
+      null,
+      ["future"],
+      "unexpected",
+      { mode: { future: true } },
+    ]) {
+      api.render(model, { modelConfiguration: rawConfiguration });
+      assert.deepStrictEqual(
+        api.state(),
+        rawConfiguration,
+        "Invalid saved configuration must remain unchanged in the editor",
+      );
+      assert.strictEqual(
+        controls.children.length,
+        0,
+        "Invalid settings must not become editable valid-looking choices",
+      );
+    }
+  });
+
+  test("configuration form copy and diff preserve invalid JSON values without prototype coercion", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const api =
+      new Function(`${extractFunctionSource(source, "copyModelConfigurationForForm")}
+      ${extractFunctionSource(source, "serializeModelConfigurationForDiff")}
+      return { copy: copyModelConfigurationForForm, diff: serializeModelConfigurationForDiff };`)();
+    for (const value of [
+      null,
+      ["future"],
+      "raw",
+      { mode: { future: true } },
+      JSON.parse('{"__proto__":{"future":true}}'),
+    ]) {
+      const copied = api.copy(value);
+      assert.deepStrictEqual(copied, value);
+      assert.doesNotThrow(() => api.diff(copied));
+      assert.strictEqual(api.diff(copied), api.diff(value));
+    }
+    assert.strictEqual(
+      api.diff({ contextSize: 4096, mode: "fast:high" }),
+      api.diff({ mode: "fast:high", contextSize: 4096 }),
+    );
+    assert.notStrictEqual(api.diff(null), api.diff({}));
+  });
+
+  test("invalid model configuration repairs only on explicit reset", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let onClick: (() => void) | undefined;
+    const reset = {
+      addEventListener: (_event: string, handler: () => void) => {
+        onClick = handler;
+      },
+    };
+    const api = new Function(
+      "modelConfigurationReset",
+      `
+      var modelConfigurationState = null;
+      var pendingModelReasoningEffort = "high";
+      var activeConfigurationModel = null;
+      var renders = 0;
+      function renderModelConfigurationControls() { renders++; }
+      ${extractBlockFromStartToken(source, "if (modelConfigurationReset) {")}
+      return { state: () => modelConfigurationState, pending: () => pendingModelReasoningEffort, renders: () => renders };
+    `,
+    )(reset);
+    assert.strictEqual(api.state(), null);
+    assert.strictEqual(api.renders(), 0);
+    assert.ok(onClick);
+    onClick!();
+    assert.deepStrictEqual(api.state(), {});
+    assert.strictEqual(api.pending(), "");
+    assert.strictEqual(api.renders(), 1);
+  });
+
+  test("model refresh failure invalidates stale choices without overwriting a newer refresh", async () => {
+    const wv = SchedulerWebview as unknown as {
+      cachedModels: ModelInfo[];
+      cachedAgents: unknown[];
+      modelRefreshGeneration: number;
+      refreshAgentsAndModels(force: boolean): Promise<void>;
+    };
+    const originalModels = wv.cachedModels;
+    const originalAgents = wv.cachedAgents;
+    const originalGeneration = wv.modelRefreshGeneration;
+    const getModels = CopilotExecutor.getAvailableModelsWithSource;
+    const getAgents = CopilotExecutor.getAllAgents;
+    const fresh: ModelInfo = {
+      id: "fresh",
+      name: "Fresh",
+      vendor: "copilot",
+      description: "",
+      configurationStatus: "available",
+      configurationOptions: [
+        {
+          key: "reasoningEffort",
+          label: "Thinking",
+          choices: [{ value: "high", label: "High" }],
+        },
+      ],
+    };
+    try {
+      CopilotExecutor.getAllAgents = async () => [];
+      wv.cachedModels = [fresh];
+      CopilotExecutor.getAvailableModelsWithSource = async () => {
+        throw new Error("catalog failed");
+      };
+      await wv.refreshAgentsAndModels(true);
+      assert.strictEqual(wv.cachedModels[0].id, "fresh");
+      assert.strictEqual(wv.cachedModels[0].configurationStatus, "unavailable");
+      assert.deepStrictEqual(wv.cachedModels[0].configurationOptions, []);
+      let rejectOlder: ((error: Error) => void) | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      CopilotExecutor.getAvailableModelsWithSource = () =>
+        new Promise((_, reject) => {
+          rejectOlder = reject;
+          markStarted!();
+        });
+      const older = wv.refreshAgentsAndModels(true);
+      await started;
+      CopilotExecutor.getAvailableModelsWithSource = async () => ({
+        source: "api",
+        models: [fresh],
+      });
+      await wv.refreshAgentsAndModels(true);
+      rejectOlder!(new Error("old refresh failed"));
+      await older;
+      assert.strictEqual(wv.cachedModels[0].configurationStatus, "available");
+      assert.strictEqual(wv.cachedModels[0].configurationOptions?.length, 1);
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = getModels;
+      CopilotExecutor.getAllAgents = getAgents;
+      wv.cachedModels = originalModels;
+      wv.cachedAgents = originalAgents;
+      wv.modelRefreshGeneration = originalGeneration;
     }
   });
 

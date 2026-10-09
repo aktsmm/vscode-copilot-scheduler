@@ -827,6 +827,37 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(selection.modelReasoningEffort, "high");
   });
 
+  test("Codex Bridge picker and normalization retain Luna task reasoning", () => {
+    const catalog = [
+      {
+        id: "default::gpt-6-luna",
+        name: "GPT 6 Luna",
+        description: "",
+        vendor: "openai-codex",
+        family: "gpt-6-luna",
+      },
+    ];
+    const groups = buildModelPickerGroups(catalog, {
+      includeExperimentalModelQualityVariants: true,
+    });
+    assert.deepStrictEqual(
+      groups[0].variants.map((variant) => variant.reasoningEffort),
+      [undefined, "low", "high"],
+    );
+    for (const effort of ["low", "high", "xhigh"]) {
+      const selection = normalizeModelSelection({
+        model: catalog[0].id,
+        modelVendor: "openai-codex",
+        modelFamily: "gpt-6-luna",
+        modelReasoningEffort: effort,
+      });
+      assert.strictEqual(
+        selection.modelReasoningEffort,
+        effort === "xhigh" ? undefined : effort,
+      );
+    }
+  });
+
   test("normalizeModelSelection retains explicit GPT-6 Sol reasoning after model migration", () => {
     for (const effort of ["none", "xhigh"]) {
       const selection = normalizeModelSelection({

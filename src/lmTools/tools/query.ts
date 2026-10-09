@@ -10,6 +10,7 @@ import {
 } from "../../executionHistoryStore";
 import { sanitizeAbsolutePathDetails } from "../../errorSanitizer";
 import { getSupportedExperimentalReasoningEfforts } from "../../modelQualityExperiment";
+import { supportsConfiguredModelExecution } from "../../configured-model-provider";
 import type { ScheduleManager } from "../../scheduleManager";
 import type {
   AgentInfo,
@@ -256,6 +257,11 @@ async function handleListModels(
       vendor: model.vendor,
       family: model.family,
       version: model.version,
+      configurationOptions: model.configurationOptions || [],
+      configurationStatus: model.configurationStatus || "unavailable",
+      configurationExecution: supportsConfiguredModelExecution()
+        ? "per_request_bound_model"
+        : "requires_vscode_1_141",
       supportedReasoningEfforts: getSupportedExperimentalReasoningEfforts({
         id: model.id,
         name: model.name,

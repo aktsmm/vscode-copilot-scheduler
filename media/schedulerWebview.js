@@ -568,6 +568,11 @@
   var pendingModelFamily = "";
   var pendingModelVersion = "";
   var pendingModelReasoningEffort = "";
+  var modelConfigurationState = {};
+  var activeConfigurationModel = null;
+  var modelConfigurationReset = document.getElementById(
+    "model-configuration-reset",
+  );
   var pendingTemplatePath = "";
   var editingTaskEnabled = true;
   var editingTaskSnapshot = null;
@@ -678,6 +683,18 @@
   var modelSelect = document.getElementById("model-select");
   var modelVariantGroup = document.getElementById("model-variant-group");
   var modelVariantSelect = document.getElementById("model-variant-select");
+  var modelConfigurationGroup = document.getElementById(
+    "model-configuration-group",
+  );
+  var modelConfigurationControls = document.getElementById(
+    "model-configuration-controls",
+  );
+  var modelConfigurationEnabled = document.getElementById(
+    "model-configuration-enabled",
+  );
+  var modelConfigurationNote = document.getElementById(
+    "model-configuration-note",
+  );
   var modelExperimentalNote = document.getElementById(
     "model-experimental-note",
   );
@@ -898,6 +915,37 @@
     chatSessionNote.textContent = String(defaultChatSessionNote || "");
   }
 
+  function copyModelConfigurationForForm(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+  }
+
+  function isEditableModelConfiguration(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    var allowed = ["mode", "reasoningEffort", "speedMode", "contextSize"];
+    return Object.keys(value).every(function (key) {
+      var selected = value[key];
+      return (
+        allowed.indexOf(key) >= 0 &&
+        ((typeof selected === "string" && selected.length <= 256) ||
+          (typeof selected === "number" && Number.isFinite(selected)))
+      );
+    });
+  }
+
+  function serializeModelConfigurationForDiff(value) {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return JSON.stringify(value);
+    return JSON.stringify(
+      Object.keys(value)
+        .sort()
+        .map(function (key) {
+          return [key, value[key]];
+        }),
+    );
+  }
+
   function normalizeTaskForEditDiff(task) {
     var source = task || {};
     return {
@@ -913,6 +961,9 @@
       modelFamily: String(source.modelFamily || ""),
       modelVersion: String(source.modelVersion || ""),
       modelReasoningEffort: String(source.modelReasoningEffort || ""),
+      modelConfiguration: serializeModelConfigurationForDiff(
+        source.modelConfiguration,
+      ),
       scope: source.scope || "workspace",
       promptSource: source.promptSource || "inline",
       promptPath: String(source.promptPath || ""),
@@ -997,7 +1048,17 @@
       modelVendor: option.dataset.modelVendor || "",
       modelFamily: option.dataset.modelFamily || "",
       modelVersion: option.dataset.modelVersion || "",
-      modelReasoningEffort: option.dataset.modelReasoningEffort || "",
+      modelReasoningEffort:
+        modelConfigurationState !== undefined
+          ? ""
+          : option.dataset.modelReasoningEffort || "",
+      ...(modelConfigurationState !== undefined
+        ? {
+            modelConfiguration: copyModelConfigurationForForm(
+              modelConfigurationState,
+            ),
+          }
+        : {}),
     };
   }
 
@@ -1153,6 +1214,13 @@
     if (!modelVariantSelect) return;
 
     var variants = group && Array.isArray(group.variants) ? group.variants : [];
+    var matchingConfiguration = findModelPickerSelection([group], selection);
+    renderModelConfigurationControls(
+      matchingConfiguration
+        ? matchingConfiguration.variant.model
+        : variants[0] && variants[0].model,
+      selection,
+    );
     if (variants.length <= 1) {
       clearModelVariantOptions();
       return;
@@ -1191,7 +1259,16 @@
         .join("");
 
     if (modelVariantGroup) {
-      modelVariantGroup.style.display = "block";
+      modelVariantGroup.style.display =
+        modelConfigurationState !== undefined &&
+        variants.every(function (variant) {
+          return (
+            variant.model.id === variants[0].model.id &&
+            variant.model.version === variants[0].model.version
+          );
+        })
+          ? "none"
+          : "block";
     }
 
     var matchedVariantKey = "";
@@ -1227,6 +1304,114 @@
     }
 
     return null;
+  }
+
+  function renderModelConfigurationControls(model, selection) {
+    if (
+      !modelConfigurationGroup ||
+      !modelConfigurationControls ||
+      !modelConfigurationEnabled
+    )
+      return;
+    activeConfigurationModel = model || null;
+    if (selection)
+      modelConfigurationState = copyModelConfigurationForForm(
+        selection.modelConfiguration,
+      );
+    var descriptors =
+      model && Array.isArray(model.configurationOptions)
+        ? model.configurationOptions
+        : [];
+    var savedKeys = modelConfigurationState
+      ? Object.keys(modelConfigurationState)
+      : [];
+    var invalidConfiguration =
+      modelConfigurationState !== undefined &&
+      !isEditableModelConfiguration(modelConfigurationState);
+    modelConfigurationGroup.style.display =
+      descriptors.length || savedKeys.length || invalidConfiguration
+        ? "block"
+        : "none";
+    modelConfigurationEnabled.checked = modelConfigurationState !== undefined;
+    modelConfigurationEnabled.disabled =
+      !!(
+        editingTaskSnapshot &&
+        editingTaskSnapshot.modelConfiguration !== undefined
+      ) || invalidConfiguration;
+    modelConfigurationControls.innerHTML = "";
+    if (modelConfigurationNote)
+      modelConfigurationNote.textContent =
+        model && model.configurationStatus === "available"
+          ? strings.labelDynamicModelOptionsBlocked || ""
+          : strings.labelModelSchemaUnavailable || "";
+    if (modelConfigurationReset)
+      modelConfigurationReset.style.display = invalidConfiguration
+        ? "inline-flex"
+        : "none";
+    if (modelConfigurationState === undefined) return;
+    if (invalidConfiguration) {
+      if (modelConfigurationNote)
+        modelConfigurationNote.textContent =
+          strings.labelInvalidModelConfiguration || "";
+      return;
+    }
+    var entries = descriptors.slice();
+    savedKeys.forEach(function (key) {
+      if (
+        !entries.some(function (entry) {
+          return entry.key === key;
+        })
+      )
+        entries.push({ key: key, label: key, choices: [] });
+    });
+    entries.forEach(function (descriptor) {
+      var wrapper = document.createElement("div");
+      wrapper.className = "form-group col-6";
+      var label = document.createElement("label");
+      var select = document.createElement("select");
+      select.id = "model-configuration-" + descriptor.key;
+      label.htmlFor = select.id;
+      label.textContent = descriptor.label || descriptor.key;
+      var inherited = document.createElement("option");
+      inherited.value = "";
+      inherited.textContent = strings.labelInheritModelOptions || "";
+      select.appendChild(inherited);
+      var choices = Array.isArray(descriptor.choices) ? descriptor.choices : [];
+      var currentValue = modelConfigurationState[descriptor.key];
+      var found = currentValue === undefined;
+      choices.forEach(function (choice, index) {
+        var option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = choice.label;
+        select.appendChild(option);
+        if (choice.value === currentValue) {
+          select.value = String(index);
+          found = true;
+        }
+      });
+      if (!found) {
+        var unavailable = document.createElement("option");
+        unavailable.value = "unavailable";
+        unavailable.textContent =
+          String(currentValue) +
+          " " +
+          (strings.labelModelUnavailableSuffix || "");
+        select.appendChild(unavailable);
+        select.value = "unavailable";
+      }
+      select.addEventListener("change", function () {
+        if (select.value === "") delete modelConfigurationState[descriptor.key];
+        else if (
+          select.value !== "unavailable" &&
+          choices[Number(select.value)]
+        )
+          modelConfigurationState[descriptor.key] =
+            choices[Number(select.value)].value;
+      });
+      wrapper.appendChild(label);
+      wrapper.appendChild(select);
+      modelConfigurationControls.appendChild(wrapper);
+    });
   }
 
   function updateModelSelectionStatus() {
@@ -1512,6 +1697,7 @@
     modelSelect.addEventListener("change", function () {
       clearUnavailableModelOptions(modelSelect);
       clearPendingModelSelection();
+      if (modelConfigurationState !== undefined) modelConfigurationState = {};
       updateModelVariantOptions(
         findModelPickerGroup(getActiveModelPickerGroups(), modelSelect.value),
         null,
@@ -1523,8 +1709,39 @@
   if (modelVariantSelect) {
     modelVariantSelect.addEventListener("change", function () {
       clearPendingModelSelection();
+      if (modelConfigurationState !== undefined) modelConfigurationState = {};
+      var group = findModelPickerGroup(
+        getActiveModelPickerGroups(),
+        modelSelect.value,
+      );
+      var variant =
+        group &&
+        group.variants.find(function (entry) {
+          return entry.key === modelVariantSelect.value;
+        });
+      renderModelConfigurationControls(variant && variant.model, null);
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
+    });
+  }
+  if (modelConfigurationEnabled) {
+    modelConfigurationEnabled.addEventListener("change", function () {
+      modelConfigurationState = modelConfigurationEnabled.checked
+        ? {}
+        : undefined;
+      pendingModelReasoningEffort = "";
+      renderModelConfigurationControls(activeConfigurationModel, null);
+      updateModelVariantOptions(
+        findModelPickerGroup(getActiveModelPickerGroups(), modelSelect.value),
+        null,
+      );
+    });
+  }
+  if (modelConfigurationReset) {
+    modelConfigurationReset.addEventListener("click", function () {
+      modelConfigurationState = {};
+      pendingModelReasoningEffort = "";
+      renderModelConfigurationControls(activeConfigurationModel, null);
     });
   }
   if (templateSelect) {
@@ -1830,7 +2047,11 @@
         if (!modelVersionValue && pendingModelVersion) {
           modelVersionValue = pendingModelVersion;
         }
-        if (!modelReasoningEffortValue && pendingModelReasoningEffort) {
+        if (
+          modelConfigurationState === undefined &&
+          !modelReasoningEffortValue &&
+          pendingModelReasoningEffort
+        ) {
           modelReasoningEffortValue = pendingModelReasoningEffort;
         }
       }
@@ -1889,6 +2110,10 @@
         modelFamily: modelFamilyValue,
         modelVersion: modelVersionValue,
         modelReasoningEffort: modelReasoningEffortValue,
+        modelConfiguration:
+          modelConfigurationState !== undefined
+            ? copyModelConfigurationForForm(modelConfigurationState)
+            : undefined,
         scope: scopeEl ? scopeEl.value : "workspace",
         promptSource: promptSourceValue,
         promptPath: promptPathValue,
@@ -2062,6 +2287,10 @@
         modelReasoningEffort: currentModelSelection
           ? currentModelSelection.modelReasoningEffort || ""
           : "",
+        modelConfiguration:
+          modelConfigurationState !== undefined
+            ? copyModelConfigurationForForm(modelConfigurationState)
+            : undefined,
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
         }),
@@ -2990,6 +3219,7 @@
   }
 
   function resetForm() {
+    modelConfigurationState = {};
     if (taskForm) taskForm.reset();
     updateScheduleMode();
     setEditingMode(null);
@@ -3242,6 +3472,9 @@
     pendingModelFamily = task.modelFamily || "";
     pendingModelVersion = task.modelVersion || "";
     pendingModelReasoningEffort = task.modelReasoningEffort || "";
+    modelConfigurationState = copyModelConfigurationForForm(
+      task.modelConfiguration,
+    );
     if (agentSelect) {
       if (
         pendingAgentValue &&
@@ -3262,6 +3495,7 @@
         modelFamily: pendingModelFamily,
         modelVersion: pendingModelVersion,
         modelReasoningEffort: pendingModelReasoningEffort,
+        modelConfiguration: task.modelConfiguration,
       };
       applyModelSelection({
         model: requestedModelSelection.model,
@@ -3270,6 +3504,7 @@
         modelFamily: requestedModelSelection.modelFamily,
         modelVersion: requestedModelSelection.modelVersion,
         modelReasoningEffort: requestedModelSelection.modelReasoningEffort,
+        modelConfiguration: requestedModelSelection.modelConfiguration,
       });
       var appliedModelSelection = getCurrentModelSelection();
       if (appliedModelSelection) {
@@ -3499,6 +3734,7 @@
               modelFamily: pendingModelFamily,
               modelVersion: pendingModelVersion,
               modelReasoningEffort: pendingModelReasoningEffort,
+              modelConfiguration: modelConfigurationState,
             };
             models = Array.isArray(message.models) ? message.models : [];
             modelPickerDefault = Array.isArray(message.modelPickerDefault)

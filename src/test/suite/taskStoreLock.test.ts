@@ -9,6 +9,28 @@ import {
 } from "../../task-store-lock";
 
 suite("Task Store Lock", () => {
+  test("creates a missing storage parent before acquiring the first lock", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-lock-"));
+    const lockPath = path.join(
+      root,
+      "new-profile",
+      "scheduler",
+      "scheduledTasks.lock",
+    );
+    try {
+      assert.strictEqual(fs.existsSync(path.dirname(lockPath)), false);
+      const result = await withTaskStoreLock(lockPath, async () => {
+        assert.strictEqual(fs.existsSync(lockPath), true);
+        return "first-save";
+      });
+      assert.strictEqual(result, "first-save");
+      assert.strictEqual(fs.existsSync(path.dirname(lockPath)), true);
+      assert.strictEqual(fs.existsSync(lockPath), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a second writer while the lock is held", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-lock-"));
     const lockPath = path.join(root, "scheduledTasks.lock");

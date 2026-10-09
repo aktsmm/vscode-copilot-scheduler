@@ -37,6 +37,7 @@ type UpdateLanguageModelsConfigParams = {
   vendor: string;
   modelId: string;
   reasoningEffort?: ExperimentalReasoningEffort;
+  defaultSpeedMode?: "normal" | "fast";
 };
 
 export type ExperimentalModelQualitySelectionResult = {
@@ -48,7 +49,7 @@ export type ExperimentalModelQualitySelectionResult = {
   effectiveReasoningEffort?: ExperimentalReasoningEffort;
   previousReasoningEffort?: ExperimentalReasoningEffort;
   configChanged: boolean;
-  skippedReason?: "missingModelId";
+  skippedReason?: "missingModelId" | "unsupportedProvider";
 };
 
 type ExperimentalModelQualityRule = {
@@ -230,6 +231,11 @@ export function supportsExperimentalModelQuality(
   model: ExperimentalModelQualityTarget,
 ): boolean {
   const vendor = normalizeKey(model.vendor);
+  if (vendor === "openai-codex") {
+    return model.id
+      ? /^[^:]+::gpt-6-luna$/u.test(normalizeKey(model.id))
+      : normalizeModelFamilyKey(model.family) === "gpt-6-luna";
+  }
   if (vendor !== "copilot" && vendor !== "github-copilot") {
     return false;
   }
@@ -254,6 +260,9 @@ export function getSupportedExperimentalReasoningEfforts(
 ): readonly ExperimentalReasoningEffort[] {
   if (!supportsExperimentalModelQuality(model)) {
     return [];
+  }
+  if (normalizeKey(model.vendor) === "openai-codex") {
+    return ["low", "high"];
   }
 
   const matchedRule = getExperimentalModelQualityKeys(model)
@@ -330,12 +339,37 @@ export function updateLanguageModelsConfigText(
   const groups = parseLanguageModelsProviderGroups(rawText);
   const originalJson = trimOptionalText(rawText);
 
-  let targetIndex = groups.findIndex(
-    (group) =>
-      normalizeKey(group.vendor) === normalizeKey(vendor) &&
-      isRecord(group.settings) &&
-      isRecord(group.settings[modelId]),
-  );
+  const isBridge = normalizeKey(vendor) === "openai-codex";
+  const bridgeProfile = isBridge
+    ? /^([^:]+)::[^:]+$/u.exec(modelId)?.[1]
+    : undefined;
+  const bridgeGroups = isBridge
+    ? groups.flatMap((group, index) => {
+        if (normalizeKey(group.vendor) !== "openai-codex") {
+          return [];
+        }
+        const configuration = isRecord(group.configuration)
+          ? group.configuration
+          : {};
+        const profile =
+          configuration.profile === undefined || configuration.profile === ""
+            ? "default"
+            : configuration.profile;
+        return profile === bridgeProfile ? [index] : [];
+      })
+    : [];
+  if (isBridge && (!bridgeProfile || bridgeGroups.length !== 1)) {
+    throw new Error("Codex Bridge profile entry is missing or ambiguous");
+  }
+
+  let targetIndex = isBridge
+    ? bridgeGroups[0]
+    : groups.findIndex(
+        (group) =>
+          normalizeKey(group.vendor) === normalizeKey(vendor) &&
+          isRecord(group.settings) &&
+          isRecord(group.settings[modelId]),
+      );
   if (targetIndex < 0) {
     targetIndex = groups.findIndex(
       (group) => normalizeKey(group.vendor) === normalizeKey(vendor),
@@ -370,6 +404,31 @@ export function updateLanguageModelsConfigText(
   );
 
   let changed = false;
+  if (isBridge) {
+    const mode = modelSettings.mode;
+    const match =
+      typeof mode === "string"
+        ? /^(?:(normal|fast)(?::[^:]+)?|none|low|medium|high|xhigh|max)$/u.exec(
+            mode,
+          )
+        : undefined;
+    if (mode !== undefined && !match) {
+      throw new Error("Codex Bridge mode is not recognized");
+    }
+    const speed =
+      match?.[1] ||
+      modelSettings.speedMode ||
+      params.defaultSpeedMode ||
+      "normal";
+    if (speed !== "normal" && speed !== "fast") {
+      throw new Error("Codex Bridge speed mode is not recognized");
+    }
+    if (reasoningEffort || match) {
+      const nextMode = reasoningEffort ? `${speed}:${reasoningEffort}` : speed;
+      changed = mode !== nextMode;
+      modelSettings.mode = nextMode;
+    }
+  }
   if (reasoningEffort) {
     if (previousReasoningEffort !== reasoningEffort) {
       changed = true;
@@ -425,6 +484,27 @@ export async function applyExperimentalModelQualitySelection(args: {
     trimOptionalText(matchedModel?.family) ||
     trimOptionalText(args.selection.modelFamily);
 
+  if (
+    !["copilot", "github-copilot", "openai-codex"].includes(
+      normalizeKey(vendor),
+    ) ||
+    (normalizeKey(vendor) === "openai-codex" &&
+      !supportsExperimentalModelQuality({ vendor, id: modelId, family }))
+  ) {
+    if (normalizeKey(vendor) === "openai-codex" && savedReasoningEffort) {
+      throw new Error("Codex Bridge reasoning target is not supported");
+    }
+    return {
+      modelId,
+      vendor,
+      family,
+      requestedReasoningEffort: savedReasoningEffort,
+      supportedReasoningEfforts: [],
+      configChanged: false,
+      skippedReason: "unsupportedProvider",
+    };
+  }
+
   if (!modelId) {
     return {
       vendor,
@@ -448,6 +528,13 @@ export async function applyExperimentalModelQualitySelection(args: {
     savedReasoningEffort && supportedEfforts.includes(savedReasoningEffort)
       ? savedReasoningEffort
       : undefined;
+  if (
+    normalizeKey(vendor) === "openai-codex" &&
+    savedReasoningEffort &&
+    !effectiveReasoningEffort
+  ) {
+    throw new Error("Codex Bridge reasoning effort is not supported");
+  }
 
   const configUri = getLanguageModelsConfigUriFromGlobalStorageUri(
     args.globalStorageUri,
@@ -477,6 +564,12 @@ export async function applyExperimentalModelQualitySelection(args: {
     vendor,
     modelId,
     reasoningEffort: effectiveReasoningEffort,
+    defaultSpeedMode:
+      normalizeKey(vendor) === "openai-codex"
+        ? vscode.workspace
+            .getConfiguration("openaiCodex")
+            .get<"normal" | "fast">("speedMode", "normal")
+        : undefined,
   });
 
   const configChanged =

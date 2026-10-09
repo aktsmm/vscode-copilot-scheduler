@@ -5,6 +5,7 @@ import {
   normalizeModelSelection,
 } from "./modelSelection";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { validateModelConfiguration } from "./model-configuration";
 import type { ScheduleManager } from "./scheduleManager";
 import type {
   CreateTaskInput,
@@ -111,13 +112,18 @@ const MODEL_SELECTION_KEYS = [
   "modelReasoningEffort",
 ] as const;
 
+type ExplicitModelSelection = Required<
+  Omit<ModelSelectionFields, "modelConfiguration">
+> &
+  Pick<ModelSelectionFields, "modelConfiguration">;
+
 /**
  * Force every model field to a concrete value so `ScheduleManager.updateTask`
  * always enters its model branch and stale metadata cannot survive a change.
  */
 function toExplicitModelSelection(
   selection: ModelSelectionFields,
-): Required<ModelSelectionFields> {
+): ExplicitModelSelection {
   return {
     model: selection.model ?? "",
     modelName: selection.modelName ?? "",
@@ -125,6 +131,7 @@ function toExplicitModelSelection(
     modelFamily: selection.modelFamily ?? "",
     modelVersion: selection.modelVersion ?? "",
     modelReasoningEffort: selection.modelReasoningEffort ?? "",
+    modelConfiguration: selection.modelConfiguration,
   };
 }
 
@@ -137,6 +144,11 @@ function isExplicitModelReset(fields: ModelSelectionFields): boolean {
 }
 
 function hasModelFieldsBesidesModel(fields: ModelSelectionFields): boolean {
+  if (
+    fields.modelConfiguration &&
+    Object.keys(fields.modelConfiguration).length > 0
+  )
+    return true;
   return MODEL_SELECTION_KEYS.filter((key) => key !== "model").some((key) => {
     const value = fields[key];
     return typeof value === "string" && value.trim().length > 0;
@@ -151,6 +163,15 @@ function mergeModelSelection(
   for (const key of MODEL_SELECTION_KEYS) {
     merged[key] = updates[key] !== undefined ? updates[key] : current[key];
   }
+  if (
+    updates.modelConfiguration !== undefined ||
+    current.modelConfiguration !== undefined
+  ) {
+    merged.modelConfiguration =
+      updates.modelConfiguration !== undefined
+        ? updates.modelConfiguration
+        : current.modelConfiguration;
+  }
   return merged;
 }
 
@@ -159,18 +180,38 @@ function buildEffectiveModelSelection(
   updates: ModelSelectionFields,
 ): ModelSelectionFields {
   if (typeof updates.model === "string" && updates.model.trim().length > 0) {
-    const requested = mergeModelSelection({}, updates);
+    const sameIdentity =
+      updates.model.trim() === current.model &&
+      (updates.modelVendor === undefined ||
+        updates.modelVendor === current.modelVendor);
+    const requested = mergeModelSelection(sameIdentity ? current : {}, updates);
     requested.modelReasoningEffort =
       updates.modelReasoningEffort ?? current.modelReasoningEffort;
+    if (
+      current.modelConfiguration !== undefined &&
+      updates.modelConfiguration === undefined
+    )
+      requested.modelConfiguration = sameIdentity
+        ? current.modelConfiguration
+        : {};
     return requested;
   }
-  return mergeModelSelection(current, updates);
+  const merged = mergeModelSelection(current, updates);
+  if (
+    current.modelConfiguration !== undefined &&
+    updates.modelConfiguration === undefined &&
+    updates.modelVendor !== undefined &&
+    updates.modelVendor !== current.modelVendor
+  ) {
+    merged.modelConfiguration = {};
+  }
+  return merged;
 }
 
 type ModelResolutionOutcome =
   | {
       ok: true;
-      selection?: Required<ModelSelectionFields>;
+      selection?: ExplicitModelSelection;
       warnings: string[];
     }
   | { ok: false; reason: MutationFailureReason; message: string };
@@ -180,6 +221,27 @@ type ModelResolutionOutcome =
  * @param effective requested fields merged over the task's current selection
  */
 async function resolveModelFieldsForMutation(
+  resolver: ModelSelectionResolver | undefined,
+  requested: ModelSelectionFields,
+  effective: ModelSelectionFields,
+): Promise<ModelResolutionOutcome> {
+  try {
+    return await resolveModelFieldsForMutationUnchecked(
+      resolver,
+      requested,
+      effective,
+    );
+  } catch {
+    return {
+      ok: false,
+      reason: "validation",
+      message:
+        "Invalid model configuration. Query list_models and replace the task options explicitly.",
+    };
+  }
+}
+
+async function resolveModelFieldsForMutationUnchecked(
   resolver: ModelSelectionResolver | undefined,
   requested: ModelSelectionFields,
   effective: ModelSelectionFields,
@@ -196,16 +258,42 @@ async function resolveModelFieldsForMutation(
     return { ok: true, selection: toExplicitModelSelection({}), warnings: [] };
   }
 
-  if (!resolver || !hasModelSelection(requested)) {
+  if (
+    !resolver ||
+    (!hasModelSelection(requested) &&
+      requested.modelConfiguration === undefined)
+  ) {
     return { ok: true, warnings: [] };
   }
 
   const normalizedEffective = normalizeModelSelection(effective);
   if (
+    normalizedEffective.modelConfiguration !== undefined &&
+    normalizedEffective.modelReasoningEffort
+  ) {
+    return {
+      ok: false,
+      reason: "validation",
+      message:
+        "modelConfiguration cannot be combined with legacy modelReasoningEffort.",
+    };
+  }
+  if (
     !normalizedEffective.model &&
     !normalizedEffective.modelName &&
     !normalizedEffective.modelFamily
   ) {
+    if (
+      normalizedEffective.modelConfiguration !== undefined &&
+      Object.keys(normalizedEffective.modelConfiguration).length === 0 &&
+      !normalizedEffective.modelReasoningEffort
+    ) {
+      return {
+        ok: true,
+        selection: toExplicitModelSelection(normalizedEffective),
+        warnings: [],
+      };
+    }
     return {
       ok: false,
       reason: "validation",
@@ -247,6 +335,15 @@ export function createModelSelectionResolver(
 ): ModelSelectionResolver {
   return async (requested) => {
     const normalized = normalizeModelSelection(requested);
+    if (
+      !normalized.model &&
+      requested.modelConfiguration !== undefined &&
+      Object.keys(requested.modelConfiguration).length === 0 &&
+      (requested.model === "" || !normalized.modelName) &&
+      !normalized.modelReasoningEffort
+    ) {
+      return { ok: true, selection: { modelConfiguration: {} }, warnings: [] };
+    }
 
     let catalog: Awaited<ReturnType<ModelCatalogLoader>>;
     try {
@@ -257,6 +354,12 @@ export function createModelSelectionResolver(
         selection: normalized,
         warnings: [
           `Could not load the model catalog (${sanitizeAbsolutePathDetails(toMessage(error))}); the requested model was saved without verification.`,
+          ...(normalized.modelConfiguration &&
+          Object.keys(normalized.modelConfiguration).length > 0
+            ? [
+                "Dynamic settings will be revalidated before execution; invalid or unavailable source models stop without fallback.",
+              ]
+            : []),
         ],
       };
     }
@@ -313,8 +416,34 @@ export function createModelSelectionResolver(
     const resolved = normalizeModelSelection({
       ...modelInfoToSelection(matched),
       modelReasoningEffort: normalized.modelReasoningEffort,
+      modelConfiguration: normalized.modelConfiguration,
     });
+    if (resolved.modelConfiguration !== undefined) {
+      if (resolved.modelReasoningEffort)
+        return {
+          ok: false,
+          message:
+            "modelConfiguration cannot be combined with legacy modelReasoningEffort.",
+        };
+      try {
+        validateModelConfiguration(matched, resolved.modelConfiguration);
+      } catch {
+        return {
+          ok: false,
+          message:
+            "The model options are unavailable or invalid. Query kind=list_models and choose advertised configurationOptions.",
+        };
+      }
+    }
     const warnings: string[] = [];
+    if (
+      resolved.modelConfiguration &&
+      Object.keys(resolved.modelConfiguration).length > 0
+    ) {
+      warnings.push(
+        "Dynamic options execute through a per-request configured model on VS Code 1.141 or later. Source-provider authorization is required; invalid or unavailable settings stop without fallback.",
+      );
+    }
     if (normalized.modelReasoningEffort && !resolved.modelReasoningEffort) {
       warnings.push(
         `Reasoning effort '${normalized.modelReasoningEffort}' is not supported by ${matched.name || matched.id}; it was ignored.`,

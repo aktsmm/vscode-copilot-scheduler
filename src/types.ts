@@ -75,6 +75,25 @@ export type TaskChatSessionMode = "default" | ChatSessionBehavior;
  * Structured model selection fields.
  * `model` remains the primary persisted identifier for backward compatibility.
  */
+export type ModelConfigurationValue = string | number;
+
+export type ModelConfigurationKey =
+  | "mode"
+  | "reasoningEffort"
+  | "speedMode"
+  | "contextSize";
+
+export type ModelConfiguration = Partial<
+  Record<ModelConfigurationKey, ModelConfigurationValue>
+>;
+
+export interface ModelConfigurationOption {
+  key: ModelConfigurationKey;
+  label: string;
+  choices: Array<{ value: ModelConfigurationValue; label: string }>;
+  defaultValue?: ModelConfigurationValue;
+}
+
 export interface ModelSelectionFields {
   /** Preferred model identifier */
   model?: string;
@@ -93,6 +112,7 @@ export interface ModelSelectionFields {
 
   /** Experimental reasoning effort captured at save time */
   modelReasoningEffort?: string;
+  modelConfiguration?: ModelConfiguration;
 }
 
 /**
@@ -140,6 +160,7 @@ export interface ScheduledTask {
 
   /** Experimental reasoning effort for eligible Copilot models */
   modelReasoningEffort?: string;
+  modelConfiguration?: ModelConfiguration;
 
   /** Task scope */
   scope: TaskScope;
@@ -235,6 +256,7 @@ export interface CreateTaskInput {
 
   /** Experimental reasoning effort for eligible Copilot models */
   modelReasoningEffort?: string;
+  modelConfiguration?: ModelConfiguration;
 
   /** Task scope (default: "workspace") */
   scope?: TaskScope;
@@ -331,6 +353,11 @@ export interface ModelInfo {
 
   /** Max input tokens when exposed by the VS Code API */
   maxInputTokens?: number;
+  supportsToolCalling?: boolean;
+  supportsImageInput?: boolean;
+
+  configurationOptions?: ModelConfigurationOption[];
+  configurationStatus?: "available" | "unsupported" | "unavailable" | "invalid";
 }
 
 /**

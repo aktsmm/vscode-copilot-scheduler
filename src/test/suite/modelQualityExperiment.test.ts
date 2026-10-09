@@ -1,8 +1,11 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
   getLanguageModelsConfigUriFromGlobalStorageUri,
+  applyExperimentalModelQualitySelection,
   getExperimentalModelQualityVariants,
   getSupportedExperimentalReasoningEfforts,
   normalizeExperimentalReasoningEffort,
@@ -11,6 +14,157 @@ import {
 } from "../../modelQualityExperiment";
 
 suite("Model Quality Experiment Tests", () => {
+  test("Codex Bridge exposes only scoped Luna Low and High variants", () => {
+    assert.deepStrictEqual(
+      getSupportedExperimentalReasoningEfforts({
+        vendor: "openai-codex",
+        id: "default::gpt-6-luna",
+        family: "gpt-6-luna",
+      }),
+      ["low", "high"],
+    );
+    for (const vendor of ["openai-codex", "other-provider"]) {
+      assert.deepStrictEqual(
+        getSupportedExperimentalReasoningEfforts({
+          vendor,
+          id: "default::unknown",
+          family: "gpt-6-unknown",
+        }),
+        [],
+      );
+    }
+  });
+
+  test("Codex Bridge updates the existing profile mode and retains speed and context", () => {
+    const groups = [
+      {
+        name: "personal",
+        vendor: "openai-codex",
+        configuration: { profile: "personal" },
+        settings: {
+          "personal::gpt-6-luna": { mode: "normal:low", contextSize: "auto" },
+        },
+      },
+      {
+        name: "work",
+        vendor: "openai-codex",
+        configuration: { profile: "work" },
+        settings: {
+          "work::gpt-6-luna": {
+            mode: "fast:low",
+            reasoningEffort: "low",
+            contextSize: 131072,
+          },
+          "work::another": { mode: "normal:high" },
+        },
+      },
+    ];
+    const nextText = updateLanguageModelsConfigText(JSON.stringify(groups), {
+      vendor: "openai-codex",
+      modelId: "work::gpt-6-luna",
+      reasoningEffort: "high",
+    });
+    const updated = JSON.parse(nextText);
+    assert.deepStrictEqual(updated[0], groups[0]);
+    assert.deepStrictEqual(
+      updated[1].settings["work::another"],
+      groups[1].settings["work::another"],
+    );
+    assert.deepStrictEqual(updated[1].settings["work::gpt-6-luna"], {
+      mode: "fast:high",
+      reasoningEffort: "high",
+      contextSize: 131072,
+    });
+    assert.strictEqual(
+      updateLanguageModelsConfigText(nextText, {
+        vendor: "openai-codex",
+        modelId: "work::gpt-6-luna",
+        reasoningEffort: "high",
+      }),
+      nextText,
+    );
+    const cleared = JSON.parse(
+      updateLanguageModelsConfigText(nextText, {
+        vendor: "openai-codex",
+        modelId: "work::gpt-6-luna",
+      }),
+    );
+    assert.deepStrictEqual(cleared[1].settings["work::gpt-6-luna"], {
+      mode: "fast",
+      contextSize: 131072,
+    });
+  });
+
+  test("Codex Bridge refuses a missing model entry or an unknown mode", () => {
+    assert.throws(
+      () =>
+        updateLanguageModelsConfigText(undefined, {
+          vendor: "openai-codex",
+          modelId: "default::gpt-6-luna",
+          reasoningEffort: "high",
+        }),
+      /entry is missing or ambiguous/u,
+    );
+    assert.throws(
+      () =>
+        updateLanguageModelsConfigText(
+          JSON.stringify([
+            {
+              name: "Bridge",
+              vendor: "openai-codex",
+              settings: {
+                "default::gpt-6-luna": { mode: "unknown:low" },
+              },
+            },
+          ]),
+          {
+            vendor: "openai-codex",
+            modelId: "default::gpt-6-luna",
+            reasoningEffort: "high",
+          },
+        ),
+      /mode is not recognized/u,
+    );
+  });
+
+  test("Codex Bridge initializes settings only inside the matching profile", () => {
+    const original = [
+      {
+        name: "other",
+        vendor: "openai-codex",
+        configuration: { profile: "other" },
+      },
+      {
+        name: "default",
+        vendor: "openai-codex",
+        configuration: { profile: "" },
+      },
+    ];
+    const updated = JSON.parse(
+      updateLanguageModelsConfigText(JSON.stringify(original), {
+        vendor: "openai-codex",
+        modelId: "default::gpt-6-luna",
+        reasoningEffort: "high",
+      }),
+    );
+    assert.deepStrictEqual(updated[0], original[0]);
+    assert.deepStrictEqual(updated[1].settings, {
+      "default::gpt-6-luna": { mode: "normal:high", reasoningEffort: "high" },
+    });
+    assert.throws(
+      () =>
+        updateLanguageModelsConfigText(
+          JSON.stringify([original[1], original[1]]),
+          {
+            vendor: "openai-codex",
+            modelId: "default::gpt-6-luna",
+            reasoningEffort: "high",
+          },
+        ),
+      /ambiguous/u,
+    );
+  });
+
   test("getLanguageModelsConfigUriFromGlobalStorageUri resolves the current profile file", () => {
     const profileRoot = path.join(path.sep, "tmp", "Code", "User");
     const configUri = getLanguageModelsConfigUriFromGlobalStorageUri(
@@ -23,6 +177,85 @@ suite("Model Quality Experiment Tests", () => {
       configUri.fsPath,
       path.join(profileRoot, "chatLanguageModels.json"),
     );
+  });
+
+  test("Codex Bridge applies High, Low and Default to a real isolated config file", async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-bridge-quality-"),
+    );
+    const globalStorageUri = vscode.Uri.file(
+      path.join(root, "globalStorage", "scheduler"),
+    );
+    const configPath = path.join(root, "chatLanguageModels.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify([
+        {
+          name: "Bridge",
+          vendor: "openai-codex",
+          configuration: { profile: "default" },
+          settings: {
+            "default::gpt-6-luna": { mode: "fast:low", contextSize: "auto" },
+          },
+        },
+      ]),
+    );
+    try {
+      for (const effort of ["high", "low", undefined]) {
+        const result = await applyExperimentalModelQualitySelection({
+          globalStorageUri,
+          selection: {
+            model: "default::gpt-6-luna",
+            modelVendor: "openai-codex",
+            modelFamily: "gpt-6-luna",
+            modelReasoningEffort: effort,
+          },
+        });
+        assert.strictEqual(result.effectiveReasoningEffort, effort);
+        const settings = JSON.parse(fs.readFileSync(configPath, "utf8"))[0]
+          .settings["default::gpt-6-luna"];
+        assert.strictEqual(settings.mode, effort ? `fast:${effort}` : "fast");
+        assert.strictEqual(settings.reasoningEffort, effort);
+        assert.strictEqual(settings.contextSize, "auto");
+      }
+      const previous = fs.readFileSync(configPath, "utf8");
+      await applyExperimentalModelQualitySelection({
+        globalStorageUri,
+        selection: {
+          model: "unknown",
+          modelVendor: "another-provider",
+        },
+      });
+      assert.strictEqual(fs.readFileSync(configPath, "utf8"), previous);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("Codex Bridge preserves workspace Fast and legacy effort-only modes", () => {
+    for (const mode of [undefined, "low"]) {
+      const next = JSON.parse(
+        updateLanguageModelsConfigText(
+          JSON.stringify([
+            {
+              name: "Bridge",
+              vendor: "openai-codex",
+              settings: { "default::gpt-6-luna": { mode } },
+            },
+          ]),
+          {
+            vendor: "openai-codex",
+            modelId: "default::gpt-6-luna",
+            reasoningEffort: "high",
+            defaultSpeedMode: "fast",
+          },
+        ),
+      );
+      assert.strictEqual(
+        next[0].settings["default::gpt-6-luna"].mode,
+        "fast:high",
+      );
+    }
   });
 
   test("updateLanguageModelsConfigText adds a reasoning effort override", () => {

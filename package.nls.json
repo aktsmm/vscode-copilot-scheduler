@@ -1,4 +1,5 @@
 {
+  "provider.configuredModels": "Copilot Scheduler Task Models",
   "extension.title": "Copilot Scheduler",
   "command.createTask": "Create Scheduled Prompt",
   "command.createTaskGui": "Create Scheduled Prompt (GUI)",

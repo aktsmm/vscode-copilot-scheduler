@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { lock } from "proper-lockfile";
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5000;
@@ -27,6 +29,7 @@ export async function withTaskStoreLock<T>(
   let release: (() => Promise<void>) | undefined;
 
   try {
+    await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
     release = await lock(lockPath, {
       realpath: false,
       lockfilePath: lockPath,

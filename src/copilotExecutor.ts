@@ -16,6 +16,11 @@ import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
+import {
+  loadModelConfigurationCatalog,
+  validateModelConfiguration,
+} from "./model-configuration";
+import { resolveConfiguredTaskModel } from "./configured-model-provider";
 import { resolveGlobalAgentRoots } from "./promptResolver";
 import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
@@ -568,9 +573,62 @@ export class CopilotExecutor {
       config,
     );
     const delayFactor = this.getCommandDelayFactor(config);
-    const requestedModel = normalizeModelSelection(options);
-    const resolved =
+    let requestedModel: NormalizedModelSelection;
+    try {
+      requestedModel = normalizeModelSelection(options);
+    } catch {
+      throw createPromptBlockedError(
+        messages.dynamicConfigurationUnavailable(),
+        "modelConfigurationUnavailable",
+      );
+    }
+    let resolved =
       await CopilotExecutor.resolveRequestedModelSelection(requestedModel);
+
+    if (resolved.selection.modelConfiguration !== undefined) {
+      if (resolved.selection.modelReasoningEffort) {
+        throw createPromptBlockedError(
+          messages.dynamicConfigurationUnavailable(),
+          "modelConfigurationUnavailable",
+        );
+      }
+      if (Object.keys(resolved.selection.modelConfiguration).length > 0) {
+        if (!resolved.matched)
+          throw createPromptBlockedError(
+            messages.dynamicConfigurationUnavailable(),
+            "modelConfigurationUnavailable",
+          );
+        try {
+          validateModelConfiguration(
+            resolved.matched,
+            resolved.selection.modelConfiguration,
+          );
+        } catch {
+          throw createPromptBlockedError(
+            messages.dynamicConfigurationUnavailable(),
+            "modelConfigurationUnavailable",
+          );
+        }
+        try {
+          const configured = await resolveConfiguredTaskModel(
+            resolved.matched,
+            resolved.selection.modelConfiguration,
+          );
+          resolved = {
+            selection: {
+              ...modelInfoToSelection(configured),
+              modelConfiguration: resolved.selection.modelConfiguration,
+            },
+            matched: configured,
+          };
+        } catch {
+          throw createPromptBlockedError(
+            messages.dynamicConfigurationExecutionBlocked(),
+            "modelConfigurationUnavailable",
+          );
+        }
+      }
+    }
 
     if (!areModelSelectionsEqual(requestedModel, resolved.selection)) {
       logDebug(
@@ -578,10 +636,12 @@ export class CopilotExecutor {
       );
     }
 
-    await this.syncExperimentalModelQuality(
-      resolved.selection,
-      resolved.matched,
-    );
+    if (resolved.selection.modelConfiguration === undefined) {
+      await this.syncExperimentalModelQuality(
+        resolved.selection,
+        resolved.matched,
+      );
+    }
 
     try {
       // Attachments are added by chat.open itself, so a new session must be
@@ -601,7 +661,11 @@ export class CopilotExecutor {
         resolved.matched,
         attachFiles,
       );
-      if (!chatOpenResult.opened && attachFiles.length > 0) {
+      if (
+        !chatOpenResult.opened &&
+        attachFiles.length > 0 &&
+        !resolved.selection.modelConfiguration
+      ) {
         // Chat may still be warming up; retry once before refusing to run.
         await this.delay(
           this.getAdjustedDelayMs(DELAY_ATTACHMENT_RETRY_MS, delayFactor),
@@ -615,7 +679,11 @@ export class CopilotExecutor {
         );
       }
       if (!chatOpenResult.opened) {
-        if (hasStrictProviderSelection(resolved.selection)) {
+        if (
+          hasStrictProviderSelection(resolved.selection) ||
+          (resolved.selection.modelConfiguration &&
+            Object.keys(resolved.selection.modelConfiguration).length > 0)
+        ) {
           throw createPromptBlockedError(
             messages.providerModelDispatchFailed(),
             "providerModelDispatchFailed",
@@ -672,6 +740,36 @@ export class CopilotExecutor {
     resolvedSelection: NormalizedModelSelection;
     resolvedModel?: ModelInfo;
   }> {
+    if (
+      resolvedSelection.modelConfiguration &&
+      Object.keys(resolvedSelection.modelConfiguration).length > 0
+    ) {
+      try {
+        const result = await vscode.commands.executeCommand<{
+          errorDetails?: unknown;
+        }>("workbench.action.chat.open", {
+          ...buildChatOpenArgs(
+            chatOpenPrompt,
+            mode,
+            resolvedSelection,
+            {
+              id: resolvedSelection.model!,
+              vendor: resolvedSelection.modelVendor!,
+            },
+            false,
+            attachFiles,
+          ),
+          blockOnResponse: true,
+        });
+        return {
+          opened: !result?.errorDetails,
+          resolvedSelection,
+          resolvedModel,
+        };
+      } catch {
+        return { opened: false, resolvedSelection, resolvedModel };
+      }
+    }
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
@@ -865,6 +963,7 @@ export class CopilotExecutor {
       selection: {
         ...modelInfoToSelection(matched),
         modelReasoningEffort: selection.modelReasoningEffort,
+        modelConfiguration: selection.modelConfiguration,
       },
       matched,
     };
@@ -876,6 +975,15 @@ export class CopilotExecutor {
   ): Promise<void> {
     const globalStorageUri = CopilotExecutor.extensionGlobalStorageUri;
     if (!globalStorageUri) {
+      if (
+        selection.modelVendor === "openai-codex" &&
+        selection.modelReasoningEffort
+      ) {
+        throw createPromptBlockedError(
+          messages.providerModelDispatchFailed(),
+          "providerModelDispatchFailed",
+        );
+      }
       return;
     }
 
@@ -893,6 +1001,12 @@ export class CopilotExecutor {
         "[CopilotScheduler] Experimental model quality sync failed:",
         toSafeErrorDetails(error),
       );
+      if (selection.modelVendor === "openai-codex") {
+        throw createPromptBlockedError(
+          messages.providerModelDispatchFailed(),
+          "providerModelDispatchFailed",
+        );
+      }
     }
   }
 
@@ -1369,7 +1483,12 @@ export class CopilotExecutor {
           });
         }
 
-        return { models: normalizeModelCatalog(modelInfos), source: "api" };
+        return {
+          models: await loadModelConfigurationCatalog(
+            normalizeModelCatalog(modelInfos),
+          ),
+          source: "api",
+        };
       }
     } catch (error) {
       // Language Model API may not be available

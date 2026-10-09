@@ -283,9 +283,13 @@ function applyModelSelectionToTask(
   selection: NormalizedModelSelection,
 ): boolean {
   const normalizedSelection = normalizeModelSelection(selection);
-  if (areModelSelectionsEqual(target, normalizedSelection)) {
-    return false;
+  let alreadyEqual = false;
+  try {
+    alreadyEqual = areModelSelectionsEqual(target, normalizedSelection);
+  } catch {
+    alreadyEqual = false;
   }
+  if (alreadyEqual) return false;
 
   target.model = normalizedSelection.model;
   target.modelName = normalizedSelection.modelName;
@@ -293,6 +297,7 @@ function applyModelSelectionToTask(
   target.modelFamily = normalizedSelection.modelFamily;
   target.modelVersion = normalizedSelection.modelVersion;
   target.modelReasoningEffort = normalizedSelection.modelReasoningEffort;
+  target.modelConfiguration = normalizedSelection.modelConfiguration;
   return true;
 }
 
@@ -995,10 +1000,16 @@ export class ScheduleManager {
       }
 
       {
-        const normalizedModelSelection = normalizeModelSelection(task);
-        if (!areModelSelectionsEqual(task, normalizedModelSelection)) {
-          applyModelSelectionToTask(task, normalizedModelSelection);
-          needsSave = true;
+        try {
+          const normalizedModelSelection = normalizeModelSelection(task);
+          if (!areModelSelectionsEqual(task, normalizedModelSelection)) {
+            applyModelSelectionToTask(task, normalizedModelSelection);
+            needsSave = true;
+          }
+        } catch {
+          logError(
+            "[CopilotScheduler] Invalid model configuration retained without migration; execution requires valid settings.",
+          );
         }
       }
 
@@ -1633,7 +1644,12 @@ export class ScheduleManager {
 
     let changed = 0;
     for (const task of this.tasks.values()) {
-      const currentSelection = normalizeModelSelection(task);
+      let currentSelection: NormalizedModelSelection;
+      try {
+        currentSelection = normalizeModelSelection(task);
+      } catch {
+        continue;
+      }
       if (!hasModelSelection(currentSelection)) {
         continue;
       }
@@ -1643,7 +1659,11 @@ export class ScheduleManager {
         continue;
       }
 
-      const nextSelection = modelInfoToSelection(matched);
+      const nextSelection = {
+        ...modelInfoToSelection(matched),
+        modelConfiguration: currentSelection.modelConfiguration,
+        modelReasoningEffort: currentSelection.modelReasoningEffort,
+      };
       if (applyModelSelectionToTask(task, nextSelection)) {
         task.updatedAt = new Date();
         changed += 1;
@@ -1776,6 +1796,49 @@ export class ScheduleManager {
         )
       : undefined;
 
+    const hasModelUpdates =
+      updates.model !== undefined ||
+      updates.modelName !== undefined ||
+      updates.modelVendor !== undefined ||
+      updates.modelFamily !== undefined ||
+      updates.modelVersion !== undefined ||
+      updates.modelReasoningEffort !== undefined ||
+      updates.modelConfiguration !== undefined;
+    const nextModelSelection = hasModelUpdates
+      ? normalizeModelSelection(
+          updates.model !== undefined && updates.model.trim() === ""
+            ? {}
+            : {
+                model: updates.model ?? task.model,
+                modelName: updates.modelName ?? task.modelName,
+                modelVendor: updates.modelVendor ?? task.modelVendor,
+                modelFamily: updates.modelFamily ?? task.modelFamily,
+                modelVersion: updates.modelVersion ?? task.modelVersion,
+                modelReasoningEffort:
+                  updates.modelReasoningEffort ?? task.modelReasoningEffort,
+                modelConfiguration:
+                  updates.modelConfiguration !== undefined
+                    ? updates.modelConfiguration
+                    : updates.model === ""
+                      ? undefined
+                      : task.modelConfiguration !== undefined &&
+                          ((updates.model !== undefined &&
+                            updates.model !== task.model) ||
+                            (updates.modelVendor !== undefined &&
+                              updates.modelVendor !== task.modelVendor))
+                        ? {}
+                        : task.modelConfiguration,
+              },
+        )
+      : undefined;
+    if (
+      nextModelSelection?.modelConfiguration !== undefined &&
+      nextModelSelection.modelReasoningEffort
+    ) {
+      throw new Error(
+        "modelConfiguration conflicts with legacy reasoning effort",
+      );
+    }
     const now = new Date();
     const enabledBefore = task.enabled;
     let cronChanged = false;
@@ -1805,36 +1868,7 @@ export class ScheduleManager {
     if (updates.agent !== undefined) {
       task.agent = updates.agent;
     }
-    if (
-      updates.model !== undefined ||
-      updates.modelName !== undefined ||
-      updates.modelVendor !== undefined ||
-      updates.modelFamily !== undefined ||
-      updates.modelVersion !== undefined ||
-      updates.modelReasoningEffort !== undefined
-    ) {
-      applyModelSelectionToTask(task, {
-        model: updates.model !== undefined ? updates.model : task.model,
-        modelName:
-          updates.modelName !== undefined ? updates.modelName : task.modelName,
-        modelVendor:
-          updates.modelVendor !== undefined
-            ? updates.modelVendor
-            : task.modelVendor,
-        modelFamily:
-          updates.modelFamily !== undefined
-            ? updates.modelFamily
-            : task.modelFamily,
-        modelVersion:
-          updates.modelVersion !== undefined
-            ? updates.modelVersion
-            : task.modelVersion,
-        modelReasoningEffort:
-          updates.modelReasoningEffort !== undefined
-            ? updates.modelReasoningEffort
-            : task.modelReasoningEffort,
-      });
-    }
+    if (nextModelSelection) applyModelSelectionToTask(task, nextModelSelection);
     if (updates.scope !== undefined) {
       // Only adjust workspacePath when scope actually changes (or workspacePath is missing).
       // Webview submits scope on every save; we must not overwrite workspacePath on edits.
@@ -2027,6 +2061,7 @@ export class ScheduleManager {
       modelFamily: original.modelFamily,
       modelVersion: original.modelVersion,
       modelReasoningEffort: original.modelReasoningEffort,
+      modelConfiguration: original.modelConfiguration,
       scope: original.scope,
       promptSource: original.promptSource,
       promptPath: original.promptPath,

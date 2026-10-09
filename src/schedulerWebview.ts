@@ -70,6 +70,7 @@ export class SchedulerWebview {
   private static panel: vscode.WebviewPanel | undefined;
   private static cachedAgents: AgentInfo[] = [];
   private static cachedModels: ModelInfo[] = [];
+  private static modelRefreshGeneration = 0;
   private static cachedPromptTemplates: PromptTemplate[] = [];
   private static hasShownPromptTemplateRefreshError = false;
   private static onTaskActionCallback:
@@ -675,6 +676,7 @@ export class SchedulerWebview {
             modelFamily: message.modelFamily,
             modelVersion: message.modelVersion,
             modelReasoningEffort: message.modelReasoningEffort,
+            modelConfiguration: message.modelConfiguration,
           });
         }
         break;
@@ -834,19 +836,32 @@ export class SchedulerWebview {
       this.cachedAgents = CopilotExecutor.getBuiltInAgents();
     }
 
+    const generation = ++this.modelRefreshGeneration;
     try {
       const result = await CopilotExecutor.getAvailableModelsWithSource();
+      if (generation !== this.modelRefreshGeneration) return;
       if (
         result.source === "fallback" &&
         this.hasResolvedModelCatalog(this.cachedModels)
       ) {
-        this.cachedModels = this.localizeCachedModels(this.cachedModels);
+        this.cachedModels = this.localizeCachedModels(this.cachedModels).map(
+          (model) => ({
+            ...model,
+            configurationStatus: "unavailable",
+            configurationOptions: [],
+          }),
+        );
       } else {
         this.cachedModels = this.localizeCachedModels(result.models);
       }
     } catch {
+      if (generation !== this.modelRefreshGeneration) return;
       this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
-        ? this.localizeCachedModels(this.cachedModels)
+        ? this.localizeCachedModels(this.cachedModels).map((model) => ({
+            ...model,
+            configurationStatus: "unavailable",
+            configurationOptions: [],
+          }))
         : CopilotExecutor.getFallbackModels();
     }
 
@@ -1574,6 +1589,15 @@ export class SchedulerWebview {
       labelAgent: messages.labelAgent(),
       labelAgentNote: messages.labelAgentNote(),
       labelModel: messages.labelModel(),
+      labelDynamicModelOptions: messages.labelDynamicModelOptions(),
+      labelUseDynamicModelOptions: messages.labelUseDynamicModelOptions(),
+      labelInheritModelOptions: messages.labelInheritModelOptions(),
+      labelDynamicModelOptionsBlocked:
+        messages.labelDynamicModelOptionsBlocked(),
+      labelModelSchemaUnavailable: messages.labelModelSchemaUnavailable(),
+      labelInvalidModelConfiguration: messages.labelInvalidModelConfiguration(),
+      actionInheritModelConfiguration:
+        messages.actionInheritModelConfiguration(),
       labelModelVariant: messages.labelModelVariant(),
       labelModelVariantDefault: messages.labelModelVariantDefault(),
       labelModelNote: messages.labelModelNote(),
@@ -2766,6 +2790,13 @@ export class SchedulerWebview {
                 <option value="">${escapeHtml(strings.placeholderSelectModelVariant)}</option>
               </select>
               <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
+            </div>
+
+            <div class="form-group col-12" id="model-configuration-group" style="display:none;">
+              <label><input type="checkbox" id="model-configuration-enabled"> ${escapeHtml(strings.labelUseDynamicModelOptions)}</label>
+              <div class="form-grid" id="model-configuration-controls"></div>
+              <p class="note" id="model-configuration-note"></p>
+              <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
             </div>
 
             <div class="form-group col-6">

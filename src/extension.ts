@@ -48,6 +48,7 @@ import {
   type ExecutionTrigger,
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
+import { registerConfiguredModelProvider } from "./configured-model-provider";
 import { createModelSelectionResolver } from "./taskMutationService";
 import {
   getAttachmentDisplayName,
@@ -173,6 +174,9 @@ function buildPromptExecutionOptions(
     modelFamily: request.modelFamily,
     modelVersion: request.modelVersion,
     modelReasoningEffort: request.modelReasoningEffort,
+    ...(request.modelConfiguration !== undefined
+      ? { modelConfiguration: request.modelConfiguration }
+      : {}),
     attachFilePaths: resolveAttachmentPathsOrThrow(
       request.attachments,
       localAttachmentRoots,
@@ -1162,6 +1166,7 @@ export function activate(context: vscode.ExtensionContext): void {
   scheduleManager = new ScheduleManager(context);
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
+  registerConfiguredModelProvider(context);
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
   // Chat must only offer models the user can also see in the Webview picker and
   // that startup healing can resolve, so all three share one filtered catalog.
@@ -1280,6 +1285,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // the first scheduled run do not pay the full workspace-scan cost. Runs in the
   // background; failures are non-fatal and handled inside the refresh routine.
   void SchedulerWebview.refreshCachesAndNotifyPanel(false).catch(() => {});
+  if (typeof vscode.lm.onDidChangeChatModels === "function") {
+    context.subscriptions.push(
+      vscode.lm.onDidChangeChatModels(() => {
+        void SchedulerWebview.refreshCachesAndNotifyPanel(true).catch(() => {});
+      }),
+    );
+  }
 
   context.subscriptions.push({
     dispose: () => {
@@ -1945,6 +1957,7 @@ async function resolvePromptExecution(
     modelFamily: task.modelFamily,
     modelVersion: task.modelVersion,
     modelReasoningEffort: task.modelReasoningEffort,
+    modelConfiguration: task.modelConfiguration,
     attachments: task.attachments,
   };
 }
@@ -2174,6 +2187,38 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
       }
 
       case "edit": {
+        const current =
+          action.taskId === "__create__"
+            ? undefined
+            : scheduleManager.getTask(action.taskId);
+        if (
+          action.data &&
+          (action.data.modelConfiguration !== undefined ||
+            (current?.modelConfiguration !== undefined &&
+              action.data.modelReasoningEffort !== undefined))
+        ) {
+          const resolver = createModelSelectionResolver(async () => {
+            const catalog =
+              await CopilotExecutor.getAvailableModelsWithSource();
+            return {
+              ...catalog,
+              models: filterPickerModelCatalog(catalog.models),
+            };
+          });
+          const resolved = await resolver({
+            model: action.data.model ?? current?.model,
+            modelName: action.data.modelName ?? current?.modelName,
+            modelVendor: action.data.modelVendor ?? current?.modelVendor,
+            modelFamily: action.data.modelFamily ?? current?.modelFamily,
+            modelVersion: action.data.modelVersion ?? current?.modelVersion,
+            modelReasoningEffort:
+              action.data.modelReasoningEffort ?? current?.modelReasoningEffort,
+            modelConfiguration:
+              action.data.modelConfiguration ?? current?.modelConfiguration,
+          });
+          if (!resolved.ok)
+            throw new Error(messages.dynamicConfigurationUnavailable());
+        }
         if (action.taskId === "__create__" && action.data) {
           const task = await scheduleManager.createTask(
             action.data as CreateTaskInput,
