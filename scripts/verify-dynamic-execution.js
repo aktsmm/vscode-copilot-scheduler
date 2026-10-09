@@ -7,6 +7,7 @@ function activate(context) {
   const vscode = require("vscode");
   const root = process.env.SCHEDULER_REPO;
   const observed = [];
+  const selectedModels = [];
   require(
     path.join(root, "out/configured-model-provider.js"),
   ).registerConfiguredModelProvider(context);
@@ -60,6 +61,7 @@ function activate(context) {
     vscode.chat.createChatParticipant(
       "local-test.scheduler-execution.assistant",
       async (request, _history, stream, token) => {
+        selectedModels.push(request.model.id);
         const response = await request.model.sendRequest(
           [vscode.LanguageModelChatMessage.User(request.prompt)],
           {},
@@ -69,7 +71,7 @@ function activate(context) {
       },
     ),
   );
-  return { observed };
+  return { observed, selectedModels };
 }
 
 async function tests() {
@@ -92,6 +94,7 @@ async function tests() {
   for (const configuration of [
     { mode: "normal:low", contextSize: "auto" },
     { mode: "fast:high", contextSize: 4096 },
+    { mode: "normal:low", contextSize: "auto" },
   ]) {
     const before = api.observed.length;
     await new CopilotExecutor().executePrompt(
@@ -111,12 +114,21 @@ async function tests() {
     results.push({ requested: configuration, received: received[0] });
   }
   assert.equal(fs.readFileSync(configFile, "utf8"), original);
+  assert.equal(api.selectedModels.length, results.length);
+  assert.notEqual(api.selectedModels[0], api.selectedModels[1]);
+  assert.equal(
+    api.selectedModels[0],
+    api.selectedModels[2],
+    "Returning to the same options must reuse the immutable binding without cross-task bleed",
+  );
   const proof = {
     vscodeVersion: vscode.version,
     route:
       "CopilotExecutor -> actual Chat -> production configured relay -> synthetic source",
     realNetworkInference: false,
     sharedSettingsUnchanged: true,
+    bindingReuseVerified: true,
+    selectedModels: api.selectedModels,
     results,
   };
   fs.writeFileSync(
@@ -124,7 +136,7 @@ async function tests() {
     JSON.stringify(proof, null, 2) + "\n",
   );
   console.log(
-    "Dynamic execution PASS: two fixed requests, typed context, exact responses, shared settings unchanged",
+    "Dynamic execution PASS: Low/High Fast/Low round trip, immutable binding reuse, typed context, exact responses, shared settings unchanged",
   );
 }
 
