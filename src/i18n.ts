@@ -529,8 +529,6 @@ export const messages = {
   labelModel: () => t("Model", "モデル"),
   labelDynamicModelOptions: () =>
     t("Dynamic Model Options (Experimental)", "動的モデル設定（試験的）"),
-  labelUseDynamicModelOptions: () =>
-    t("Use schema-based task options", "スキーマに基づくタスク設定を使う"),
   labelInheritModelOptions: () =>
     t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
   labelDynamicModelOptionsBlocked: () =>

@@ -5,6 +5,7 @@ import type {
   ModelConfigurationKey,
   ModelConfigurationOption,
   ModelConfigurationValue,
+  ModelSelectionFields,
 } from "./types";
 
 const KEYS: readonly ModelConfigurationKey[] = [
@@ -232,6 +233,30 @@ export async function loadModelConfigurationCatalog(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+export function migrateLegacyModelConfiguration(
+  selection: ModelSelectionFields,
+  model: ModelInfo,
+): ModelSelectionFields {
+  if (
+    selection.modelConfiguration !== undefined ||
+    model.configurationStatus !== "available" ||
+    !model.configurationOptions?.length
+  )
+    return selection;
+  const effort = selection.modelReasoningEffort?.trim();
+  if (!effort) return { ...selection, modelConfiguration: {} };
+  const descriptor = model.configurationOptions.find(
+    (entry) => entry.key === "reasoningEffort",
+  );
+  if (!descriptor?.choices.some((choice) => choice.value === effort))
+    return selection;
+  return {
+    ...selection,
+    modelReasoningEffort: undefined,
+    modelConfiguration: { reasoningEffort: effort },
+  };
 }
 
 export function normalizeModelConfiguration(

@@ -29,6 +29,7 @@ export type ModelPickerVariant = {
   label: string;
   model: ModelInfo;
   reasoningEffort?: ExperimentalReasoningEffort;
+  legacyModelConfiguration?: ModelConfiguration;
 };
 
 export type ModelPickerGroup = {

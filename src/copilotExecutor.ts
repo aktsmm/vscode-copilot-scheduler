@@ -18,9 +18,13 @@ import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
 import {
   loadModelConfigurationCatalog,
+  migrateLegacyModelConfiguration,
   validateModelConfiguration,
 } from "./model-configuration";
-import { resolveConfiguredTaskModel } from "./configured-model-provider";
+import {
+  resolveConfiguredTaskModel,
+  supportsConfiguredModelExecution,
+} from "./configured-model-provider";
 import { resolveGlobalAgentRoots } from "./promptResolver";
 import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
@@ -959,12 +963,15 @@ export class CopilotExecutor {
       return { selection };
     }
 
+    const matchedSelection = {
+      ...modelInfoToSelection(matched),
+      modelReasoningEffort: selection.modelReasoningEffort,
+      modelConfiguration: selection.modelConfiguration,
+    };
     return {
-      selection: {
-        ...modelInfoToSelection(matched),
-        modelReasoningEffort: selection.modelReasoningEffort,
-        modelConfiguration: selection.modelConfiguration,
-      },
+      selection: supportsConfiguredModelExecution()
+        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        : matchedSelection,
       matched,
     };
   }

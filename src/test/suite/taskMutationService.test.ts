@@ -429,6 +429,49 @@ suite("taskMutationService model resolution", () => {
     );
   });
 
+  test("explicit dynamic updates replace inherited legacy effort without a manual clear", async () => {
+    const selected = fakeModel({
+      id: "shared",
+      vendor: "copilot",
+      configurationStatus: "available",
+      configurationOptions: [
+        {
+          key: "reasoningEffort",
+          label: "Thinking",
+          choices: [{ value: "low", label: "Low" }],
+        },
+      ],
+    });
+    for (const identity of [{}, { model: selected.id }]) {
+      const task = {
+        ...baseInput(),
+        id: "legacy",
+        enabled: false,
+        model: selected.id,
+        modelVendor: selected.vendor,
+        modelReasoningEffort: "high",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as ScheduledTask;
+      const fake = new FakeScheduleManager([task]);
+      const c = client(fake, catalogResolver([selected]));
+      const result = await c.updateTask(task.id, {
+        ...identity,
+        modelConfiguration: { reasoningEffort: "low" },
+      });
+      assertOk(result);
+      assert.deepStrictEqual(result.task.modelConfiguration, {
+        reasoningEffort: "low",
+      });
+      assert.ok(!result.task.modelReasoningEffort);
+      const conflict = await c.updateTask(task.id, {
+        modelConfiguration: { reasoningEffort: "low" },
+        modelReasoningEffort: "high",
+      });
+      assert.strictEqual(conflict.ok, false);
+    }
+  });
+
   test("reselecting the same model and vendor preserves dynamic task options", async () => {
     const selected = fakeModel({
       id: "shared",

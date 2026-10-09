@@ -37,6 +37,8 @@ import {
 import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
+import { migrateLegacyModelConfiguration } from "./model-configuration";
+import { supportsConfiguredModelExecution } from "./configured-model-provider";
 import {
   MAX_TASK_ATTACHMENTS,
   getAttachmentDisplayName,
@@ -175,8 +177,11 @@ export class SchedulerWebview {
     modelPickerDefault: ReturnType<typeof buildModelPickerGroups>;
     experimentalModelQualityEnabled: boolean;
     experimentalModelQualityNote: string;
+    modelConfigurationExecutionEnabled: boolean;
   } {
     const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
+    const modelConfigurationExecutionEnabled =
+      supportsConfiguredModelExecution();
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
     ) =>
@@ -184,6 +189,12 @@ export class SchedulerWebview {
         ...group,
         variants: group.variants.map((variant) => ({
           ...variant,
+          legacyModelConfiguration: modelConfigurationExecutionEnabled
+            ? migrateLegacyModelConfiguration(
+                { modelReasoningEffort: variant.reasoningEffort },
+                variant.model,
+              ).modelConfiguration
+            : undefined,
           label:
             variant.label === "Default"
               ? messages.labelModelVariantDefault()
@@ -199,6 +210,7 @@ export class SchedulerWebview {
         }),
       ),
       experimentalModelQualityEnabled,
+      modelConfigurationExecutionEnabled,
       experimentalModelQualityNote: experimentalModelQualityEnabled
         ? messages.labelModelExperimentalNote()
         : "",
@@ -1590,7 +1602,6 @@ export class SchedulerWebview {
       labelAgentNote: messages.labelAgentNote(),
       labelModel: messages.labelModel(),
       labelDynamicModelOptions: messages.labelDynamicModelOptions(),
-      labelUseDynamicModelOptions: messages.labelUseDynamicModelOptions(),
       labelInheritModelOptions: messages.labelInheritModelOptions(),
       labelDynamicModelOptionsBlocked:
         messages.labelDynamicModelOptionsBlocked(),
@@ -1760,6 +1771,8 @@ export class SchedulerWebview {
       agents: initialAgents,
       models: initialModels,
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
+      modelConfigurationExecutionEnabled:
+        initialModelPickerPayload.modelConfigurationExecutionEnabled,
       experimentalModelQualityEnabled:
         initialModelPickerPayload.experimentalModelQualityEnabled,
       experimentalModelQualityNote:
@@ -2779,8 +2792,7 @@ export class SchedulerWebview {
               <select id="model-select">
                 <option value="">${escapeHtml(initialModelPickerPayload.modelPickerDefault.length > 0 ? strings.placeholderSelectModel : strings.placeholderNoModels)}</option>
               </select>
-              <p class="note">${escapeHtml(strings.labelModelNote)}</p>
-              <p class="note" id="model-experimental-note" style="display:${initialModelPickerPayload.experimentalModelQualityEnabled ? "block" : "none"};">${escapeHtml(initialModelPickerPayload.experimentalModelQualityNote)}</p>
+              <p class="note" id="model-experimental-note" style="display:none;"></p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
             </div>
 
@@ -2793,7 +2805,6 @@ export class SchedulerWebview {
             </div>
 
             <div class="form-group col-12" id="model-configuration-group" style="display:none;">
-              <label><input type="checkbox" id="model-configuration-enabled"> ${escapeHtml(strings.labelUseDynamicModelOptions)}</label>
               <div class="form-grid" id="model-configuration-controls"></div>
               <p class="note" id="model-configuration-note"></p>
               <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>

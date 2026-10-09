@@ -27,6 +27,10 @@ function activate(context) {
             configurationSchema: {
               type: "object",
               properties: {
+                reasoningEffort: {
+                  type: "string",
+                  enum: ["low", "high"],
+                },
                 mode: {
                   type: "string",
                   enum: ["normal:low", "fast:high"],
@@ -91,11 +95,13 @@ async function tests() {
   );
   const original = fs.readFileSync(configFile, "utf8");
   const results = [];
-  for (const configuration of [
-    { mode: "normal:low", contextSize: "auto" },
-    { mode: "fast:high", contextSize: 4096 },
-    { mode: "normal:low", contextSize: "auto" },
+  for (const scenario of [
+    { configuration: { mode: "normal:low", contextSize: "auto" } },
+    { configuration: { mode: "fast:high", contextSize: 4096 } },
+    { configuration: { mode: "normal:low", contextSize: "auto" } },
+    { configuration: { reasoningEffort: "high" }, legacyEffort: "high" },
   ]) {
+    const configuration = scenario.configuration;
     const before = api.observed.length;
     await new CopilotExecutor().executePrompt(
       "@executionprobe Reply DYNAMIC_EXECUTION_OK",
@@ -104,14 +110,25 @@ async function tests() {
         modelVendor: "scheduler-test-source",
         agent: "ask",
         chatSession: "new",
-        modelConfiguration: configuration,
+        ...(scenario.legacyEffort
+          ? { modelReasoningEffort: scenario.legacyEffort }
+          : { modelConfiguration: configuration }),
       },
     );
     const received = api.observed.slice(before);
     assert.equal(received.length, 1);
-    assert.deepEqual(received[0].configuration, configuration);
+    assert.deepEqual(
+      received[0].configuration,
+      scenario.legacyEffort
+        ? { mode: null, contextSize: "auto", ...configuration }
+        : configuration,
+    );
     assert.equal(received[0].response, "DYNAMIC_EXECUTION_OK");
-    results.push({ requested: configuration, received: received[0] });
+    results.push({
+      requested: configuration,
+      legacyEffort: scenario.legacyEffort,
+      received: received[0],
+    });
   }
   assert.equal(fs.readFileSync(configFile, "utf8"), original);
   assert.equal(api.selectedModels.length, results.length);
@@ -136,7 +153,7 @@ async function tests() {
     JSON.stringify(proof, null, 2) + "\n",
   );
   console.log(
-    "Dynamic execution PASS: Low/High Fast/Low round trip, immutable binding reuse, typed context, exact responses, shared settings unchanged",
+    "Dynamic execution PASS: Low/High Fast/Low round trip, legacy High migration, immutable binding reuse, typed context, exact responses, shared settings unchanged",
   );
 }
 

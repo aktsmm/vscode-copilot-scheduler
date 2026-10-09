@@ -3166,6 +3166,260 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("empty model catalogs invalidate configuration controls while retaining saved options", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const select = { value: "old-model", innerHTML: "" };
+    let rendered: unknown;
+    const update = new Function(
+      "modelSelect",
+      "updateModelVariantOptions",
+      `
+      const getActiveModelPickerGroups = () => [];
+      const clearUnavailableModelOptions = () => {};
+      const clearModelVariantOptions = () => {};
+      const updateModelSelectionStatus = () => {};
+      const strings = { placeholderNoModels: "No models" };
+      const escapeHtml = value => value;
+      ${extractFunctionSource(source, "updateModelOptions")}
+      return updateModelOptions;
+      `,
+    )(select, (group: unknown, selection: unknown) => {
+      rendered = { group, selection };
+    });
+    const saved = {
+      model: "missing",
+      modelConfiguration: { contextSize: 4096 },
+    };
+    assert.strictEqual(update(saved), false);
+    assert.deepStrictEqual(rendered, { group: null, selection: saved });
+    assert.deepStrictEqual(saved.modelConfiguration, { contextSize: 4096 });
+  });
+
+  test("unavailable model restoration invalidates stale configuration controls", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const select = {
+      options: [] as unknown[],
+      selectedIndex: -1,
+      appendChild(option: unknown) {
+        this.options.push(option);
+      },
+    };
+    let rendered: unknown;
+    const restore = new Function(
+      "document",
+      "updateModelVariantOptions",
+      `
+      const clearUnavailableModelOptions = () => {};
+      const clearModelVariantOptions = () => {};
+      const buildUnavailableModelLabel = selection => selection.model;
+      const updateModelSelectionStatus = () => {};
+      ${extractFunctionSource(source, "ensureUnavailableModelOption")}
+      return ensureUnavailableModelOption;
+      `,
+    )(
+      { createElement: () => ({ dataset: {} }) },
+      (group: unknown, selection: unknown) => {
+        rendered = { group, selection };
+      },
+    );
+    const saved = {
+      model: "missing",
+      modelConfiguration: { reasoningEffort: "high" },
+    };
+    assert.strictEqual(restore(select, saved), true);
+    assert.deepStrictEqual(rendered, { group: null, selection: saved });
+    assert.strictEqual(select.selectedIndex, 0);
+  });
+
+  test("model preview note appears only for usable legacy reasoning choices", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const note = { textContent: "", style: { display: "" } };
+    const api = new Function(
+      "modelExperimentalNote",
+      `
+      var experimentalModelQualityEnabled = true;
+      var experimentalModelQualityNote = "Preview";
+      var strings = { labelModelNote: "Legacy" };
+      var modelConfigurationState;
+      ${extractFunctionSource(source, "updateModelExperimentalNote")}
+      return { update: updateModelExperimentalNote, configure: value => modelConfigurationState = value };
+      `,
+    )(note);
+    api.update({ variants: [{ model: { id: "plain" } }] });
+    assert.strictEqual(note.style.display, "none");
+    const preview = { variants: [{ reasoningEffort: "high" }] };
+    api.update(preview);
+    assert.strictEqual(note.style.display, "block");
+    assert.strictEqual(note.textContent, "Legacy Preview");
+    api.configure({});
+    api.update(preview);
+    assert.strictEqual(note.style.display, "none");
+    assert.strictEqual(note.textContent, "");
+  });
+
+  test("model selection restores migrated effort without an enable checkbox", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const api = new Function(`
+      var modelVariantSelect = {};
+      var modelConfigurationExecutionEnabled = true;
+      var pendingModelReasoningEffort = "high";
+      var modelConfigurationState;
+      var restored;
+      const findModelPickerSelection = (groups) => ({ variant: groups[0].variants[0] });
+      const renderModelConfigurationControls = (_model, selection) => {
+        restored = selection;
+        modelConfigurationState = selection.modelConfiguration;
+      };
+      const updateModelExperimentalNote = () => {};
+      const clearModelVariantOptions = () => {};
+      ${extractFunctionSource(source, "updateModelVariantOptions")}
+      return { update: updateModelVariantOptions, restored: () => restored,
+        pending: () => pendingModelReasoningEffort, unsupported: () => modelConfigurationExecutionEnabled = false };
+    `)();
+    const group = {
+      variants: [
+        {
+          model: { id: "shared" },
+          reasoningEffort: "high",
+          legacyModelConfiguration: { reasoningEffort: "high" },
+        },
+      ],
+    };
+    const legacy = { model: "shared", modelReasoningEffort: "high" };
+    api.update(group, legacy);
+    assert.deepStrictEqual(api.restored().modelConfiguration, {
+      reasoningEffort: "high",
+    });
+    assert.strictEqual(api.restored().modelReasoningEffort, "");
+    assert.strictEqual(api.pending(), "");
+    const explicit = {
+      ...legacy,
+      modelConfiguration: { reasoningEffort: "low" },
+    };
+    api.update(group, explicit);
+    assert.strictEqual(api.restored(), explicit);
+    const unmatched = { ...legacy, modelReasoningEffort: "medium" };
+    api.update(group, unmatched);
+    assert.strictEqual(api.restored(), unmatched);
+    api.unsupported();
+    api.update(group, legacy);
+    assert.strictEqual(api.restored(), legacy);
+  });
+
+  test("variant changes resolve the selected legacy effort instead of resetting it to inheritance", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let change: (() => void) | undefined;
+    const variant = {
+      key: "high",
+      reasoningEffort: "high",
+      model: { id: "shared", vendor: "copilot", version: "1" },
+    };
+    const group = { variants: [variant] };
+    let rendered: unknown;
+    const factory = new Function(
+      "modelVariantSelect",
+      "findModelPickerGroup",
+      "updateModelVariantOptions",
+      `
+      var modelSelect = { value: "group" };
+      var modelConfigurationState;
+      const clearPendingModelSelection = () => {};
+      const getActiveModelPickerGroups = () => [];
+      const renderModelConfigurationControls = () => {};
+      const updateModelSelectionStatus = () => {};
+      const scheduleLayoutRefresh = () => {};
+      ${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}
+    `,
+    );
+    factory(
+      {
+        value: "high",
+        addEventListener: (_event: string, handler: () => void) => {
+          change = handler;
+        },
+      },
+      () => group,
+      (selectedGroup: unknown, selection: unknown) => {
+        rendered = { group: selectedGroup, selection };
+      },
+    );
+    assert.ok(change);
+    change!();
+    assert.deepStrictEqual(rendered, {
+      group,
+      selection: {
+        model: "shared",
+        modelVendor: "copilot",
+        modelVersion: "1",
+        modelReasoningEffort: "high",
+      },
+    });
+  });
+
+  test("model changes show available schema settings without an enable checkbox", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let change: (() => void) | undefined;
+    let model: Record<string, unknown> = {
+      configurationStatus: "available",
+      configurationOptions: [{ key: "reasoningEffort" }],
+    };
+    const select = {
+      value: "model",
+      addEventListener: (_event: string, handler: () => void) => {
+        change = handler;
+      },
+    };
+    const api = new Function(
+      "modelSelect",
+      "findModelPickerGroup",
+      `
+      var modelConfigurationState;
+      const clearUnavailableModelOptions = () => {};
+      var modelConfigurationExecutionEnabled = true;
+      const clearPendingModelSelection = () => {};
+      const getActiveModelPickerGroups = () => [];
+      const updateModelVariantOptions = () => {};
+      const updateModelSelectionStatus = () => {};
+      const scheduleLayoutRefresh = () => {};
+      ${extractBlockFromStartToken(source, "if (modelSelect) {")}
+      return { state: () => modelConfigurationState, unsupported: () => modelConfigurationExecutionEnabled = false };
+      `,
+    )(select, () => ({ variants: [{ model }] }));
+    assert.ok(change);
+    change!();
+    assert.deepStrictEqual(api.state(), {});
+    model = { configurationStatus: "unavailable", configurationOptions: [] };
+    change!();
+    assert.strictEqual(api.state(), undefined);
+    model = {
+      configurationStatus: "available",
+      configurationOptions: [{ key: "mode" }],
+    };
+    change!();
+    assert.deepStrictEqual(api.state(), {});
+    api.unsupported();
+    change!();
+    assert.strictEqual(api.state(), undefined);
+  });
+
   test("dynamic model controls retain numeric values and unavailable saved choices", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
@@ -3197,18 +3451,20 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
     const controls = new Element();
     const group = new Element();
-    const enabled = new Element();
     const note = new Element();
     const factory = new Function(
       "document",
       "modelConfigurationControls",
       "modelConfigurationGroup",
-      "modelConfigurationEnabled",
       "modelConfigurationNote",
       `
       var modelConfigurationState = {};
+      var modelConfigurationExecutionEnabled = true;
       var activeConfigurationModel = null;
       var editingTaskSnapshot = null;
+      var pendingModelReasoningEffort = "";
+      var modelSelect = null;
+      const rescueFocusFrom = () => {};
       var strings = { labelInheritModelOptions: "Inherit", labelModelUnavailableSuffix: "Unavailable", labelDynamicModelOptionsBlocked: "Blocked" };
       ${render}
       ${extractFunctionSource(source, "copyModelConfigurationForForm")}
@@ -3222,7 +3478,6 @@ suite("SchedulerWebview Script Contract Tests", () => {
       { createElement: () => new Element() },
       controls,
       group,
-      enabled,
       note,
     );
     const model = {
@@ -3239,6 +3494,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
         },
       ],
     };
+    api.render(model, {});
+    assert.deepStrictEqual(api.state(), {});
+    assert.strictEqual(controls.children.length, 1);
+    assert.ok(!source.includes("model-configuration-enabled"));
     api.render(model, { modelConfiguration: { contextSize: 4096 } });
     const select = controls.children[0].children[1];
     assert.strictEqual(select.value, "1");

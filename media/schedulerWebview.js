@@ -569,6 +569,8 @@
   var pendingModelVersion = "";
   var pendingModelReasoningEffort = "";
   var modelConfigurationState = {};
+  var modelConfigurationExecutionEnabled =
+    !!initialData.modelConfigurationExecutionEnabled;
   var activeConfigurationModel = null;
   var modelConfigurationReset = document.getElementById(
     "model-configuration-reset",
@@ -688,9 +690,6 @@
   );
   var modelConfigurationControls = document.getElementById(
     "model-configuration-controls",
-  );
-  var modelConfigurationEnabled = document.getElementById(
-    "model-configuration-enabled",
   );
   var modelConfigurationNote = document.getElementById(
     "model-configuration-note",
@@ -1199,10 +1198,31 @@
     scheduleLayoutRefresh();
   }
 
-  function updateModelExperimentalNote() {
+  function updateModelExperimentalNote(group) {
     if (!modelExperimentalNote) return;
-    if (experimentalModelQualityEnabled && experimentalModelQualityNote) {
-      modelExperimentalNote.textContent = String(experimentalModelQualityNote);
+    if (!group)
+      group = findModelPickerGroup(
+        getActiveModelPickerGroups(),
+        modelSelect.value,
+      );
+    var hasPreviewChoices =
+      group &&
+      Array.isArray(group.variants) &&
+      group.variants.some(function (variant) {
+        return !!variant.reasoningEffort;
+      });
+    if (
+      experimentalModelQualityEnabled &&
+      experimentalModelQualityNote &&
+      hasPreviewChoices &&
+      modelConfigurationState === undefined
+    ) {
+      modelExperimentalNote.textContent = [
+        strings.labelModelNote,
+        experimentalModelQualityNote,
+      ]
+        .filter(Boolean)
+        .join(" ");
       modelExperimentalNote.style.display = "block";
       return;
     }
@@ -1215,12 +1235,31 @@
 
     var variants = group && Array.isArray(group.variants) ? group.variants : [];
     var matchingConfiguration = findModelPickerSelection([group], selection);
+    var selectedVariant = matchingConfiguration
+      ? matchingConfiguration.variant
+      : variants[0];
+    if (
+      modelConfigurationExecutionEnabled &&
+      selection &&
+      selection.modelConfiguration === undefined &&
+      selectedVariant &&
+      selectedVariant.legacyModelConfiguration !== undefined &&
+      (!selection.modelReasoningEffort ||
+        selection.modelReasoningEffort === selectedVariant.reasoningEffort)
+    ) {
+      selection = Object.assign({}, selection, {
+        modelConfiguration: selectedVariant.legacyModelConfiguration,
+        modelReasoningEffort: "",
+      });
+      pendingModelReasoningEffort = "";
+    }
     renderModelConfigurationControls(
       matchingConfiguration
         ? matchingConfiguration.variant.model
         : variants[0] && variants[0].model,
       selection,
     );
+    updateModelExperimentalNote(group);
     if (variants.length <= 1) {
       clearModelVariantOptions();
       return;
@@ -1259,16 +1298,16 @@
         .join("");
 
     if (modelVariantGroup) {
-      modelVariantGroup.style.display =
+      var hideModelVariants =
         modelConfigurationState !== undefined &&
         variants.every(function (variant) {
           return (
             variant.model.id === variants[0].model.id &&
             variant.model.version === variants[0].model.version
           );
-        })
-          ? "none"
-          : "block";
+        });
+      if (hideModelVariants) rescueFocusFrom(modelVariantGroup, modelSelect);
+      modelVariantGroup.style.display = hideModelVariants ? "none" : "block";
     }
 
     var matchedVariantKey = "";
@@ -1307,37 +1346,40 @@
   }
 
   function renderModelConfigurationControls(model, selection) {
-    if (
-      !modelConfigurationGroup ||
-      !modelConfigurationControls ||
-      !modelConfigurationEnabled
-    )
-      return;
+    if (!modelConfigurationGroup || !modelConfigurationControls) return;
     activeConfigurationModel = model || null;
     if (selection)
       modelConfigurationState = copyModelConfigurationForForm(
         selection.modelConfiguration,
       );
     var descriptors =
-      model && Array.isArray(model.configurationOptions)
+      modelConfigurationExecutionEnabled &&
+      model &&
+      Array.isArray(model.configurationOptions)
         ? model.configurationOptions
         : [];
+    if (
+      modelConfigurationState === undefined &&
+      model &&
+      model.configurationStatus === "available" &&
+      descriptors.length &&
+      !(selection && selection.modelReasoningEffort) &&
+      !pendingModelReasoningEffort
+    )
+      modelConfigurationState = {};
     var savedKeys = modelConfigurationState
       ? Object.keys(modelConfigurationState)
       : [];
     var invalidConfiguration =
       modelConfigurationState !== undefined &&
       !isEditableModelConfiguration(modelConfigurationState);
+    rescueFocusFrom(modelConfigurationGroup, modelSelect);
     modelConfigurationGroup.style.display =
-      descriptors.length || savedKeys.length || invalidConfiguration
+      (descriptors.length && modelConfigurationState !== undefined) ||
+      savedKeys.length ||
+      invalidConfiguration
         ? "block"
         : "none";
-    modelConfigurationEnabled.checked = modelConfigurationState !== undefined;
-    modelConfigurationEnabled.disabled =
-      !!(
-        editingTaskSnapshot &&
-        editingTaskSnapshot.modelConfiguration !== undefined
-      ) || invalidConfiguration;
     modelConfigurationControls.innerHTML = "";
     if (modelConfigurationNote)
       modelConfigurationNote.textContent =
@@ -1444,7 +1486,6 @@
     }
 
     clearUnavailableModelOptions(selectEl);
-    clearModelVariantOptions();
 
     var option = document.createElement("option");
     option.value = modelId;
@@ -1463,6 +1504,7 @@
     );
     selectEl.appendChild(option);
     selectEl.selectedIndex = selectEl.options.length - 1;
+    updateModelVariantOptions(null, selection);
     updateModelSelectionStatus();
     return true;
   }
@@ -1479,7 +1521,7 @@
       var noText = strings.placeholderNoModels || "";
       modelSelect.innerHTML =
         '<option value="">' + escapeHtml(noText) + "</option>";
-      clearModelVariantOptions();
+      updateModelVariantOptions(null, selection);
       updateModelSelectionStatus();
       return false;
     }
@@ -1697,11 +1739,20 @@
     modelSelect.addEventListener("change", function () {
       clearUnavailableModelOptions(modelSelect);
       clearPendingModelSelection();
-      if (modelConfigurationState !== undefined) modelConfigurationState = {};
-      updateModelVariantOptions(
-        findModelPickerGroup(getActiveModelPickerGroups(), modelSelect.value),
-        null,
+      var group = findModelPickerGroup(
+        getActiveModelPickerGroups(),
+        modelSelect.value,
       );
+      var model = group && group.variants[0] && group.variants[0].model;
+      modelConfigurationState =
+        modelConfigurationExecutionEnabled &&
+        model &&
+        model.configurationStatus === "available" &&
+        Array.isArray(model.configurationOptions) &&
+        model.configurationOptions.length
+          ? {}
+          : undefined;
+      updateModelVariantOptions(group, null);
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
     });
@@ -1719,22 +1770,19 @@
         group.variants.find(function (entry) {
           return entry.key === modelVariantSelect.value;
         });
-      renderModelConfigurationControls(variant && variant.model, null);
+      updateModelVariantOptions(
+        group,
+        variant
+          ? {
+              model: variant.model.id,
+              modelVendor: variant.model.vendor,
+              modelVersion: variant.model.version,
+              modelReasoningEffort: variant.reasoningEffort || "",
+            }
+          : null,
+      );
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
-    });
-  }
-  if (modelConfigurationEnabled) {
-    modelConfigurationEnabled.addEventListener("change", function () {
-      modelConfigurationState = modelConfigurationEnabled.checked
-        ? {}
-        : undefined;
-      pendingModelReasoningEffort = "";
-      renderModelConfigurationControls(activeConfigurationModel, null);
-      updateModelVariantOptions(
-        findModelPickerGroup(getActiveModelPickerGroups(), modelSelect.value),
-        null,
-      );
     });
   }
   if (modelConfigurationReset) {
@@ -3742,6 +3790,8 @@
               : [];
             experimentalModelQualityEnabled =
               !!message.experimentalModelQualityEnabled;
+            modelConfigurationExecutionEnabled =
+              !!message.modelConfigurationExecutionEnabled;
             experimentalModelQualityNote =
               typeof message.experimentalModelQualityNote === "string"
                 ? message.experimentalModelQualityNote

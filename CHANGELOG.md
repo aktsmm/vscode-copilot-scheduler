@@ -5,6 +5,14 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-10-09
+
+### Fixed
+
+- Empty model catalogs and unavailable saved models invalidate stale editable options and preview notices while preserving typed overrides for recovery. Legacy variant changes resolve the selected effort rather than silently switching to inheritance; rebuilt or hidden controls restore keyboard focus to the model selector.
+- Supported model options appear directly without a schema-mode checkbox. Both reasoning-preview notice lines are hidden unless usable legacy reasoning choices are active.
+- Legacy task settings migrate through schema-confirmed equivalents on supported hosts during model healing, editing, tool resolution and execution. Unmatched compound modes and invalid stored values are preserved rather than guessed or silently reset.
+
 ## [1.8.1] - 2026-10-09
 
 ### Added

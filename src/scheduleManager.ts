@@ -23,6 +23,8 @@ import {
   writeFileAtomically,
 } from "./atomic-file-write";
 import { TaskStoreLockBusyError, withTaskStoreLock } from "./task-store-lock";
+import { migrateLegacyModelConfiguration } from "./model-configuration";
+import { supportsConfiguredModelExecution } from "./configured-model-provider";
 import {
   areModelSelectionsEqual,
   findBestMatchingModel,
@@ -1659,11 +1661,14 @@ export class ScheduleManager {
         continue;
       }
 
-      const nextSelection = {
+      const matchedSelection = {
         ...modelInfoToSelection(matched),
         modelConfiguration: currentSelection.modelConfiguration,
         modelReasoningEffort: currentSelection.modelReasoningEffort,
       };
+      const nextSelection = supportsConfiguredModelExecution()
+        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        : matchedSelection;
       if (applyModelSelectionToTask(task, nextSelection)) {
         task.updatedAt = new Date();
         changed += 1;
@@ -1815,7 +1820,10 @@ export class ScheduleManager {
                 modelFamily: updates.modelFamily ?? task.modelFamily,
                 modelVersion: updates.modelVersion ?? task.modelVersion,
                 modelReasoningEffort:
-                  updates.modelReasoningEffort ?? task.modelReasoningEffort,
+                  updates.modelReasoningEffort ??
+                  (updates.modelConfiguration !== undefined
+                    ? undefined
+                    : task.modelReasoningEffort),
                 modelConfiguration:
                   updates.modelConfiguration !== undefined
                     ? updates.modelConfiguration

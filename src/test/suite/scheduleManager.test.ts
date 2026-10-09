@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import type { ModelInfo, ScheduledTask } from "../../types";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -147,6 +148,116 @@ function overrideWorkspaceFoldersForTest(
 }
 
 suite("ScheduleManager Dynamic Model Configuration", () => {
+  test("startup healing persists equivalent legacy options exactly once", async () => {
+    const provider = require("../../configured-model-provider");
+    const descriptor = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsConfiguredModelExecution",
+    )!;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-option-migration-"),
+    );
+    const manager = new ScheduleManager(createMockContext(root));
+    try {
+      await waitForStartupSave(manager);
+      const task = await manager.createTask({
+        name: "legacy",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+        model: "shared",
+        modelVendor: "copilot",
+        modelReasoningEffort: "high",
+      });
+      const models: ModelInfo[] = [
+        {
+          id: "shared",
+          name: "Shared",
+          vendor: "copilot",
+          description: "",
+          configurationStatus: "available",
+          configurationOptions: [
+            {
+              key: "reasoningEffort",
+              label: "Thinking",
+              choices: [{ value: "high", label: "High" }],
+            },
+          ],
+        },
+      ];
+      Object.defineProperty(provider, "supportsConfiguredModelExecution", {
+        ...descriptor,
+        value: () => true,
+      });
+      assert.strictEqual(await manager.healTaskModelSelections(models), 1);
+      assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {
+        reasoningEffort: "high",
+      });
+      assert.strictEqual(
+        manager.getTask(task.id)?.modelReasoningEffort,
+        undefined,
+      );
+      assert.strictEqual(await manager.healTaskModelSelections(models), 0);
+      const stored = JSON.parse(
+        fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8"),
+      );
+      assert.deepStrictEqual(
+        stored.find((entry: ScheduledTask) => entry.id === task.id)
+          .modelConfiguration,
+        { reasoningEffort: "high" },
+      );
+    } finally {
+      Object.defineProperty(
+        provider,
+        "supportsConfiguredModelExecution",
+        descriptor,
+      );
+      manager.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("direct dynamic updates replace legacy effort while rejecting explicit conflicts", async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "scheduler-direct-migration-"),
+    );
+    const manager = new ScheduleManager(createMockContext(root));
+    try {
+      await waitForStartupSave(manager);
+      const task = await manager.createTask({
+        name: "legacy",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+        model: "shared",
+        modelVendor: "copilot",
+        modelReasoningEffort: "high",
+      });
+      await manager.updateTask(task.id, {
+        modelConfiguration: { reasoningEffort: "low" },
+      });
+      assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {
+        reasoningEffort: "low",
+      });
+      assert.strictEqual(
+        manager.getTask(task.id)?.modelReasoningEffort,
+        undefined,
+      );
+      await assert.rejects(
+        manager.updateTask(task.id, {
+          modelConfiguration: { reasoningEffort: "low" },
+          modelReasoningEffort: "high",
+        }),
+        /conflicts/,
+      );
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("direct model reset clears saved identity and dynamic options", async () => {
     const root = fs.mkdtempSync(
       path.join(os.tmpdir(), "scheduler-model-reset-"),

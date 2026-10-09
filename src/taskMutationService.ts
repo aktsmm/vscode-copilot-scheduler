@@ -5,7 +5,11 @@ import {
   normalizeModelSelection,
 } from "./modelSelection";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
-import { validateModelConfiguration } from "./model-configuration";
+import {
+  migrateLegacyModelConfiguration,
+  validateModelConfiguration,
+} from "./model-configuration";
+import { supportsConfiguredModelExecution } from "./configured-model-provider";
 import type { ScheduleManager } from "./scheduleManager";
 import type {
   CreateTaskInput,
@@ -171,6 +175,11 @@ function mergeModelSelection(
       updates.modelConfiguration !== undefined
         ? updates.modelConfiguration
         : current.modelConfiguration;
+    if (
+      updates.modelConfiguration !== undefined &&
+      updates.modelReasoningEffort === undefined
+    )
+      merged.modelReasoningEffort = undefined;
   }
   return merged;
 }
@@ -186,7 +195,10 @@ function buildEffectiveModelSelection(
         updates.modelVendor === current.modelVendor);
     const requested = mergeModelSelection(sameIdentity ? current : {}, updates);
     requested.modelReasoningEffort =
-      updates.modelReasoningEffort ?? current.modelReasoningEffort;
+      updates.modelReasoningEffort ??
+      (updates.modelConfiguration !== undefined
+        ? undefined
+        : current.modelReasoningEffort);
     if (
       current.modelConfiguration !== undefined &&
       updates.modelConfiguration === undefined
@@ -413,11 +425,16 @@ export function createModelSelectionResolver(
       };
     }
 
-    const resolved = normalizeModelSelection({
+    const matchedSelection = {
       ...modelInfoToSelection(matched),
       modelReasoningEffort: normalized.modelReasoningEffort,
       modelConfiguration: normalized.modelConfiguration,
-    });
+    };
+    const resolved = normalizeModelSelection(
+      supportsConfiguredModelExecution()
+        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        : matchedSelection,
+    );
     if (resolved.modelConfiguration !== undefined) {
       if (resolved.modelReasoningEffort)
         return {
@@ -444,7 +461,12 @@ export function createModelSelectionResolver(
         "Dynamic options execute through a per-request configured model on VS Code 1.141 or later. Source-provider authorization is required; invalid or unavailable settings stop without fallback.",
       );
     }
-    if (normalized.modelReasoningEffort && !resolved.modelReasoningEffort) {
+    if (
+      normalized.modelReasoningEffort &&
+      !resolved.modelReasoningEffort &&
+      resolved.modelConfiguration?.reasoningEffort !==
+        normalized.modelReasoningEffort
+    ) {
       warnings.push(
         `Reasoning effort '${normalized.modelReasoningEffort}' is not supported by ${matched.name || matched.id}; it was ignored.`,
       );
