@@ -1,6 +1,6 @@
 # ⏰ Copilot Scheduler
 
-[![Status](https://badgen.net/badge/Status/Preview/yellow)](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0)
+[![Status](https://badgen.net/badge/Status/Preview/yellow)](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.1)
 [![VS Marketplace](https://badgen.net/vs-marketplace/v/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![Installs](https://badgen.net/vs-marketplace/i/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![License](https://badgen.net/badge/License/CC%20BY-NC-SA%204.0/gray)](LICENSE)
@@ -9,11 +9,11 @@
 
 VS Code で AI プロンプトを Cron 式で定期実行、または日時指定で一度だけ実行
 
-[**GitHubから1.9.0 PreviewのVSIXを取得**](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0)
+[**GitHubから1.9.1 PreviewのVSIXを取得**](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.1)
 
 ## Preview版の配布
 
-このブランチ（`preview/system-api`）はGitHubのPre-releaseとしてのみ配布します。現在のMarketplace安定版は1.8.7です。公開済みPreviewは1.9.0のままで、安定版への案内リンクを含む最新ブランチの変更は次回Previewリリース用です。`copilot-scheduler-1.9.0.vsix` を「拡張機能: VSIXからインストール」で導入してください。拡張IDは `yamapan.copilot-scheduler` のままなので、選択したプロファイルの安定版を置き換え、同じタスク保存先を使います。別の検証用プロファイルを推奨します。
+このブランチ（`preview/system-api`）はGitHubのPre-releaseとしてのみ配布します。現在のMarketplace安定版は1.8.7です。Preview 1.9.1には安定版への案内リンクと保存済み設定更新の共通修正を含みます。`copilot-scheduler-1.9.1.vsix` を「拡張機能: VSIXからインストール」で導入してください。拡張IDは `yamapan.copilot-scheduler` のままなので、選択したプロファイルの安定版を置き換え、同じタスク保存先を使います。別の検証用プロファイルを推奨します。
 
 モデルの詳細設定を使う場合は、タスク画面の「起動設定を開く」の案内に沿って `enable-proposed-api` にSchedulerを追加し、VS Codeを完全終了して再起動します。Previewの導入だけでは許可は付かず、モデルへのアクセス承認も別途必要です。安定版1.8.7へ戻す場合は `code --install-extension yamapan.copilot-scheduler@1.8.7 --force` を実行してください。Previewで保存した個別設定は自動解除しません。
 

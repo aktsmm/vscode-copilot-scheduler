@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-15
+
+GitHub-only Preview release (`preview-v1.9.1`); Marketplace Stable remains 1.8.7. The proposed System API declaration and explicit host-activation requirement are unchanged.
+
+### Added
+
+- A fixed Stable distribution link in the task form, without installation or permission changes.
+
+### Fixed
+
+- Shared Stable/Preview option gates retain Preview detailed-option writes. Stable rejects new detailed overrides and rebinding before persistence, while identical saved-map echoes retain values without mutating caller input; explicit inheritance remains available.
+- Updated Stable rollback instructions to 1.8.7 and separated installed API declaration, effective host permission and source-model consent.
+
 ## [1.9.0] - 2026-10-15
 
 GitHub Preview release (`preview-v1.9.0`) from `preview/system-api`; not published to VS Code Marketplace. This build retains the proposed System API declaration and requires explicit host activation. It uses the stable extension ID, so installing it replaces the stable version in that profile.
