@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-10-15
+
+### Changed
+
+- Documentation only: the 1.8.4 notes now record the agent selector's "Default behavior" wording. No runtime change from 1.8.4.
+
 ## [1.8.4] - 2026-10-15
 
 ### Changed
