@@ -13,9 +13,9 @@ VS Code で AI プロンプトを Cron 式で定期実行、または日時指�
 
 ## Preview版の配布
 
-このブランチ（`preview/system-api`）はGitHubのPre-releaseとしてのみ配布します。現在のMarketplace安定版は1.8.6です。公開済みPreviewは1.9.0のままで、安定版への案内リンクを含む最新ブランチの変更は次回Previewリリース用です。`copilot-scheduler-1.9.0.vsix` を「拡張機能: VSIXからインストール」で導入してください。拡張IDは `yamapan.copilot-scheduler` のままなので、選択したプロファイルの安定版を置き換え、同じタスク保存先を使います。別の検証用プロファイルを推奨します。
+このブランチ（`preview/system-api`）はGitHubのPre-releaseとしてのみ配布します。現在のMarketplace安定版は1.8.7です。公開済みPreviewは1.9.0のままで、安定版への案内リンクを含む最新ブランチの変更は次回Previewリリース用です。`copilot-scheduler-1.9.0.vsix` を「拡張機能: VSIXからインストール」で導入してください。拡張IDは `yamapan.copilot-scheduler` のままなので、選択したプロファイルの安定版を置き換え、同じタスク保存先を使います。別の検証用プロファイルを推奨します。
 
-モデルの詳細設定を使う場合は、タスク画面の「起動設定を開く」の案内に沿って `enable-proposed-api` にSchedulerを追加し、VS Codeを完全終了して再起動します。Previewの導入だけでは許可は付かず、モデルへのアクセス承認も別途必要です。安定版1.8.6へ戻す場合は `code --install-extension yamapan.copilot-scheduler@1.8.6 --force` を実行してください。Previewで保存した個別設定は自動解除しません。
+モデルの詳細設定を使う場合は、タスク画面の「起動設定を開く」の案内に沿って `enable-proposed-api` にSchedulerを追加し、VS Codeを完全終了して再起動します。Previewの導入だけでは許可は付かず、モデルへのアクセス承認も別途必要です。安定版1.8.7へ戻す場合は `code --install-extension yamapan.copilot-scheduler@1.8.7 --force` を実行してください。Previewで保存した個別設定は自動解除しません。
 
 [English / 英語版はこちら](README.md)
 

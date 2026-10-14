@@ -13,9 +13,9 @@ Schedule recurring or one-time AI prompts in VS Code.
 
 ## Preview Distribution
 
-This branch (`preview/system-api`) is distributed only as a GitHub Pre-release. Current Marketplace Stable is 1.8.6. The published Preview remains 1.9.0; newer branch changes, including the Stable navigation link, await the next Preview release. Install `copilot-scheduler-1.9.0.vsix` using **Extensions: Install from VSIX**. The extension ID remains `yamapan.copilot-scheduler`, so Preview replaces the stable extension in the selected profile and uses the same task storage; a separate test profile is recommended.
+This branch (`preview/system-api`) is distributed only as a GitHub Pre-release. Current Marketplace Stable is 1.8.7. The published Preview remains 1.9.0; newer branch changes, including the Stable navigation link, await the next Preview release. Install `copilot-scheduler-1.9.0.vsix` using **Extensions: Install from VSIX**. The extension ID remains `yamapan.copilot-scheduler`, so Preview replaces the stable extension in the selected profile and uses the same task storage; a separate test profile is recommended.
 
-For detailed model options, use the task form's **Open Runtime Arguments** guidance, add Scheduler to `enable-proposed-api`, then fully quit and restart VS Code. Installing Preview does not grant permission, and provider-model consent is separate. To return to Stable 1.8.6, run `code --install-extension yamapan.copilot-scheduler@1.8.6 --force`; Preview-specific saved overrides are not automatically cleared.
+For detailed model options, use the task form's **Open Runtime Arguments** guidance, add Scheduler to `enable-proposed-api`, then fully quit and restart VS Code. Installing Preview does not grant permission, and provider-model consent is separate. To return to Stable 1.8.7, run `code --install-extension yamapan.copilot-scheduler@1.8.7 --force`; Preview-specific saved overrides are not automatically cleared.
 
 [Japanese / 日本語版はこちら](README_ja.md)
 
