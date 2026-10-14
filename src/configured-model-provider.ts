@@ -11,6 +11,15 @@ import {
 export const CONFIGURED_MODEL_VENDOR = "copilot-scheduler-configured";
 let configuredProviderOwner = "yamapan.copilot-scheduler";
 
+export function hasSystemMessageDeclaration(): boolean {
+  const manifest = vscode.extensions.getExtension(
+    configuredProviderOwner,
+  )?.packageJSON;
+  const proposals =
+    manifest?.originalEnabledApiProposals ?? manifest?.enabledApiProposals;
+  return Array.isArray(proposals) && proposals.includes("languageModelSystem");
+}
+
 export function supportsSystemMessageForwarding(): boolean {
   const proposals = vscode.extensions.getExtension(configuredProviderOwner)
     ?.packageJSON.enabledApiProposals;

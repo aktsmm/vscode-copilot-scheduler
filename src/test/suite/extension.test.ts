@@ -391,6 +391,99 @@ suite("Extension Test Suite", () => {
     );
   });
 
+  test("Preview release metadata never enables Marketplace publishing", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const workflow = fs.readFileSync(
+      path.join(root, ".github/workflows/publish-marketplace.yml"),
+      "utf8",
+    );
+    const metadata =
+      /- name: Read package version[\s\S]*?run:\s*\|([\s\S]*?)\r?\n {6}- name:/.exec(
+        workflow,
+      );
+    assert.ok(metadata);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    for (const scenario of [
+      {
+        ref: `refs/tags/v${manifest.version}`,
+        preview: false,
+        publish: false,
+        blocked: false,
+      },
+      {
+        ref: `refs/tags/preview-v${manifest.version}`,
+        preview: true,
+        publish: false,
+        blocked: false,
+      },
+      {
+        ref: "refs/heads/preview/system-api",
+        preview: true,
+        publish: false,
+        blocked: false,
+      },
+      {
+        ref: "refs/heads/preview/system-api",
+        preview: true,
+        publish: true,
+        blocked: true,
+      },
+    ]) {
+      const script: string = metadata[1]
+        .replace(/\$\{\{ inputs.publish \}\}/g, String(scenario.publish))
+        .replace(/ >> \$env:GITHUB_OUTPUT/g, "");
+      const result = spawnSync(
+        "pwsh",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          cwd: root,
+          env: { ...process.env, GITHUB_REF: scenario.ref },
+          encoding: "utf8",
+        },
+      );
+      assert.strictEqual(
+        result.status,
+        scenario.blocked ? 1 : 0,
+        result.stderr,
+      );
+      if (scenario.blocked) {
+        assert.match(result.stderr, /Preview builds cannot publish/);
+      } else {
+        assert.ok(
+          result.stdout.includes(`preview=${scenario.preview}`),
+          result.stdout,
+        );
+        assert.ok(
+          result.stdout.includes(
+            `tag=${scenario.preview ? "preview-v" : "v"}${manifest.version}`,
+          ),
+          result.stdout,
+        );
+      }
+    }
+    for (const name of [
+      "Verify Marketplace eligibility",
+      "Ensure marketplace secret is configured",
+      "Publish to VS Code Marketplace",
+    ]) {
+      assert.ok(
+        workflow.includes(
+          `- name: ${name}\n        if: steps.meta.outputs.preview != 'true'`,
+        ) ||
+          workflow.includes(
+            `- name: ${name}\r\n        if: steps.meta.outputs.preview != 'true'`,
+          ),
+      );
+    }
+    assert.ok(
+      workflow.includes(
+        "prerelease: ${{ steps.meta.outputs.preview == 'true' }}",
+      ),
+    );
+  });
+
   test("registry gate rejects an empty lockfile rather than reporting a vacuous pass", () => {
     const root = path.resolve(__dirname, "../../..");
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-lock-"));
@@ -600,7 +693,10 @@ suite("Extension Test Suite", () => {
     const root = path.resolve(__dirname, "../../..");
     const verifier = require(
       path.join(root, "scripts/verify-vsix-contents.js"),
-    ) as { readVsixManifest(file: string): Promise<{ version: string }> };
+    ) as {
+      readVsixManifest(file: string): Promise<{ version: string }>;
+      verifyVsixMarketplace(file: string): Promise<boolean>;
+    };
     const { ZipFile } = require("yazl");
     const fixtureRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "copilot-installed-manifest-"),
@@ -632,6 +728,33 @@ suite("Extension Test Suite", () => {
         (await verifier.readVsixManifest(fixture)).version,
         "9.8.7",
       );
+      assert.strictEqual(await verifier.verifyVsixMarketplace(fixture), true);
+      await write(
+        "extension/package.json",
+        JSON.stringify({ version: "9.8.7", enableProposedApi: true }),
+      );
+      await assert.rejects(
+        verifier.verifyVsixMarketplace(fixture),
+        /Marketplace publication blocked/,
+      );
+      for (const proposals of [
+        ["languageModelSystem"],
+        "languageModelSystem",
+      ]) {
+        await write(
+          "extension/package.json",
+          JSON.stringify({ version: "9.8.7", enabledApiProposals: proposals }),
+        );
+        await assert.rejects(
+          verifier.verifyVsixMarketplace(fixture),
+          /Marketplace publication blocked/,
+        );
+      }
+      await write(
+        "extension/package.json",
+        JSON.stringify({ version: "9.8.7", enabledApiProposals: [] }),
+      );
+      assert.strictEqual(await verifier.verifyVsixMarketplace(fixture), true);
       await write("extension/README.md", "no manifest");
       await assert.rejects(
         verifier.readVsixManifest(fixture),

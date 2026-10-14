@@ -3470,11 +3470,13 @@ suite("SchedulerWebview Script Contract Tests", () => {
       var modelSelect = null;
       const rescueFocusFrom = () => {};
       var strings = { labelInheritModelOptions: "Inherit", labelModelUnavailableSuffix: "Unavailable", labelDynamicModelOptionsBlocked: "Blocked" };
+      var modelConfigurationSetup = null;
+      ${extractFunctionSource(source, "renderModelConfigurationSetup")}
       ${render}
       ${extractFunctionSource(source, "copyModelConfigurationForForm")}
       ${extractFunctionSource(source, "isEditableModelConfiguration")}
       ${extractBlockFromStartToken(source, "if (modelConfigurationReset) {")}
-      return { render: renderModelConfigurationControls, state: () => modelConfigurationState, disable: () => modelConfigurationExecutionEnabled = false };
+      return { render: renderModelConfigurationControls, state: () => modelConfigurationState, disable: () => modelConfigurationExecutionEnabled = false, enable: () => modelConfigurationExecutionEnabled = true };
     `,
     );
     const api = factory(
@@ -3509,9 +3511,37 @@ suite("SchedulerWebview Script Contract Tests", () => {
     select.listeners.change();
     assert.strictEqual(api.state().contextSize, "4096");
     api.disable();
+    api.render(model, {});
+    assert.strictEqual(api.state(), undefined);
+    assert.strictEqual(
+      controls.children.length,
+      0,
+      "A fresh form must not show detailed inputs without execution permission",
+    );
     api.render(model, { modelConfiguration: { contextSize: 4096 } });
     assert.strictEqual(controls.children[0].children[1].disabled, true);
+    assert.strictEqual(
+      controls.children[0].children[1].children.length,
+      2,
+      "Read-only controls must contain only inheritance and the saved value, not advertised choices",
+    );
     assert.strictEqual(reset.style.display, "inline-flex");
+    assert.deepStrictEqual(api.state(), { contextSize: 4096 });
+    api.enable();
+    api.render(model, null);
+    const restored = controls.children[0].children[1];
+    assert.strictEqual(restored.disabled, false);
+    assert.strictEqual(restored.value, "1");
+    assert.strictEqual(restored.children.length, 4);
+    assert.deepStrictEqual(
+      api.state(),
+      { contextSize: 4096 },
+      "Restoring permission must preserve the saved numeric setting",
+    );
+    api.disable();
+    api.render(model, null);
+    assert.strictEqual(controls.children[0].children[1].disabled, true);
+    assert.strictEqual(controls.children[0].children[1].children.length, 2);
     assert.deepStrictEqual(api.state(), { contextSize: 4096 });
     reset.listeners.click();
     assert.deepStrictEqual(api.state(), {});
@@ -3613,7 +3643,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.strictEqual(api.updated(), 1);
   });
 
-  test("model picker payload enables detailed and legacy options without System permission", () => {
+  test("model picker gates detailed options on effective System permission but preserves legacy choices", () => {
     const provider = require("../../configured-model-provider");
     const executionDescriptor = Object.getOwnPropertyDescriptor(
       provider,
@@ -3662,16 +3692,12 @@ suite("SchedulerWebview Script Contract Tests", () => {
         value: () => false,
       });
       const payload = wv.buildModelPickerPayload(models);
-      assert.strictEqual(payload.modelConfigurationExecutionEnabled, true);
+      assert.strictEqual(payload.modelConfigurationExecutionEnabled, false);
       assert.strictEqual(payload.experimentalModelQualityEnabled, true);
       const variants = payload.modelPickerDefault[0].variants;
       assert.ok(variants.some((variant) => variant.reasoningEffort === "high"));
-      // Without System permission only the inherit variant maps to a dynamic selection.
       for (const variant of variants)
-        assert.strictEqual(
-          variant.legacyModelConfiguration !== undefined,
-          !variant.reasoningEffort,
-        );
+        assert.strictEqual(variant.legacyModelConfiguration, undefined);
 
       Object.defineProperty(provider, "supportsSystemMessageForwarding", {
         ...systemDescriptor,
@@ -3708,19 +3734,223 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("detailed options note states the explicit participant requirement without System permission", () => {
+  test("runtime setup payload distinguishes unsupported, undeclared, unenabled and enabled hosts", () => {
+    const provider = require("../../configured-model-provider");
+    const fields = [
+      "supportsConfiguredModelExecution",
+      "hasSystemMessageDeclaration",
+      "supportsSystemMessageForwarding",
+    ];
+    const descriptors = fields.map(
+      (field) => Object.getOwnPropertyDescriptor(provider, field)!,
+    );
+    const webview = SchedulerWebview as unknown as {
+      buildModelPickerPayload(models: ModelInfo[]): {
+        modelConfigurationExecutionEnabled: boolean;
+        modelConfigurationSetupAvailable: boolean;
+        modelConfigurationSetupNote: string;
+      };
+    };
+    try {
+      for (const scenario of [
+        {
+          support: false,
+          declaration: true,
+          permission: false,
+          setup: false,
+          note: messages.modelOptionsHostUnsupported(),
+        },
+        {
+          support: true,
+          declaration: false,
+          permission: false,
+          setup: false,
+          note: messages.modelOptionsDeclarationMissing(),
+        },
+        {
+          support: true,
+          declaration: true,
+          permission: false,
+          setup: true,
+          note: messages.modelOptionsEnableInstructions(),
+        },
+        {
+          support: true,
+          declaration: true,
+          permission: true,
+          setup: false,
+          note: "",
+        },
+      ]) {
+        const values = [
+          scenario.support,
+          scenario.declaration,
+          scenario.permission,
+        ];
+        fields.forEach((field, index) => {
+          Object.defineProperty(provider, field, {
+            ...descriptors[index],
+            value: () => values[index],
+          });
+        });
+        const payload = webview.buildModelPickerPayload([]);
+        assert.strictEqual(
+          payload.modelConfigurationExecutionEnabled,
+          scenario.support && scenario.permission,
+        );
+        assert.strictEqual(
+          payload.modelConfigurationSetupAvailable,
+          scenario.setup,
+        );
+        assert.strictEqual(payload.modelConfigurationSetupNote, scenario.note);
+      }
+    } finally {
+      fields.forEach((field, index) =>
+        Object.defineProperty(provider, field, descriptors[index]),
+      );
+    }
+  });
+
+  test("runtime setup button only opens the fixed settings command on an eligible host", async () => {
+    const provider = require("../../configured-model-provider");
+    const fields = [
+      "supportsConfiguredModelExecution",
+      "hasSystemMessageDeclaration",
+      "supportsSystemMessageForwarding",
+    ];
+    const descriptors = fields.map(
+      (field) => Object.getOwnPropertyDescriptor(provider, field)!,
+    );
+    const commandDescriptor = Object.getOwnPropertyDescriptor(
+      vscode.commands,
+      "executeCommand",
+    )!;
+    const warningDescriptor = Object.getOwnPropertyDescriptor(
+      vscode.window,
+      "showWarningMessage",
+    )!;
+    const warnings: string[] = [];
+    const calls: Array<{ command: string; args: unknown[] }> = [];
+    const webview = SchedulerWebview as unknown as {
+      handleMessage(message: {
+        type: "openModelRuntimeArguments";
+      }): Promise<void>;
+    };
+    try {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        ...commandDescriptor,
+        value: async (command: string, ...args: unknown[]) => {
+          calls.push({ command, args });
+        },
+      });
+      for (const values of [
+        [false, true, false],
+        [true, false, false],
+        [true, true, true],
+        [true, true, false],
+      ]) {
+        fields.forEach((field, index) =>
+          Object.defineProperty(provider, field, {
+            ...descriptors[index],
+            value: () => values[index],
+          }),
+        );
+        await webview.handleMessage({ type: "openModelRuntimeArguments" });
+      }
+      assert.deepStrictEqual(calls, [
+        { command: "workbench.action.configureRuntimeArguments", args: [] },
+      ]);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        ...warningDescriptor,
+        value: async (message: string) => {
+          warnings.push(message);
+        },
+      });
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        ...commandDescriptor,
+        value: async () => {
+          throw new Error("synthetic internal command failure");
+        },
+      });
+      await assert.doesNotReject(
+        webview.handleMessage({ type: "openModelRuntimeArguments" }),
+      );
+      assert.deepStrictEqual(warnings, [
+        messages.modelRuntimeArgumentsUnavailable(),
+      ]);
+    } finally {
+      Object.defineProperty(
+        vscode.window,
+        "showWarningMessage",
+        warningDescriptor,
+      );
+      Object.defineProperty(
+        vscode.commands,
+        "executeCommand",
+        commandDescriptor,
+      );
+      fields.forEach((field, index) =>
+        Object.defineProperty(provider, field, descriptors[index]),
+      );
+    }
+  });
+
+  test("runtime setup click posts only an eligible fixed action", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let click: (() => void) | undefined;
+    const posted: unknown[] = [];
+    const api = new Function(
+      "modelConfigurationSetupButton",
+      "vscode",
+      `
+      var modelConfigurationSetupAvailable = false;
+      ${extractBlockFromStartToken(source, "if (modelConfigurationSetupButton) {")}
+      return { enable: () => modelConfigurationSetupAvailable = true };
+    `,
+    )(
+      {
+        addEventListener: (_event: string, handler: () => void) => {
+          click = handler;
+        },
+      },
+      { postMessage: (message: unknown) => posted.push(message) },
+    );
+    assert.ok(click);
+    click!();
+    assert.deepStrictEqual(posted, []);
+    api.enable();
+    click!();
+    assert.deepStrictEqual(posted, [{ type: "openModelRuntimeArguments" }]);
+  });
+
+  test("detailed options note distinguishes effective permission from declaration and model consent", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../src/i18n.ts"),
       "utf8",
     );
     for (const token of [
-      "must start its prompt with an explicit chat participant",
-      "チャット参加者を明示する必要があり",
+      "effective languageModelSystem permission for Scheduler",
+      "Declaring the API or installing the extension alone does not grant permission",
+      "Model access requires separate approval",
+      "saved overrides remain read-only",
+      "利用許可が揃う環境だけで利用できます",
+      "インストールだけでは許可は付きません",
+      "モデルへのアクセス承認は別途必要です",
+      "保存済み設定を読み取り専用で保持",
     ])
       assert.ok(
         sourceContainsToken(source, token),
         `Missing note token: ${token}`,
       );
+    assert.ok(
+      !sourceContainsToken(
+        source,
+        "must start its prompt with an explicit chat participant",
+      ),
+    );
   });
 
   test("invalid model configuration repairs only on explicit reset", () => {

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-15
+
+GitHub Preview release (`preview-v1.9.0`) from `preview/system-api`; not published to VS Code Marketplace. This build retains the proposed System API declaration and requires explicit host activation. It uses the stable extension ID, so installing it replaces the stable version in that profile.
+
+### Added
+
+- The task form explains unavailable detailed options and offers an Open Runtime Arguments button only on supported, declared but unenabled hosts. It shows the extension-specific setting and full restart instructions without writing settings, granting permission, or changing task overrides.
+
+### Fixed
+
+- Unavailable or invalid option schemas retain their explanatory note even after API activation, without inventing detailed inputs. Activation guidance appears only when needed; models with a valid schema confirming no options do not show an unnecessary setup action.
+
+- Model refresh preserves keyboard focus on activation guidance that remains visible; focus returns to the model selector only when inputs are rebuilt or focused actions disappear. Stale setup guidance is cleared when the selected model becomes unavailable.
+
+- Marketplace release verification rejects proposed API declarations in the packaged VSIX before publication, while local build verification remains available for authorized development candidates.
+
+- Detailed model inputs require both supported host APIs and effective System permission again; legacy shared-setting choices remain independent and saved overrides stay read-only without permission. Bilingual UI guidance distinguishes effective API permission, declaration and provider-model consent instead of suggesting an explicit participant enables the form. The local development manifest declares `languageModelSystem` for authorized testing only, not Marketplace publication or automatic permission grants.
+
 ## [1.8.5] - 2026-10-15
 
 ### Changed

@@ -1,6 +1,6 @@
 # ⏰ Copilot Scheduler
 
-[![Status](https://badgen.net/badge/Status/Stable/green)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
+[![Status](https://badgen.net/badge/Status/Preview/yellow)](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0)
 [![VS Marketplace](https://badgen.net/vs-marketplace/v/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![Installs](https://badgen.net/vs-marketplace/i/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![License](https://badgen.net/badge/License/CC%20BY-NC-SA%204.0/gray)](LICENSE)
@@ -9,7 +9,13 @@
 
 Schedule recurring or one-time AI prompts in VS Code.
 
-[**📥 Install from VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
+[**Download the 1.9.0 Preview VSIX from GitHub**](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0)
+
+## Preview Distribution
+
+This branch (`preview/system-api`) is distributed only as a GitHub Pre-release. Marketplace stable 1.8.5 is unchanged. Install `copilot-scheduler-1.9.0.vsix` using **Extensions: Install from VSIX**. The extension ID remains `yamapan.copilot-scheduler`, so Preview replaces the stable extension in the selected profile and uses the same task storage; a separate test profile is recommended.
+
+For detailed model options, use the task form's **Open Runtime Arguments** guidance, add Scheduler to `enable-proposed-api`, then fully quit and restart VS Code. Installing Preview does not grant permission, and provider-model consent is separate. To return to stable 1.8.5, run `code --install-extension yamapan.copilot-scheduler@1.8.5 --force`; Preview-specific saved overrides are not automatically cleared.
 
 [Japanese / 日本語版はこちら](README_ja.md)
 
@@ -112,11 +118,21 @@ Codex Bridge 1.0.0 GPT 6 Luna (`openai-codex`, `<profile>::gpt-6-luna`) has expe
 
 The task form and `scheduler_query kind=list_models` discover per-model enum values and labels from VS Code's internal `vscode://schemas/language-models` document. Recognized properties are `mode`, `reasoningEffort`, `speedMode`, and `contextSize`; numeric values remain numbers. Fast and context choices appear only when the selected model advertises them. Unsupported or unavailable schemas do not produce guessed options, and unavailable saved choices remain visible. This internal schema contract may change with VS Code updates.
 
-When host support (VS Code 1.141 or later) and advertised options are available, task options appear directly without an enable checkbox, with or without System API permission; each unset option inherits the current shared Chat setting. Models without advertised options keep the legacy reasoning choices. Unsupported saved overrides remain visible read-only with explicit repair. A reasoning-preview notice appears only for available legacy choices.
+When host support (VS Code 1.141 or later), effective System API permission and advertised options are available, task options appear directly without an enable checkbox; each unset option inherits the current shared Chat setting. Without effective permission, detailed inputs are not editable and saved overrides remain read-only with explicit repair. Legacy reasoning choices use a separate shared-setting path and do not require System permission. A reasoning-preview notice appears only for available legacy choices.
 
 On VS Code 1.141 or later, model-catalog healing, saves and execution migrate legacy selections when the schema confirms equivalence. An unset legacy effort becomes inherited settings. An explicit effort becomes the identical advertised `reasoningEffort` only with effective System API permission; without it, the saved legacy choice remains unchanged instead of becoming an unusable native override. Existing explicit maps remain unchanged. Compound `mode` values are not guessed from an effort alone, and unmatched legacy settings or older hosts retain the legacy path. Startup healing persists successful migrations through the normal task-store write path.
 
-New tasks use `modelConfiguration: {}` to inherit current shared Chat settings without changing them. Omission on update preserves the task's map; `{}` clears only task overrides, not settings left by the user or the legacy shared-setting path. **VS Code 1.141 or later is necessary but not sufficient for explicit dynamic execution.** Agent system instructions require effective `languageModelSystem` API permission for Scheduler. The picker enables detailed editing whenever the host supports dynamic execution; saved overrides remain visible and are not cleared automatically. Without effective System permission, a task with explicit options must name an explicit chat participant; otherwise native Chat/Agent overrides stop before dispatch while model selection with inherited settings remains available.
+New tasks use `modelConfiguration: {}` to inherit current shared Chat settings without changing them. Omission on update preserves the task's map; `{}` clears only task overrides, not settings left by the user or the legacy shared-setting path. **VS Code 1.141 or later is necessary but not sufficient for explicit dynamic execution.** Agent system instructions require effective `languageModelSystem` API permission for Scheduler. The picker enables detailed editing only when the host supports dynamic execution and that permission is effective; saved overrides remain visible and are not cleared automatically. Without effective System permission, native Chat/Agent overrides stop before dispatch while model selection with inherited settings remains available.
+
+The local development manifest declares `languageModelSystem` for permission-enabled verification. Declaration alone does not grant permission. This proposed-API build is for local testing, not Marketplace publication. Neither installation nor updating VS Code enables the proposal automatically; the host must explicitly authorize `yamapan.copilot-scheduler`.
+
+For models advertising detailed options, the task form explains missing prerequisites. On a supported, declared but unenabled build, **Open Runtime Arguments** opens VS Code's runtime-arguments editor without writing settings. Add `yamapan.copilot-scheduler` to the existing `enable-proposed-api` array, or add `"enable-proposed-api": ["yamapan.copilot-scheduler"]` if absent, preserve other entries, then fully quit and restart VS Code. Undeclared builds and unsupported hosts show their respective limitations instead of an activation button. Existing task overrides are retained.
+
+The System-role proposal originated in [Language model access API #206265](https://github.com/microsoft/vscode/issues/206265), opened by Johannes Rieken (`jrieken`), and was split into its own proposal in [PR #212082](https://github.com/microsoft/vscode/pull/212082) on May 6, 2024. The stated reasons were API design and Responsible AI considerations; model-access consent is a separate mechanism.
+
+If the selected model's option schema is unavailable or invalid, the reason remains visible even after API activation, but no guessed inputs are added. Activation instructions appear only when the API is not enabled. A valid schema confirming no options hides the unnecessary setup action. Enabling the API does not guarantee that a model advertises detailed options.
+
+Before Marketplace publication, run `node scripts/verify-vsix-contents.js <candidate.vsix> --verify-marketplace`. The release workflow checks the packaged manifest and rejects proposed API declarations before publishing. Local proposed-API candidates can still use `--verify-build`; that check alone does not establish Marketplace eligibility.
 
 API permission and provider-model access approval are different. A first-use dialog asking whether Scheduler may access GitHub Copilot or another provider must be approved for the requested access. This model-access approval does not grant proposed API permission. Scheduler cannot grant itself VS Code API permission: a compatible build and legitimate host authorization are required, and a launch flag alone does not add an API declaration missing from the extension. Proposed API use also has [distribution restrictions](https://code.visualstudio.com/api/advanced-topics/using-proposed-api).
 

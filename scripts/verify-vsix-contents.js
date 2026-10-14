@@ -356,6 +356,24 @@ async function readVsixManifest(file) {
   });
 }
 
+async function verifyVsixMarketplace(vsixPath) {
+  const manifest = await readVsixManifest(vsixPath);
+  if (
+    manifest.enableProposedApi ||
+    (Object.hasOwn(manifest, "enabledApiProposals") &&
+      (!Array.isArray(manifest.enabledApiProposals) ||
+        manifest.enabledApiProposals.length > 0))
+  ) {
+    throw new Error(
+      "Marketplace publication blocked: the VSIX declares proposed APIs. Keep this build local or prepare an explicitly approved stable-API package.",
+    );
+  }
+  console.log(
+    "Verified Marketplace eligibility: no proposed API declarations.",
+  );
+  return true;
+}
+
 async function verifyInstalledVsix(vsixPath, executable) {
   if (!fs.existsSync(executable))
     throw new Error("Isolated VS Code executable is missing");
@@ -567,6 +585,7 @@ async function main() {
   const { values, positionals } = parseArgs({
     options: {
       "verify-build": { type: "boolean", default: false },
+      "verify-marketplace": { type: "boolean", default: false },
       "verify-installed": { type: "boolean", default: false },
       "vscode-executable": { type: "string" },
     },
@@ -577,7 +596,7 @@ async function main() {
     vsixPaths = findDefaultVsixPaths();
     if (vsixPaths.length === 0) {
       console.error(
-        "Usage: node scripts/verify-vsix-contents.js [--verify-build] [path-to.vsix ...]",
+        "Usage: node scripts/verify-vsix-contents.js [--verify-build] [--verify-marketplace] [path-to.vsix ...]",
       );
       console.error(
         "No argument was given and no VSIX for the current version was found in artifacts/vsix/ or the repository root. Run `npx @vscode/vsce package` first.",
@@ -594,6 +613,9 @@ async function main() {
         (values["verify-build"]
           ? await verifyVsixBuild(vsixPath)
           : verifyVsix(vsixPath)) && ok;
+      if (ok && values["verify-marketplace"]) {
+        ok = await verifyVsixMarketplace(vsixPath);
+      }
       if (ok && values["verify-installed"]) {
         if (!values["vscode-executable"])
           throw new Error("--verify-installed requires --vscode-executable");
@@ -622,4 +644,5 @@ module.exports = {
   verifyVsix,
   verifyVsixBuild,
   readVsixManifest,
+  verifyVsixMarketplace,
 };

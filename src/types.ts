@@ -458,6 +458,7 @@ export type WebviewToExtensionMessage =
   | ({ type: "testPrompt" } & PromptExecutionRequest)
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
+  | { type: "openModelRuntimeArguments" }
   | { type: "refreshPrompts" }
   | { type: "runTask"; taskId: string }
   | { type: "toggleTask"; taskId: string }
