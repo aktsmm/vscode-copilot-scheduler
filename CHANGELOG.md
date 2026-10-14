@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.8.4] - 2026-10-15
 
+### Changed
+
+- The agent selector's empty choice is now labelled "Default behavior" (was "None"), and its help text states that the prompt's `agent:` setting is used when present, otherwise the default behavior. Agent execution and precedence are unchanged.
+
 ### Fixed
 
 - Detailed model options and legacy reasoning choices no longer disappear on ordinary installs without System API permission. The picker shows detailed inputs whenever the host supports dynamic execution (VS Code 1.141 or later); System permission is checked only at execution, where tasks with explicit options and no explicit chat participant still stop before dispatch. Legacy efforts are not auto-migrated without permission, and legacy variant changes apply again on hosts without dynamic support while saved overrides stay intact. The explanatory note now states the explicit chat-participant requirement instead of implying the inputs are unavailable.
