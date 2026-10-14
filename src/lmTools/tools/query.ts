@@ -11,6 +11,7 @@ import {
 import { sanitizeAbsolutePathDetails } from "../../errorSanitizer";
 import { getSupportedExperimentalReasoningEfforts } from "../../modelQualityExperiment";
 import {
+  hasSystemMessageDeclaration,
   supportsConfiguredModelExecution,
   supportsSystemMessageForwarding,
 } from "../../configured-model-provider";
@@ -250,6 +251,7 @@ async function handleListModels(
   catalogProvider: SchedulerCatalogProvider,
 ): Promise<vscode.LanguageModelToolResult> {
   const { source, models } = await catalogProvider.listModels();
+  const preview = hasSystemMessageDeclaration();
   const systemAllowed =
     supportsConfiguredModelExecution() && supportsSystemMessageForwarding();
   return buildJsonTextResult({
@@ -270,17 +272,19 @@ async function handleListModels(
       vendor: model.vendor,
       family: model.family,
       version: model.version,
-      configurationOptions: model.configurationOptions || [],
+      configurationOptions: preview ? model.configurationOptions || [] : [],
       configurationStatus: model.configurationStatus || "unavailable",
-      configurationExecution: supportsConfiguredModelExecution()
+      configurationExecution: !preview
+        ? "preview_required"
+        : supportsConfiguredModelExecution()
         ? "per_request_bound_model"
         : "requires_vscode_1_141",
-      supportedReasoningEfforts: getSupportedExperimentalReasoningEfforts({
+      supportedReasoningEfforts: preview ? getSupportedExperimentalReasoningEfforts({
         id: model.id,
         name: model.name,
         vendor: model.vendor,
         family: model.family,
-      }),
+      }) : [],
     })),
   });
 }

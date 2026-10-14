@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import {
   buildConfiguredRequestOptions,
   ConfiguredModelProvider,
+  hasSystemMessageDeclaration,
   supportsSystemMessageForwarding,
 } from "../../configured-model-provider";
 import type { ModelInfo } from "../../types";
@@ -287,6 +288,45 @@ suite("Configured Model Provider", () => {
       token.dispose();
     }
   });
+  test("missing and malformed declarations do not enable runtime setup", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      vscode.extensions,
+      "getExtension",
+    )!;
+    try {
+      for (const manifest of [
+        undefined,
+        {},
+        { enabledApiProposals: [] },
+        { enabledApiProposals: "languageModelSystem" },
+        {
+          originalEnabledApiProposals: [],
+          enabledApiProposals: ["languageModelSystem"],
+        },
+        {
+          originalEnabledApiProposals: "languageModelSystem",
+          enabledApiProposals: [],
+        },
+      ]) {
+        Object.defineProperty(vscode.extensions, "getExtension", {
+          ...descriptor,
+          value: () =>
+            manifest === undefined ? undefined : { packageJSON: manifest },
+        });
+        assert.strictEqual(hasSystemMessageDeclaration(), false);
+      }
+      Object.defineProperty(vscode.extensions, "getExtension", {
+        ...descriptor,
+        value: () => ({
+          packageJSON: { enabledApiProposals: ["languageModelSystem"] },
+        }),
+      });
+      assert.strictEqual(hasSystemMessageDeclaration(), true);
+    } finally {
+      Object.defineProperty(vscode.extensions, "getExtension", descriptor);
+    }
+  });
+
   test("effective proposal permissions control System forwarding independently of declarations", async () => {
     const originalExtension = vscode.extensions.getExtension;
     const token = new vscode.CancellationTokenSource();
@@ -301,6 +341,7 @@ suite("Configured Model Provider", () => {
             },
           }),
         });
+        assert.strictEqual(hasSystemMessageDeclaration(), true);
         assert.strictEqual(supportsSystemMessageForwarding(), enabled);
         let calls = 0;
         const source = {

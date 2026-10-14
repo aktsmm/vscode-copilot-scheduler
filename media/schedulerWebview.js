@@ -571,6 +571,22 @@
   var modelConfigurationState = {};
   var modelConfigurationExecutionEnabled =
     !!initialData.modelConfigurationExecutionEnabled;
+  var modelConfigurationSetupAvailable =
+    !!initialData.modelConfigurationSetupAvailable;
+  var modelConfigurationSetupNoteText =
+    initialData.modelConfigurationSetupNote || "";
+  var modelConfigurationSetup = document.getElementById(
+    "model-configuration-setup",
+  );
+  var modelConfigurationSetupNote = document.getElementById(
+    "model-configuration-setup-note",
+  );
+  var modelConfigurationSetupCode = document.getElementById(
+    "model-configuration-setup-code",
+  );
+  var modelConfigurationSetupButton = document.getElementById(
+    "model-configuration-setup-button",
+  );
   var activeConfigurationModel = null;
   var modelConfigurationReset = document.getElementById(
     "model-configuration-reset",
@@ -1345,9 +1361,34 @@
     return null;
   }
 
+  function renderModelConfigurationSetup(model) {
+    if (!modelConfigurationSetup) return false;
+    var visible =
+      !modelConfigurationExecutionEnabled &&
+      model &&
+      (model.configurationStatus !== "available" ||
+        (Array.isArray(model.configurationOptions) &&
+          model.configurationOptions.length > 0));
+    if (!visible || !modelConfigurationSetupAvailable)
+      rescueFocusFrom(modelConfigurationSetup, modelSelect);
+    modelConfigurationSetup.style.display = visible ? "block" : "none";
+    if (modelConfigurationSetupNote)
+      modelConfigurationSetupNote.textContent = visible
+        ? modelConfigurationSetupNoteText
+        : "";
+    if (modelConfigurationSetupCode)
+      modelConfigurationSetupCode.style.display =
+        visible && modelConfigurationSetupAvailable ? "block" : "none";
+    if (modelConfigurationSetupButton)
+      modelConfigurationSetupButton.style.display =
+        visible && modelConfigurationSetupAvailable ? "inline-flex" : "none";
+    return !!visible;
+  }
+
   function renderModelConfigurationControls(model, selection) {
     if (!modelConfigurationGroup || !modelConfigurationControls) return;
     activeConfigurationModel = model || null;
+    var showSetup = renderModelConfigurationSetup(model);
     if (selection)
       modelConfigurationState = copyModelConfigurationForForm(
         selection.modelConfiguration,
@@ -1373,8 +1414,9 @@
     var invalidConfiguration =
       modelConfigurationState !== undefined &&
       !isEditableModelConfiguration(modelConfigurationState);
-    rescueFocusFrom(modelConfigurationGroup, modelSelect);
-    modelConfigurationGroup.style.display =
+    var showConfigurationGroup =
+      showSetup ||
+      (model && model.id && model.configurationStatus !== "available") ||
       (descriptors.length && modelConfigurationState !== undefined) ||
       (!modelConfigurationExecutionEnabled &&
         model &&
@@ -1382,22 +1424,29 @@
         model.configurationOptions.length) ||
       savedKeys.length ||
       invalidConfiguration ||
-      (!modelConfigurationExecutionEnabled && pendingModelReasoningEffort)
-        ? "block"
-        : "none";
+      (!modelConfigurationExecutionEnabled && pendingModelReasoningEffort);
+    rescueFocusFrom(modelConfigurationControls, modelSelect);
+    if (!showConfigurationGroup)
+      rescueFocusFrom(modelConfigurationGroup, modelSelect);
+    modelConfigurationGroup.style.display = showConfigurationGroup
+      ? "block"
+      : "none";
     modelConfigurationControls.innerHTML = "";
     if (modelConfigurationNote)
       modelConfigurationNote.textContent =
         model && model.configurationStatus === "available"
           ? strings.labelDynamicModelOptionsBlocked || ""
           : strings.labelModelSchemaUnavailable || "";
+    var showReset =
+      invalidConfiguration ||
+      (!modelConfigurationExecutionEnabled &&
+        (savedKeys.length || pendingModelReasoningEffort));
+    if (modelConfigurationReset && !showReset)
+      rescueFocusFrom(modelConfigurationReset, modelSelect);
     if (modelConfigurationReset)
-      modelConfigurationReset.style.display =
-        invalidConfiguration ||
-        (!modelConfigurationExecutionEnabled &&
-          (savedKeys.length || pendingModelReasoningEffort))
-          ? "inline-flex"
-          : "none";
+      modelConfigurationReset.style.display = showReset
+        ? "inline-flex"
+        : "none";
     if (
       !modelConfigurationExecutionEnabled &&
       pendingModelReasoningEffort &&
@@ -1804,6 +1853,18 @@
       );
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
+    });
+  }
+  var releaseChannelButton = document.getElementById("release-channel-button");
+  if (releaseChannelButton) {
+    releaseChannelButton.addEventListener("click", function () {
+      vscode.postMessage({ type: "openReleaseChannel" });
+    });
+  }
+  if (modelConfigurationSetupButton) {
+    modelConfigurationSetupButton.addEventListener("click", function () {
+      if (!modelConfigurationSetupAvailable) return;
+      vscode.postMessage({ type: "openModelRuntimeArguments" });
     });
   }
   if (modelConfigurationReset) {
@@ -3813,6 +3874,10 @@
               !!message.experimentalModelQualityEnabled;
             modelConfigurationExecutionEnabled =
               !!message.modelConfigurationExecutionEnabled;
+            modelConfigurationSetupAvailable =
+              !!message.modelConfigurationSetupAvailable;
+            modelConfigurationSetupNoteText =
+              message.modelConfigurationSetupNote || "";
             experimentalModelQualityNote =
               typeof message.experimentalModelQualityNote === "string"
                 ? message.experimentalModelQualityNote

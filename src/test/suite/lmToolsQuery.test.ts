@@ -368,6 +368,10 @@ suite("lmTools scheduler_query", () => {
   });
 
   test("kind=list_models returns ids and supported reasoning efforts", async () => {
+    const provider = require("../../configured-model-provider");
+    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
+    Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => true });
+    try {
     const tool = createSchedulerQueryTool(
       new FakeScheduleManager([]) as unknown as ScheduleManager,
       fakeCatalogProvider(),
@@ -409,6 +413,28 @@ suite("lmTools scheduler_query", () => {
         ["copilot-utility", []],
       ],
     );
+    } finally {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
+    }
+  });
+
+  test("Stable model discovery keeps model ids but hides detailed and legacy options", async () => {
+    const provider = require("../../configured-model-provider");
+    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
+    try {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => false });
+      const tool = createSchedulerQueryTool(new FakeScheduleManager([]) as unknown as ScheduleManager, fakeCatalogProvider());
+      const payload = parseJson(await invoke(tool, { kind: "list_models" }));
+      const models = payload.models as Array<Record<string, unknown>>;
+      assert.strictEqual(models.length, 7);
+      for (const model of models) {
+        assert.deepStrictEqual(model.configurationOptions, []);
+        assert.deepStrictEqual(model.supportedReasoningEfforts, []);
+        assert.strictEqual(model.configurationExecution, "preview_required");
+      }
+    } finally {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
+    }
   });
 
   test("kind=list_agents hides file paths and subagent-only entries", async () => {

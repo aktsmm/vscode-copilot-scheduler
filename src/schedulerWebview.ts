@@ -39,6 +39,7 @@ import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import { migrateLegacyModelConfiguration } from "./model-configuration";
 import {
+  hasSystemMessageDeclaration,
   supportsConfiguredModelExecution,
   supportsSystemMessageForwarding,
 } from "./configured-model-provider";
@@ -181,10 +182,25 @@ export class SchedulerWebview {
     experimentalModelQualityEnabled: boolean;
     experimentalModelQualityNote: string;
     modelConfigurationExecutionEnabled: boolean;
+    modelConfigurationSetupAvailable: boolean;
+    modelConfigurationSetupNote: string;
   } {
-    const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
+    const hostSupported = supportsConfiguredModelExecution();
+    const systemAllowed = supportsSystemMessageForwarding();
+    const systemDeclared = hasSystemMessageDeclaration();
+    const experimentalModelQualityEnabled =
+      systemDeclared && isExperimentalModelQualityEnabled();
     const modelConfigurationExecutionEnabled =
-      supportsConfiguredModelExecution();
+      systemDeclared && hostSupported && systemAllowed;
+    const modelConfigurationSetupAvailable =
+      hostSupported && systemDeclared && !systemAllowed;
+    const modelConfigurationSetupNote = !hostSupported
+      ? messages.modelOptionsHostUnsupported()
+      : !systemDeclared
+        ? messages.modelOptionsDeclarationMissing()
+        : !systemAllowed
+          ? messages.modelOptionsEnableInstructions()
+          : "";
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
     ) =>
@@ -215,6 +231,8 @@ export class SchedulerWebview {
       ),
       experimentalModelQualityEnabled,
       modelConfigurationExecutionEnabled,
+      modelConfigurationSetupAvailable,
+      modelConfigurationSetupNote,
       experimentalModelQualityNote: experimentalModelQualityEnabled
         ? messages.labelModelExperimentalNote()
         : "",
@@ -694,6 +712,32 @@ export class SchedulerWebview {
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
           });
+        }
+        break;
+
+      case "openReleaseChannel":
+        await vscode.env.openExternal(vscode.Uri.parse(
+          hasSystemMessageDeclaration()
+            ? "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler"
+            : "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
+        ));
+        break;
+
+      case "openModelRuntimeArguments":
+        if (
+          !supportsConfiguredModelExecution() ||
+          !hasSystemMessageDeclaration() ||
+          supportsSystemMessageForwarding()
+        )
+          break;
+        try {
+          await vscode.commands.executeCommand(
+            "workbench.action.configureRuntimeArguments",
+          );
+        } catch {
+          await vscode.window.showWarningMessage(
+            messages.modelRuntimeArgumentsUnavailable(),
+          );
         }
         break;
 
@@ -1606,6 +1650,11 @@ export class SchedulerWebview {
       labelAgentNote: messages.labelAgentNote(),
       labelModel: messages.labelModel(),
       labelDynamicModelOptions: messages.labelDynamicModelOptions(),
+      actionOpenModelRuntimeArguments:
+        messages.actionOpenModelRuntimeArguments(),
+      actionOpenReleaseChannel: hasSystemMessageDeclaration()
+        ? messages.actionOpenStableRelease()
+        : messages.actionOpenPreviewRelease(),
       labelInheritModelOptions: messages.labelInheritModelOptions(),
       labelDynamicModelOptionsBlocked:
         messages.labelDynamicModelOptionsBlocked(),
@@ -1777,6 +1826,10 @@ export class SchedulerWebview {
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
       modelConfigurationExecutionEnabled:
         initialModelPickerPayload.modelConfigurationExecutionEnabled,
+      modelConfigurationSetupAvailable:
+        initialModelPickerPayload.modelConfigurationSetupAvailable,
+      modelConfigurationSetupNote:
+        initialModelPickerPayload.modelConfigurationSetupNote,
       experimentalModelQualityEnabled:
         initialModelPickerPayload.experimentalModelQualityEnabled,
       experimentalModelQualityNote:
@@ -2808,9 +2861,17 @@ export class SchedulerWebview {
               <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
             </div>
 
+            <div class="form-group col-12">
+              <button type="button" class="btn-secondary" id="release-channel-button">${escapeHtml(strings.actionOpenReleaseChannel)}</button>
+            </div>
             <div class="form-group col-12" id="model-configuration-group" style="display:none;">
               <div class="form-grid" id="model-configuration-controls"></div>
               <p class="note" id="model-configuration-note"></p>
+              <div id="model-configuration-setup" style="display:none;">
+                <p class="note" id="model-configuration-setup-note"></p>
+                <code id="model-configuration-setup-code" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml('"enable-proposed-api": ["yamapan.copilot-scheduler"]')}</code>
+                <button type="button" class="btn-secondary" id="model-configuration-setup-button" style="display:none;">${escapeHtml(strings.actionOpenModelRuntimeArguments)}</button>
+              </div>
               <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
             </div>
 

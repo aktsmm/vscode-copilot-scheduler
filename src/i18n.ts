@@ -447,6 +447,11 @@ export const messages = {
       "Per-task model options cannot forward system instructions on this host. Use inherited model settings or a compatible explicit Chat participant. The saved options were not cleared and no fallback model was used.",
       "この環境ではタスク別モデル設定でシステム指示を転送できません。共有モデル設定の継承、または対応する明示的な Chat 参加者を利用してください。保存済み設定の解除や別モデルへの代替は行っていません。",
     ),
+  detailedOptionsRequirePreview: () =>
+    t(
+      "These saved detailed model options require Preview. Use Preview or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
+      "保存したモデルの詳細設定にはPreview版が必要です。Previewを使うか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
+    ),
   providerModelUnavailable: () =>
     t(
       "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
@@ -534,12 +539,38 @@ export const messages = {
   labelModel: () => t("Model", "モデル"),
   labelDynamicModelOptions: () =>
     t("Dynamic Model Options (Experimental)", "動的モデル設定（試験的）"),
+  modelOptionsEnableInstructions: () =>
+    t(
+      "Model-specific options are not enabled in this environment. Open runtime arguments and add Scheduler to the existing enable-proposed-api list, or add the entry below if absent. Fully quit and restart VS Code afterward. Model-access approval is separate.",
+      "この環境ではモデルの詳細設定がまだ有効化されていません。起動設定を開き、既存の enable-proposed-api 配列に Scheduler を追加してください。項目がなければ下の設定例を追加します。その後、VS Code を完全終了して再起動してください。モデルへのアクセス承認は別途必要です。",
+    ),
+  modelOptionsDeclarationMissing: () =>
+    t(
+      "This extension build does not declare the required System API. Changing runtime arguments alone cannot enable detailed options in this build.",
+      "この配布版には必要な System API の宣言がありません。起動設定の変更だけでは、この版の詳細設定を有効化できません。",
+    ),
+  modelOptionsHostUnsupported: () =>
+    t(
+      "This host does not support detailed model execution. VS Code 1.141 or later with the required provider API is needed; changing runtime arguments alone is not enough.",
+      "この環境はモデルの詳細設定を使った実行に対応していません。VS Code 1.141 以降と対応する提供元 API が必要で、起動設定の変更だけでは利用できません。",
+    ),
+  actionOpenModelRuntimeArguments: () =>
+    t("Open Runtime Arguments", "起動設定を開く"),
+  actionOpenPreviewRelease: () =>
+    t("Try detailed options in Preview", "詳細設定を試す：Preview版"),
+  actionOpenStableRelease: () =>
+    t("View the Stable version", "安定版はこちら"),
+  modelRuntimeArgumentsUnavailable: () =>
+    t(
+      "Could not open runtime arguments. Use Preferences: Configure Runtime Arguments from the Command Palette on desktop VS Code.",
+      "起動設定を開けませんでした。デスクトップ版 VS Code のコマンドパレットで Preferences: Configure Runtime Arguments を実行してください。",
+    ),
   labelInheritModelOptions: () =>
     t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
   labelDynamicModelOptionsBlocked: () =>
     t(
-      "Detailed options require VS Code 1.141 or later, compatible provider APIs and model-access approval. Without the languageModelSystem API permission, a task with options must start its prompt with an explicit chat participant other than @workspace, @terminal or @vscode; otherwise it stops before sending instead of dropping system instructions. After API changes only inherited settings may be available. Saved overrides are not cleared automatically.",
-      "詳細設定には VS Code 1.141 以降、対応する提供元の API、モデルへのアクセス承認が必要です。languageModelSystem API の利用許可がない場合、個別指定を持つタスクはプロンプト先頭で @workspace・@terminal・@vscode 以外のチャット参加者を明示する必要があり、明示がなければシステム指示を落とさず送信前に停止します。仕様変更時にはモデル指定と現在の設定の継承だけが利用可能になる場合があります。保存した個別設定は自動解除しません。",
+      "Detailed inputs are available only with VS Code 1.141 or later, compatible provider APIs and effective languageModelSystem permission for Scheduler. Declaring the API or installing the extension alone does not grant permission. Model access requires separate approval. Without support or permission, saved overrides remain read-only and are not cleared automatically; explicitly inherit shared settings to clear task overrides.",
+      "詳細入力は VS Code 1.141 以降、対応する提供元の API、Scheduler への実効的な languageModelSystem 利用許可が揃う環境だけで利用できます。API の宣言や拡張のインストールだけでは許可は付きません。モデルへのアクセス承認は別途必要です。未対応・未許可の環境では保存済み設定を読み取り専用で保持し、自動解除しません。タスクの個別指定を解除する場合は、共有設定の継承を明示的に選んでください。",
     ),
   labelInvalidModelConfiguration: () =>
     t(

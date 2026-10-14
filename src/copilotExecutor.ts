@@ -22,6 +22,7 @@ import {
   validateModelConfiguration,
 } from "./model-configuration";
 import {
+  hasSystemMessageDeclaration,
   resolveConfiguredTaskModel,
   supportsConfiguredModelExecution,
   supportsSystemMessageForwarding,
@@ -618,12 +619,15 @@ export class CopilotExecutor {
           routing.chatOpenPrompt.trim(),
         )?.[1];
         if (
-          (!participant ||
+          !hasSystemMessageDeclaration() ||
+          ((!participant ||
             PARTICIPANT_STYLE_AGENTS.has(participant.toLowerCase())) &&
-          !supportsSystemMessageForwarding()
+            !supportsSystemMessageForwarding())
         ) {
           throw createPromptBlockedError(
-            messages.dynamicConfigurationSystemMessagesUnsupported(),
+            !hasSystemMessageDeclaration()
+              ? messages.detailedOptionsRequirePreview()
+              : messages.dynamicConfigurationSystemMessagesUnsupported(),
             "modelConfigurationUnavailable",
           );
         }

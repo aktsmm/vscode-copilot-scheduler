@@ -13,11 +13,15 @@ const fs = require('fs'), ts = require('typescript');
 const source = ts.createSourceFile('webview.js', fs.readFileSync(process.argv[1], 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const names = new Set(['copyModelConfigurationForForm', 'isEditableModelConfiguration',
   'clearUnavailableModelOptions', 'buildUnavailableModelLabel', 'clearModelVariantOptions',
-  'updateModelExperimentalNote', 'updateModelVariantOptions', 'renderModelConfigurationControls',
+  'updateModelExperimentalNote', 'updateModelVariantOptions', 'renderModelConfigurationControls', 'renderModelConfigurationSetup',
   'updateModelOptions', 'ensureUnavailableModelOption']);
 names.add('modelConfigurationResetClick');
+names.add('modelConfigurationSetupClick');
 const found = new Map();
 function visit(node) {
+  if (ts.isIfStatement(node) && node.expression.getText(source) === 'modelConfigurationSetupButton' &&
+      ts.isBlock(node.thenStatement) && node.getText(source).includes('addEventListener'))
+    found.set('modelConfigurationSetupClick', node.getText(source));
   if (ts.isIfStatement(node) && node.expression.getText(source) === 'modelConfigurationReset' &&
       ts.isBlock(node.thenStatement) && node.getText(source).includes('addEventListener'))
     found.set('modelConfigurationResetClick', node.getText(source));
@@ -32,7 +36,7 @@ let notices;
 try {
   Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
   const messages = require(path.resolve(path.dirname(process.argv[1]), '../out/i18n.js')).messages;
-  notices = ['en', 'ja'].map(locale => { vscode.env.language = locale; return { locale, text: messages.labelDynamicModelOptionsBlocked() }; });
+  notices = ['en', 'ja'].map(locale => { vscode.env.language = locale; return { locale, text: messages.labelDynamicModelOptionsBlocked(), setup: messages.modelOptionsEnableInstructions(), action: messages.actionOpenModelRuntimeArguments() }; });
 } finally { Module._load = load; }
 console.log(JSON.stringify({ functions: [...found.values()].join('\n'), notices }));
 """
@@ -45,6 +49,12 @@ var modelConfigurationControls = document.querySelector('#model-configuration-co
 var modelConfigurationNote = document.querySelector('#model-configuration-note');
 var modelExperimentalNote = document.querySelector('#model-experimental-note');
 var modelConfigurationReset = document.querySelector('#model-configuration-reset');
+var modelConfigurationSetup = document.querySelector('#model-configuration-setup');
+var modelConfigurationSetupNote = document.querySelector('#model-configuration-setup-note');
+var modelConfigurationSetupCode = document.querySelector('#model-configuration-setup-code');
+var modelConfigurationSetupButton = document.querySelector('#model-configuration-setup-button');
+var modelConfigurationSetupAvailable = false, modelConfigurationSetupNoteText = '';
+var posted = [], vscode = { postMessage: message => posted.push(message) };
 var modelConfigurationState, activeConfigurationModel, pendingModelReasoningEffort = '';
 var modelConfigurationExecutionEnabled = true, experimentalModelQualityEnabled = true;
 var experimentalModelQualityNote = 'Legacy fallback';
@@ -74,15 +84,21 @@ window.fixture = {
   state: () => modelConfigurationState
   , dynamicSupport: enabled => modelConfigurationExecutionEnabled = enabled
   , notice: value => strings.labelDynamicModelOptionsBlocked = value
+  , setup: (available, note, action) => { modelConfigurationSetupAvailable = available; modelConfigurationSetupNoteText = note; modelConfigurationSetupButton.textContent = action; posted = []; }
+  , posted: () => posted
 };
 """
 HTML = """<style>
 body { margin: 16px; } select { max-width: 100%; width: 100%; }
+button { max-width: 100%; white-space: normal; } code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 </style><select id="model-select"></select>
 <div id="model-variant-group"><select id="model-variant-select"></select></div>
 <p id="model-experimental-note"></p><div id="model-configuration-group">
 <div class="form-grid" id="model-configuration-controls"></div><p id="model-configuration-note"></p>
+<div id="model-configuration-setup"><p id="model-configuration-setup-note"></p>
+<code id="model-configuration-setup-code">"enable-proposed-api": ["yamapan.copilot-scheduler"]</code>
+<button id="model-configuration-setup-button">Open runtime arguments</button></div>
 <button id="model-configuration-reset">Use inherited settings</button></div>"""
 
 
@@ -144,16 +160,61 @@ def main():
                   locale, notice = localized["locale"], localized["text"]
                   page.evaluate("value => fixture.notice(value)", notice)
                   page.evaluate("() => fixture.dynamicSupport(false)")
+                  page.evaluate("args => fixture.setup(...args)", [True, localized["setup"], localized["action"]])
                   page.evaluate("args => fixture.refresh(...args)", [[group], saved])
                   expect(control).to_be_disabled()
                   assert page.evaluate("fixture.state()") == saved["modelConfiguration"]
+                  setup_button = page.locator("#model-configuration-setup-button")
+                  expect(setup_button).to_be_visible()
+                  expect(page.locator("#model-configuration-setup-note")).to_have_text(localized["setup"])
+                  expect(page.locator("#model-configuration-setup-code")).to_be_visible()
+                  setup_button.click()
+                  assert page.evaluate("fixture.posted()") == [{"type": "openModelRuntimeArguments"}]
+                  assert page.evaluate("fixture.state()") == saved["modelConfiguration"]
+                  page.evaluate("args => fixture.refresh(...args)", [[group], saved])
+                  expect(setup_button).to_be_focused()
+                  page.evaluate("() => fixture.dynamicSupport(true)")
+                  page.evaluate("args => fixture.refresh(...args)", [[group], saved])
+                  expect(page.locator("#model-configuration-setup")).to_be_hidden()
+                  expect(page.locator("#model-select")).to_be_focused()
+                  page.evaluate("() => fixture.dynamicSupport(false)")
+                  page.evaluate("args => fixture.setup(...args)", [False, localized["setup"], localized["action"]])
+                  page.evaluate("args => fixture.refresh(...args)", [[group], saved])
+                  expect(setup_button).to_be_hidden()
+                  expect(page.locator("#model-configuration-setup-code")).to_be_hidden()
                   reset = page.locator("#model-configuration-reset")
                   expect(reset).to_be_visible()
                   reset.click()
+                  expect(page.locator("#model-select")).to_be_focused()
                   assert page.evaluate("fixture.state()") == {}
                   expect(page.locator("#model-configuration-controls select")).to_have_count(0)
                   expect(page.locator("#model-configuration-note")).to_have_text(notice)
                   assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                  page.evaluate("args => fixture.setup(...args)", [True, localized["setup"], localized["action"]])
+                  for schema_status in ["unavailable", "invalid"]:
+                    unavailable_model = {**model, "configurationStatus": schema_status, "configurationOptions": []}
+                    unavailable_group = {**group, "variants": [{"key": "default", "model": unavailable_model}]}
+                    page.evaluate("args => fixture.refresh(...args)", [[unavailable_group], inherited])
+                    expect(page.locator("#model-configuration-group")).to_be_visible()
+                    expect(setup_button).to_be_visible()
+                    expect(page.locator("#model-configuration-controls select")).to_have_count(0)
+                    assert page.evaluate("fixture.state()") == {}
+                    page.evaluate("() => fixture.dynamicSupport(true)")
+                    page.evaluate("args => fixture.refresh(...args)", [[unavailable_group], inherited])
+                    expect(page.locator("#model-configuration-group")).to_be_visible()
+                    expect(page.locator("#model-configuration-note")).to_have_text("Unavailable schema")
+                    expect(page.locator("#model-configuration-setup")).to_be_hidden()
+                    expect(page.locator("#model-configuration-controls select")).to_have_count(0)
+                    assert page.evaluate("fixture.state()") == {}
+                    page.evaluate("() => fixture.dynamicSupport(false)")
+                  empty_model = {**model, "configurationOptions": []}
+                  empty_group = {**group, "variants": [{"key": "default", "model": empty_model}]}
+                  page.evaluate("args => fixture.refresh(...args)", [[empty_group], inherited])
+                  expect(page.locator("#model-configuration-group")).to_be_hidden()
+                  expect(setup_button).to_be_hidden()
+                  page.evaluate("args => fixture.refresh(...args)", [[], inherited])
+                  expect(page.locator("#model-configuration-setup")).to_be_hidden()
+                  expect(page.locator("#model-configuration-setup-note")).to_have_text("")
                   results.append({"viewport": label, "locale": locale, "dynamicUnsupportedDisabled": "PASS"})
                 assert not errors, errors
                 results.append({"viewport": label, "result": "PASS"})

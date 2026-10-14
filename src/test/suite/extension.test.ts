@@ -600,7 +600,10 @@ suite("Extension Test Suite", () => {
     const root = path.resolve(__dirname, "../../..");
     const verifier = require(
       path.join(root, "scripts/verify-vsix-contents.js"),
-    ) as { readVsixManifest(file: string): Promise<{ version: string }> };
+    ) as {
+      readVsixManifest(file: string): Promise<{ version: string }>;
+      verifyVsixMarketplace(file: string): Promise<boolean>;
+    };
     const { ZipFile } = require("yazl");
     const fixtureRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "copilot-installed-manifest-"),
@@ -632,6 +635,33 @@ suite("Extension Test Suite", () => {
         (await verifier.readVsixManifest(fixture)).version,
         "9.8.7",
       );
+      assert.strictEqual(await verifier.verifyVsixMarketplace(fixture), true);
+      await write(
+        "extension/package.json",
+        JSON.stringify({ version: "9.8.7", enableProposedApi: true }),
+      );
+      await assert.rejects(
+        verifier.verifyVsixMarketplace(fixture),
+        /Marketplace publication blocked/,
+      );
+      for (const proposals of [
+        ["languageModelSystem"],
+        "languageModelSystem",
+      ]) {
+        await write(
+          "extension/package.json",
+          JSON.stringify({ version: "9.8.7", enabledApiProposals: proposals }),
+        );
+        await assert.rejects(
+          verifier.verifyVsixMarketplace(fixture),
+          /Marketplace publication blocked/,
+        );
+      }
+      await write(
+        "extension/package.json",
+        JSON.stringify({ version: "9.8.7", enabledApiProposals: [] }),
+      );
+      assert.strictEqual(await verifier.verifyVsixMarketplace(fixture), true);
       await write("extension/README.md", "no manifest");
       await assert.rejects(
         verifier.readVsixManifest(fixture),

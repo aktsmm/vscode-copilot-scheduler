@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-10-15
+
+Stable release: Agent and model selection only. Detailed model inputs and new legacy thinking-effort choices are reserved for GitHub Preview. Existing task values are retained; explicit detailed overrides stop without fallback in Stable and can be cleared only through an explicit inheritance action. Both release routes are supported, with fixed channel links that do not install extensions or grant permission.
+
+### Added
+
+- The task form explains unavailable detailed options and offers an Open Runtime Arguments button only on supported, declared but unenabled hosts. It shows the extension-specific setting and full restart instructions without writing settings, granting permission, or changing task overrides.
+
+### Fixed
+
+- Unavailable or invalid option schemas retain their explanatory note even after API activation, without inventing detailed inputs. Activation guidance appears only when needed; models with a valid schema confirming no options do not show an unnecessary setup action.
+
+- Model refresh preserves keyboard focus on activation guidance that remains visible; focus returns to the model selector only when inputs are rebuilt or focused actions disappear. Stale setup guidance is cleared when the selected model becomes unavailable.
+
+- Marketplace release verification rejects proposed API declarations in the packaged VSIX before publication, while local build verification remains available for authorized development candidates.
+
+- Detailed model inputs require both supported host APIs and effective System permission again; legacy shared-setting choices remain independent and saved overrides stay read-only without permission. Bilingual UI guidance distinguishes effective API permission, declaration and provider-model consent instead of suggesting an explicit participant enables the form. The local development manifest declares `languageModelSystem` for authorized testing only, not Marketplace publication or automatic permission grants.
+
 ## [1.8.5] - 2026-10-15
 
 ### Changed
