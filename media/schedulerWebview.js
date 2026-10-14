@@ -1376,8 +1376,13 @@
     rescueFocusFrom(modelConfigurationGroup, modelSelect);
     modelConfigurationGroup.style.display =
       (descriptors.length && modelConfigurationState !== undefined) ||
+      (!modelConfigurationExecutionEnabled &&
+        model &&
+        Array.isArray(model.configurationOptions) &&
+        model.configurationOptions.length) ||
       savedKeys.length ||
-      invalidConfiguration
+      invalidConfiguration ||
+      (!modelConfigurationExecutionEnabled && pendingModelReasoningEffort)
         ? "block"
         : "none";
     modelConfigurationControls.innerHTML = "";
@@ -1387,9 +1392,22 @@
           ? strings.labelDynamicModelOptionsBlocked || ""
           : strings.labelModelSchemaUnavailable || "";
     if (modelConfigurationReset)
-      modelConfigurationReset.style.display = invalidConfiguration
-        ? "inline-flex"
-        : "none";
+      modelConfigurationReset.style.display =
+        invalidConfiguration ||
+        (!modelConfigurationExecutionEnabled &&
+          (savedKeys.length || pendingModelReasoningEffort))
+          ? "inline-flex"
+          : "none";
+    if (
+      !modelConfigurationExecutionEnabled &&
+      pendingModelReasoningEffort &&
+      modelConfigurationNote
+    )
+      modelConfigurationNote.textContent +=
+        " " +
+        (strings.labelModelVariant || "") +
+        ": " +
+        pendingModelReasoningEffort;
     if (modelConfigurationState === undefined) return;
     if (invalidConfiguration) {
       if (modelConfigurationNote)
@@ -1412,6 +1430,7 @@
       var label = document.createElement("label");
       var select = document.createElement("select");
       select.id = "model-configuration-" + descriptor.key;
+      select.disabled = !modelConfigurationExecutionEnabled;
       label.htmlFor = select.id;
       label.textContent = descriptor.label || descriptor.key;
       var inherited = document.createElement("option");
@@ -1759,6 +1778,7 @@
   }
   if (modelVariantSelect) {
     modelVariantSelect.addEventListener("change", function () {
+      if (!modelConfigurationExecutionEnabled) return;
       clearPendingModelSelection();
       if (modelConfigurationState !== undefined) modelConfigurationState = {};
       var group = findModelPickerGroup(

@@ -116,6 +116,17 @@ function normalizeSelectionReasoningEffort(selection: {
 }
 
 export function isCopilotCliModel(model: ModelInfo): boolean {
+  const vendor =
+    typeof model.vendor === "string" ? model.vendor.trim().toLowerCase() : "";
+  if (
+    [
+      "copilotcli",
+      "copilot-cli",
+      "agent-host-copilotcli",
+      "agent-host-copilot-cli",
+    ].includes(vendor)
+  )
+    return true;
   const values = [model.id, model.name, model.label, model.family];
   return values.some(
     (value) =>

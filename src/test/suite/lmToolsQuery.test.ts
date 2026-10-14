@@ -375,6 +375,12 @@ suite("lmTools scheduler_query", () => {
     const payload = parseJson(await invoke(tool, { kind: "list_models" }));
     assert.strictEqual(payload.ok, true);
     assert.strictEqual(payload.source, "api");
+    assert.deepStrictEqual(payload.configurationExecutionRequirements, {
+      explicitChatParticipant: true,
+      forwardedMessageRoles: ["user", "assistant"],
+      systemMessages: "blocked",
+      inheritedSettings: "shared_values_not_reset",
+    });
     const models = payload.models as Array<Record<string, unknown>>;
     assert.strictEqual(models.length, 7);
     assert.strictEqual(models[1]?.id, "gpt-5-codex");

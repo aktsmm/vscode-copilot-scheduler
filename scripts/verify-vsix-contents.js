@@ -312,9 +312,264 @@ function findDefaultVsixPaths() {
   return candidates.filter((candidate) => fs.existsSync(candidate));
 }
 
+async function readVsixManifest(file) {
+  return new Promise((resolve, reject) => {
+    yauzl.open(file, { lazyEntries: true }, (error, zip) => {
+      if (error) return reject(error);
+      let found = false;
+      zip.on("error", reject);
+      zip.on("end", () => {
+        if (!found) reject(new Error("VSIX manifest was not found"));
+      });
+      zip.on("entry", (entry) => {
+        if (entry.fileName !== "extension/package.json") return zip.readEntry();
+        if (entry.uncompressedSize > 1024 * 1024) {
+          zip.close();
+          reject(new Error("VSIX manifest exceeds the size limit"));
+          return;
+        }
+        found = true;
+        zip.openReadStream(entry, (readError, stream) => {
+          if (readError) {
+            zip.close();
+            reject(readError);
+            return;
+          }
+          const chunks = [];
+          stream.on("error", (streamError) => {
+            zip.close();
+            reject(streamError);
+          });
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("end", () => {
+            zip.close();
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            } catch (parseError) {
+              reject(parseError);
+            }
+          });
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
+
+async function verifyInstalledVsix(vsixPath, executable) {
+  if (!fs.existsSync(executable))
+    throw new Error("Isolated VS Code executable is missing");
+  const os = require("os");
+  const crypto = require("crypto");
+  const cp = require("child_process");
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "scheduler installed smoke-"),
+  );
+  const data = path.join(root, "user-data");
+  const extensions = path.join(root, "extensions");
+  const resultPath = path.join(root, "result.json");
+  const runId = crypto.randomUUID();
+  const expected = await readVsixManifest(vsixPath);
+  const packageDigest = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(vsixPath))
+    .digest("hex");
+  const environment = { ...process.env };
+  for (const name of Object.keys(environment))
+    if (
+      /^(?:ELECTRON_RUN_AS_NODE|VSCODE_PORTABLE|VSCODE_IPC_HOOK.*)$/i.test(name)
+    )
+      delete environment[name];
+  const id = `${expected.publisher}.${expected.name}`;
+  let ready = false;
+  try {
+    fs.mkdirSync(extensions, { recursive: true });
+    const app = path.dirname(executable);
+    const cliCandidates = [
+      app,
+      ...fs
+        .readdirSync(app, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(app, entry.name)),
+    ]
+      .map((directory) => path.join(directory, "resources/app/out/cli.js"))
+      .filter((file) => fs.existsSync(file));
+    if (cliCandidates.length !== 1)
+      throw new Error("The isolated host CLI location is ambiguous");
+    const cli = [executable, cliCandidates[0]];
+    const install = cp.spawnSync(
+      cli[0],
+      [
+        ...cli.slice(1),
+        "--user-data-dir",
+        data,
+        "--extensions-dir",
+        extensions,
+        "--install-extension",
+        path.resolve(vsixPath),
+        "--force",
+        "--disable-updates",
+      ],
+      {
+        encoding: "utf8",
+        shell: false,
+        env: { ...environment, ELECTRON_RUN_AS_NODE: "1" },
+      },
+    );
+    if (install.status !== 0)
+      throw new Error(`Isolated VSIX install failed (${install.status})`);
+    const helper = path.join(
+      extensions,
+      "local-check.scheduler-installed-smoke",
+    );
+    fs.mkdirSync(helper);
+    fs.writeFileSync(
+      path.join(helper, "package.json"),
+      JSON.stringify({
+        name: "scheduler-installed-smoke",
+        publisher: "local-check",
+        version: "0.0.1",
+        engines: { vscode: "^1.141.0" },
+        main: "entry.cjs",
+        files: ["entry.cjs"],
+        activationEvents: ["onStartupFinished"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(helper, "entry.cjs"),
+      `const vscode=require('vscode'),fs=require('fs'),path=require('path'),assert=require('assert/strict');const file=${JSON.stringify(resultPath)},runId=${JSON.stringify(runId)};let phase='helperMode',activeToken;function mark(values){let old={runId};try{const parsed=JSON.parse(fs.readFileSync(file,'utf8'));if(parsed.runId===runId)old=parsed;}catch{}fs.writeFileSync(file,JSON.stringify({...old,...values}));}exports.activate=(context)=>{const watcher=fs.watch(${JSON.stringify(root)},(_event,name)=>{if(String(name)==='abort.json'){activeToken?.cancel();mark({passed:false,reason:'Installed smoke reached its deadline'});void vscode.commands.executeCommand('workbench.action.closeWindow');}});context.subscriptions.push({dispose:()=>watcher.close()});setImmediate(async()=>{const token=activeToken=new vscode.CancellationTokenSource();context.subscriptions.push(token);try{assert.equal(context.extensionMode,vscode.ExtensionMode.Production);phase='installedLocation';const target=vscode.extensions.getExtension(${JSON.stringify(id)});assert(target);const relative=path.relative(${JSON.stringify(extensions)},target.extensionUri.fsPath);assert(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));phase='activation';await target.activate();phase='version';assert.equal(target.packageJSON.version,${JSON.stringify(expected.version)});phase='permission';const proposals=target.packageJSON.enabledApiProposals||[];assert(!proposals.includes('languageModelSystem'));phase='invokeQuery';const result=await vscode.lm.invokeTool('scheduler_query',{input:{kind:'list_models'}},token.token);phase='queryPayload';const text=result.content.map(part=>typeof part.value==='string'?part.value:'').join('');const payload=JSON.parse(text);assert.equal(payload.ok,true);assert.equal(payload.configurationExecutionRequirements.systemMessages,'blocked');assert.equal(payload.configurationExecutionRequirements.explicitChatParticipant,true);mark({passed:true,version:target.packageJSON.version,targetInstalledLocation:true,helperProductionMode:true,systemPermission:false,toolContractVerified:true,modelInferenceInvokedByProbe:false});}catch(error){mark({passed:false,reason:'Installed extension contract failed at '+phase,errorType:error?.name||'Error'});}finally{await vscode.commands.executeCommand('workbench.action.closeWindow');}});};exports.deactivate=()=>mark({windowClosed:true});`,
+    );
+    const helperVsix = path.join(root, "installed-smoke-helper.vsix");
+    await require("@vscode/vsce").createVSIX({
+      cwd: helper,
+      packagePath: helperVsix,
+      dependencies: false,
+      allowMissingRepository: true,
+      skipLicense: true,
+    });
+    const installHelper = cp.spawnSync(
+      cli[0],
+      [
+        ...cli.slice(1),
+        "--user-data-dir",
+        data,
+        "--extensions-dir",
+        extensions,
+        "--install-extension",
+        helperVsix,
+        "--force",
+        "--disable-updates",
+      ],
+      {
+        encoding: "utf8",
+        shell: false,
+        env: { ...environment, ELECTRON_RUN_AS_NODE: "1" },
+      },
+    );
+    if (installHelper.status !== 0)
+      throw new Error(
+        `Isolated helper VSIX install failed (${installHelper.status})`,
+      );
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(workspace);
+    await new Promise((resolve, reject) => {
+      let processExited = false;
+      let grace;
+      const inspect = () => {
+        try {
+          const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+          if (result.runId === runId && result.windowClosed && processExited) {
+            clearTimeout(deadline);
+            clearTimeout(grace);
+            watcher.close();
+            ready = true;
+            result.passed ? resolve() : reject(new Error(result.reason));
+          }
+        } catch {}
+      };
+      const watcher = fs.watch(root, inspect);
+      const deadline = setTimeout(() => {
+        fs.writeFileSync(
+          path.join(root, "abort.json"),
+          JSON.stringify({ runId }),
+        );
+        grace = setTimeout(() => {
+          watcher.close();
+          reject(
+            new Error(
+              "Installed smoke did not close; environment retained for owned cleanup",
+            ),
+          );
+        }, 15000);
+      }, 90000);
+      const child = cp.spawn(
+        executable,
+        [
+          "--new-window",
+          "--user-data-dir",
+          data,
+          "--extensions-dir",
+          extensions,
+          "--disable-updates",
+          "--skip-welcome",
+          "--skip-release-notes",
+          "--disable-workspace-trust",
+          workspace,
+        ],
+        { shell: false, stdio: "ignore", env: environment },
+      );
+      child.once("error", () => {
+        clearTimeout(deadline);
+        clearTimeout(grace);
+        watcher.close();
+        reject(new Error("Installed smoke launcher failed"));
+      });
+      child.once("exit", () => {
+        processExited = true;
+        inspect();
+      });
+    });
+    const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+    if (
+      packageDigest !==
+      crypto
+        .createHash("sha256")
+        .update(fs.readFileSync(vsixPath))
+        .digest("hex")
+    )
+      throw new Error("The VSIX changed during installed verification");
+    console.log(
+      JSON.stringify({
+        installedSmoke: result,
+        packageSha256: packageDigest,
+      }),
+    );
+    return true;
+  } finally {
+    if (
+      ready ||
+      !fs.existsSync(
+        path.join(extensions, "local-check.scheduler-installed-smoke"),
+      )
+    )
+      fs.rmSync(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    else
+      console.error(`Owned incomplete smoke retained: ${path.basename(root)}`);
+  }
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
-    options: { "verify-build": { type: "boolean", default: false } },
+    options: {
+      "verify-build": { type: "boolean", default: false },
+      "verify-installed": { type: "boolean", default: false },
+      "vscode-executable": { type: "string" },
+    },
     allowPositionals: true,
   });
   let vsixPaths = positionals;
@@ -339,6 +594,14 @@ async function main() {
         (values["verify-build"]
           ? await verifyVsixBuild(vsixPath)
           : verifyVsix(vsixPath)) && ok;
+      if (ok && values["verify-installed"]) {
+        if (!values["vscode-executable"])
+          throw new Error("--verify-installed requires --vscode-executable");
+        ok = await verifyInstalledVsix(
+          vsixPath,
+          path.resolve(values["vscode-executable"]),
+        );
+      }
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -354,4 +617,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { listZipEntries, verifyVsix, verifyVsixBuild };
+module.exports = {
+  listZipEntries,
+  verifyVsix,
+  verifyVsixBuild,
+  readVsixManifest,
+};

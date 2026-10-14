@@ -5,6 +5,22 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.8.3] - 2026-10-14
+
+### Fixed
+
+- Legacy explicit reasoning settings are not automatically migrated into native dynamic overrides without effective System permission; inherited/default migration and existing explicit maps remain intact. Unpermitted variant events retain saved overrides.
+- VSIX verification can now install the selected archive into an isolated profile without development mode and check the real permission-none tool contract. It uses archive identity/version, handles spaces and inherited startup hooks, verifies package stability, and synchronizes window/process shutdown before owned cleanup.
+- Configured-model lifecycle now cancels pending preparation, dispatch, stream reads and token counts on caller cancellation or provider disposal. Shared token preparation survives an individual caller's cancellation; stale catalog preparation and replaced provider generations are rejected without late requests or progress.
+- Detailed model editing and native System forwarding now share the effective API-permission check. Declaration alone does not enable them; saved overrides remain read-only without permission and can be cleared only through the explicit inherit action. UI and bilingual documentation distinguish API permission from provider-model access approval and explain possible restrictions after API changes.
+- Copilot CLI groups are excluded by provider identity as well as legacy model labels, covering `copilotcli` and `agent-host-copilotcli` without hiding ordinary Copilot, Codex Bridge, BYOK or local providers. Saved selections are not cleared or substituted.
+- Explicit model selections and legacy reasoning effort stop on dispatch failure without dropping options, removing selectors, retrying attachments or falling back to legacy text commands. Unset options still inherit existing settings; saved explicit values remain unchanged.
+- Unset legacy reasoning effort no longer synchronizes or clears shared per-model settings during execution; only explicit legacy choices enter that write path.
+- Explicit dynamic model options stop before default Chat, built-in modes and custom-agent dispatch when system instructions cannot be forwarded with stable API permissions. Saved options and selected providers remain unchanged; no shared-setting rewrite or silent fallback is introduced.
+- Compatible Chat routes retain User/Assistant/tool forwarding. System is forwarded unchanged only when Scheduler has effective API permission; unsupported roles are blocked before source lookup, requests or token counting. Permission-aware UI and verification distinguish declared APIs, runtime authorization and provider-model access approval; publication alone does not grant proposed API access.
+
 ## [1.8.2] - 2026-10-09
 
 ### Fixed

@@ -10,7 +10,10 @@ import {
 } from "../../executionHistoryStore";
 import { sanitizeAbsolutePathDetails } from "../../errorSanitizer";
 import { getSupportedExperimentalReasoningEfforts } from "../../modelQualityExperiment";
-import { supportsConfiguredModelExecution } from "../../configured-model-provider";
+import {
+  supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
+} from "../../configured-model-provider";
 import type { ScheduleManager } from "../../scheduleManager";
 import type {
   AgentInfo,
@@ -247,10 +250,20 @@ async function handleListModels(
   catalogProvider: SchedulerCatalogProvider,
 ): Promise<vscode.LanguageModelToolResult> {
   const { source, models } = await catalogProvider.listModels();
+  const systemAllowed =
+    supportsConfiguredModelExecution() && supportsSystemMessageForwarding();
   return buildJsonTextResult({
     ok: true,
     source,
     count: models.length,
+    configurationExecutionRequirements: {
+      explicitChatParticipant: !systemAllowed,
+      forwardedMessageRoles: systemAllowed
+        ? ["user", "assistant", "system"]
+        : ["user", "assistant"],
+      systemMessages: systemAllowed ? "allowed" : "blocked",
+      inheritedSettings: "shared_values_not_reset",
+    },
     models: models.map((model) => ({
       id: model.id,
       name: model.name,

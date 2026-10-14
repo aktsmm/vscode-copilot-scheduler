@@ -91,6 +91,10 @@ suite("Dynamic Model Configuration", () => {
       ],
     };
     const legacy = { model: model.id, modelReasoningEffort: "high" };
+    assert.strictEqual(
+      migrateLegacyModelConfiguration(legacy, supported, false),
+      legacy,
+    );
     assert.deepStrictEqual(migrateLegacyModelConfiguration(legacy, supported), {
       model: model.id,
       modelReasoningEffort: undefined,
@@ -128,6 +132,10 @@ suite("Dynamic Model Configuration", () => {
       configuredModelProvider,
       "supportsConfiguredModelExecution",
     )!;
+    const permissionDescriptor = Object.getOwnPropertyDescriptor(
+      configuredModelProvider,
+      "supportsSystemMessageForwarding",
+    )!;
     const selected: ModelInfo = {
       ...model,
       configurationStatus: "available",
@@ -151,6 +159,11 @@ suite("Dynamic Model Configuration", () => {
     try {
       Object.defineProperty(
         configuredModelProvider,
+        "supportsSystemMessageForwarding",
+        { ...permissionDescriptor, value: () => true },
+      );
+      Object.defineProperty(
+        configuredModelProvider,
         "supportsConfiguredModelExecution",
         { ...descriptor, value: () => true },
       );
@@ -167,6 +180,17 @@ suite("Dynamic Model Configuration", () => {
       }
       Object.defineProperty(
         configuredModelProvider,
+        "supportsSystemMessageForwarding",
+        { ...permissionDescriptor, value: () => false },
+      );
+      const unpermitted = await resolver(requested);
+      assert.ok(unpermitted.ok);
+      if (unpermitted.ok) {
+        assert.strictEqual(unpermitted.selection.modelConfiguration, undefined);
+        assert.strictEqual(unpermitted.selection.modelReasoningEffort, "high");
+      }
+      Object.defineProperty(
+        configuredModelProvider,
         "supportsConfiguredModelExecution",
         { ...descriptor, value: () => false },
       );
@@ -177,6 +201,11 @@ suite("Dynamic Model Configuration", () => {
         assert.strictEqual(legacy.selection.modelReasoningEffort, "high");
       }
     } finally {
+      Object.defineProperty(
+        configuredModelProvider,
+        "supportsSystemMessageForwarding",
+        permissionDescriptor,
+      );
       Object.defineProperty(
         configuredModelProvider,
         "supportsConfiguredModelExecution",

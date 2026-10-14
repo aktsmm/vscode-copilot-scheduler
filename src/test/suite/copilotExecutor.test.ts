@@ -1,8 +1,348 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
+import { messages } from "../../i18n";
+import * as configuredModels from "../../configured-model-provider";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("effective System permission permits native explicit dispatch without dropping options", async () => {
+    const originalModels = CopilotExecutor.getAvailableModelsWithSource;
+    const originalExtension = vscode.extensions.getExtension;
+    const originalResolve = configuredModels.resolveConfiguredTaskModel;
+    const originalCommand = vscode.commands.executeCommand;
+    const requests: Record<string, unknown>[] = [];
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [
+        {
+          id: "source",
+          vendor: "copilot",
+          name: "Source",
+          description: "",
+          configurationStatus: "available",
+          configurationOptions: [
+            {
+              key: "reasoningEffort",
+              label: "Thinking",
+              choices: [{ value: "high", label: "High" }],
+            },
+          ],
+        },
+      ],
+    });
+    Object.defineProperty(vscode.extensions, "getExtension", {
+      configurable: true,
+      value: () => ({
+        packageJSON: { enabledApiProposals: ["languageModelSystem"] },
+      }),
+    });
+    Object.defineProperty(configuredModels, "resolveConfiguredTaskModel", {
+      configurable: true,
+      value: async (_model: unknown, configuration: unknown) => {
+        assert.deepStrictEqual(configuration, { reasoningEffort: "high" });
+        return {
+          id: "bound",
+          vendor: "copilot-scheduler-configured",
+          name: "Bound",
+          description: "",
+        };
+      },
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (_command: string, args: Record<string, unknown>) => {
+        requests.push(args);
+        return {};
+      },
+    });
+    try {
+      const options = {
+        agent: "agent",
+        model: "source",
+        modelVendor: "copilot",
+        modelConfiguration: { reasoningEffort: "high" },
+        chatSession: "continue" as const,
+      };
+      const before = JSON.stringify(options);
+      await new CopilotExecutor().executePrompt("synthetic", options);
+      assert.strictEqual(requests.length, 1);
+      assert.strictEqual(requests[0].mode, "agent");
+      assert.deepStrictEqual(requests[0].modelSelector, {
+        id: "bound",
+        vendor: "copilot-scheduler-configured",
+      });
+      assert.strictEqual(requests[0].modelConfiguration, undefined);
+      assert.strictEqual(requests[0].blockOnResponse, true);
+      assert.strictEqual(JSON.stringify(options), before);
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(vscode.extensions, "getExtension", {
+        configurable: true,
+        value: originalExtension,
+      });
+      Object.defineProperty(configuredModels, "resolveConfiguredTaskModel", {
+        configurable: true,
+        value: originalResolve,
+      });
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: originalCommand,
+      });
+    }
+  });
+  test("explicit selections stop at executor failure without legacy fallback or attachment retries", async () => {
+    const originalModels = CopilotExecutor.getAvailableModelsWithSource;
+    const originalCommand = vscode.commands.executeCommand;
+    const originalWarning = vscode.window.showWarningMessage;
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [
+        {
+          id: "fixed",
+          vendor: "copilot",
+          name: "Fixed",
+          description: "",
+          configurationStatus: "unsupported",
+          configurationOptions: [],
+        },
+      ],
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => undefined,
+    });
+    try {
+      for (const effort of [undefined, "high"]) {
+        for (const attachments of [[], ["synthetic.md"]]) {
+          const commands: string[] = [];
+          Object.defineProperty(vscode.commands, "executeCommand", {
+            configurable: true,
+            value: async (command: string) => {
+              commands.push(command);
+              throw new Error("Synthetic dispatch failure");
+            },
+          });
+          const executor = new CopilotExecutor();
+          const internal = executor as unknown as {
+            syncExperimentalModelQuality: () => Promise<void>;
+            executePromptLegacy: () => Promise<void>;
+          };
+          let legacyCalls = 0;
+          let qualitySyncCalls = 0;
+          internal.syncExperimentalModelQuality = async () => {
+            qualitySyncCalls++;
+          };
+          internal.executePromptLegacy = async () => {
+            legacyCalls++;
+          };
+          const options = {
+            model: "fixed",
+            modelVendor: "copilot",
+            modelReasoningEffort: effort,
+            agent: "agent",
+            chatSession: "continue" as const,
+            attachFilePaths: attachments,
+          };
+          const before = JSON.stringify(options);
+          await assert.rejects(
+            executor.executePrompt("synthetic", options),
+            (error: unknown) =>
+              (error as Record<string, unknown>)
+                .copilotSchedulerPromptBlocked ===
+              "providerModelDispatchFailed",
+          );
+          assert.deepStrictEqual(commands, ["workbench.action.chat.open"]);
+          assert.strictEqual(legacyCalls, 0);
+          assert.strictEqual(qualitySyncCalls, effort ? 1 : 0);
+          assert.strictEqual(JSON.stringify(options), before);
+        }
+      }
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: originalCommand,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+    }
+  });
+  test("explicit model and legacy effort dispatch never relax selectors or settings after failure", async () => {
+    const original = vscode.commands.executeCommand;
+    const executor = new CopilotExecutor() as unknown as {
+      tryOpenChatWithPrompt(
+        prompt: string,
+        mode: string,
+        selection: unknown,
+        model: undefined,
+        attachments: vscode.Uri[],
+      ): Promise<{ opened: boolean }>;
+    };
+    try {
+      for (const failure of ["throw", "errorDetails"]) {
+        for (const effort of [undefined, "high"]) {
+          for (const mode of ["agent", "custom-agent"]) {
+            const requests: Record<string, unknown>[] = [];
+            Object.defineProperty(vscode.commands, "executeCommand", {
+              configurable: true,
+              value: async (
+                _command: string,
+                args: Record<string, unknown>,
+              ) => {
+                requests.push(args);
+                if (failure === "throw") throw new Error("Synthetic rejection");
+                return { errorDetails: { message: "Synthetic rejection" } };
+              },
+            });
+            const selection = {
+              model: "fixed",
+              modelVendor: "copilot",
+              modelFamily: "fixed-family",
+              modelVersion: "1",
+              modelReasoningEffort: effort,
+            };
+            const before = JSON.stringify(selection);
+            const result = await executor.tryOpenChatWithPrompt(
+              "synthetic",
+              mode,
+              selection,
+              undefined,
+              [],
+            );
+            assert.strictEqual(result.opened, false);
+            assert.strictEqual(requests.length, 1);
+            assert.deepStrictEqual(requests[0].modelSelector, {
+              id: "fixed",
+              vendor: "copilot",
+              family: "fixed-family",
+              version: "1",
+            });
+            assert.strictEqual(requests[0].mode, mode);
+            assert.deepStrictEqual(
+              requests[0].modelConfiguration,
+              effort ? { reasoningEffort: effort } : undefined,
+            );
+            assert.strictEqual(JSON.stringify(selection), before);
+          }
+        }
+      }
+    } finally {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: original,
+      });
+    }
+  });
+  test("system-bearing chat routes block advertised overrides across vendors before commands", async () => {
+    const originalModels = CopilotExecutor.getAvailableModelsWithSource;
+    const originalCommand = vscode.commands.executeCommand;
+    const calls: string[] = [];
+    let vendor = "copilot";
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [
+        {
+          id: "synthetic",
+          name: "Synthetic",
+          vendor,
+          description: "",
+          configurationStatus: "available",
+          configurationOptions: [
+            {
+              key: "reasoningEffort",
+              label: "Reasoning",
+              choices: [{ value: "high", label: "High" }],
+            },
+            {
+              key: "speedMode",
+              label: "Speed",
+              choices: [{ value: "normal", label: "Normal" }],
+            },
+            {
+              key: "contextSize",
+              label: "Context",
+              choices: [{ value: 4096, label: "4096" }],
+            },
+          ],
+        },
+      ],
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (command: string) => {
+        calls.push(command);
+      },
+    });
+    const executor = new CopilotExecutor();
+    const internal = executor as unknown as {
+      syncExperimentalModelQuality: () => Promise<void>;
+    };
+    internal.syncExperimentalModelQuality = async () => {
+      throw new Error("Must not write shared settings");
+    };
+    try {
+      for (vendor of [
+        "copilot",
+        "openai-codex",
+        "synthetic-byok",
+        "synthetic-local",
+      ]) {
+        for (const agent of [
+          undefined,
+          "ask",
+          "agent",
+          "edit",
+          "@custom-agent",
+          "@workspace",
+          "@terminal",
+          "@vscode",
+        ]) {
+          for (const configuration of [
+            { reasoningEffort: "high" },
+            { speedMode: "normal" },
+            { contextSize: 4096 },
+          ]) {
+            const before = JSON.stringify(configuration);
+            await assert.rejects(
+              executor.executePrompt("synthetic", {
+                agent,
+                model: "synthetic",
+                modelVendor: vendor,
+                modelConfiguration: configuration,
+                chatSession: "new",
+              }),
+              (error: unknown) =>
+                (error as Record<string, unknown>)
+                  .copilotSchedulerPromptBlocked ===
+                  "modelConfigurationUnavailable" &&
+                (error as Error).message ===
+                  messages.dynamicConfigurationSystemMessagesUnsupported(),
+            );
+            assert.strictEqual(JSON.stringify(configuration), before);
+          }
+        }
+        await executor.executePrompt("synthetic", {
+          agent: "ask",
+          model: "synthetic",
+          modelVendor: vendor,
+          modelConfiguration: {},
+          chatSession: "continue",
+        });
+      }
+      assert.deepStrictEqual(
+        calls,
+        Array(4).fill("workbench.action.chat.open"),
+      );
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: originalCommand,
+      });
+    }
+  });
   test("configured model dispatch waits once and never drops its fixed selector after failure", async () => {
     const original = vscode.commands.executeCommand;
     const requests: Record<string, unknown>[] = [];
@@ -643,7 +983,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     });
   });
 
-  test("chat.open args keep the model selector but drop reasoning effort on the first reasoning-free retry", () => {
+  test("legacy argument formatting can omit modelConfiguration without changing the selector", () => {
     const selector = {
       id: "claude-opus-4.8",
       vendor: "copilot",

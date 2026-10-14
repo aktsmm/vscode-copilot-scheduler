@@ -24,7 +24,10 @@ import {
 } from "./atomic-file-write";
 import { TaskStoreLockBusyError, withTaskStoreLock } from "./task-store-lock";
 import { migrateLegacyModelConfiguration } from "./model-configuration";
-import { supportsConfiguredModelExecution } from "./configured-model-provider";
+import {
+  supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
+} from "./configured-model-provider";
 import {
   areModelSelectionsEqual,
   findBestMatchingModel,
@@ -1667,7 +1670,11 @@ export class ScheduleManager {
         modelReasoningEffort: currentSelection.modelReasoningEffort,
       };
       const nextSelection = supportsConfiguredModelExecution()
-        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        ? migrateLegacyModelConfiguration(
+            matchedSelection,
+            matched,
+            supportsSystemMessageForwarding(),
+          )
         : matchedSelection;
       if (applyModelSelectionToTask(task, nextSelection)) {
         task.updatedAt = new Date();

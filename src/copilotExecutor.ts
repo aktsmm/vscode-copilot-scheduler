@@ -24,6 +24,7 @@ import {
 import {
   resolveConfiguredTaskModel,
   supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
 } from "./configured-model-provider";
 import { resolveGlobalAgentRoots } from "./promptResolver";
 import { getPreferredWorkspaceName } from "./workspaceRoots";
@@ -613,6 +614,19 @@ export class CopilotExecutor {
             "modelConfigurationUnavailable",
           );
         }
+        const participant = /^(@[^\s]+)(?:\s|$)/u.exec(
+          routing.chatOpenPrompt.trim(),
+        )?.[1];
+        if (
+          (!participant ||
+            PARTICIPANT_STYLE_AGENTS.has(participant.toLowerCase())) &&
+          !supportsSystemMessageForwarding()
+        ) {
+          throw createPromptBlockedError(
+            messages.dynamicConfigurationSystemMessagesUnsupported(),
+            "modelConfigurationUnavailable",
+          );
+        }
         try {
           const configured = await resolveConfiguredTaskModel(
             resolved.matched,
@@ -640,7 +654,10 @@ export class CopilotExecutor {
       );
     }
 
-    if (resolved.selection.modelConfiguration === undefined) {
+    if (
+      resolved.selection.modelConfiguration === undefined &&
+      resolved.selection.modelReasoningEffort
+    ) {
       await this.syncExperimentalModelQuality(
         resolved.selection,
         resolved.matched,
@@ -668,7 +685,9 @@ export class CopilotExecutor {
       if (
         !chatOpenResult.opened &&
         attachFiles.length > 0 &&
-        !resolved.selection.modelConfiguration
+        !resolved.selection.modelConfiguration &&
+        !resolved.selection.model &&
+        !resolved.selection.modelReasoningEffort
       ) {
         // Chat may still be warming up; retry once before refusing to run.
         await this.delay(
@@ -685,6 +704,8 @@ export class CopilotExecutor {
       if (!chatOpenResult.opened) {
         if (
           hasStrictProviderSelection(resolved.selection) ||
+          !!resolved.selection.model ||
+          !!resolved.selection.modelReasoningEffort ||
           (resolved.selection.modelConfiguration &&
             Object.keys(resolved.selection.modelConfiguration).length > 0)
         ) {
@@ -774,6 +795,44 @@ export class CopilotExecutor {
         return { opened: false, resolvedSelection, resolvedModel };
       }
     }
+    if (resolvedSelection.model || resolvedSelection.modelReasoningEffort) {
+      const id = resolvedModel?.id || resolvedSelection.model;
+      if (!id) return { opened: false, resolvedSelection, resolvedModel };
+      try {
+        const result = await vscode.commands.executeCommand<{
+          errorDetails?: unknown;
+        }>(
+          "workbench.action.chat.open",
+          buildChatOpenArgs(
+            chatOpenPrompt,
+            mode,
+            resolvedSelection,
+            {
+              id,
+              vendor:
+                resolvedModel?.vendor ||
+                resolvedSelection.modelVendor ||
+                "copilot",
+              ...(resolvedSelection.modelFamily
+                ? { family: resolvedSelection.modelFamily }
+                : {}),
+              ...(resolvedSelection.modelVersion
+                ? { version: resolvedSelection.modelVersion }
+                : {}),
+            },
+            false,
+            attachFiles,
+          ),
+        );
+        return {
+          opened: !result?.errorDetails,
+          resolvedSelection,
+          resolvedModel,
+        };
+      } catch {
+        return { opened: false, resolvedSelection, resolvedModel };
+      }
+    }
     for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
       try {
         logDebug(
@@ -830,68 +889,6 @@ export class CopilotExecutor {
       logDebug(
         `[CopilotScheduler] chat.open without model selector failed: ${toSafeErrorDetails(error)}`,
       );
-    }
-
-    // Some models reject the reasoning-effort modelConfiguration knob and make
-    // every chat.open attempt above throw. Before giving up to the legacy text
-    // fallback (which cannot apply a custom agent at all), retry with the
-    // reasoning effort dropped so at least the agent mode still applies. First
-    // keep the model selector so the user's chosen model is preserved, then
-    // fall back to dropping the selector as a last resort.
-    if (mode && resolvedSelection.modelReasoningEffort) {
-      for (const selector of buildModelSelectorCandidates(resolvedSelection)) {
-        try {
-          logDebug(
-            `[CopilotScheduler] Retrying workbench.action.chat.open mode=${mode} with model selector ${JSON.stringify(selector)} but without reasoning effort (dropping reasoningEffort=${resolvedSelection.modelReasoningEffort})`,
-          );
-          await vscode.commands.executeCommand(
-            "workbench.action.chat.open",
-            buildChatOpenArgs(
-              chatOpenPrompt,
-              mode,
-              resolvedSelection,
-              selector,
-              true,
-              attachFiles,
-            ),
-          );
-          return {
-            opened: true,
-            resolvedSelection,
-            resolvedModel,
-          };
-        } catch (error) {
-          logDebug(
-            `[CopilotScheduler] chat.open retry (selector kept, reasoning dropped) failed: ${toSafeErrorDetails(error)}`,
-          );
-        }
-      }
-
-      try {
-        logDebug(
-          `[CopilotScheduler] Retrying workbench.action.chat.open mode=${mode} without model selector and without reasoning effort (last resort to keep the agent mode applied)`,
-        );
-        await vscode.commands.executeCommand(
-          "workbench.action.chat.open",
-          buildChatOpenArgs(
-            chatOpenPrompt,
-            mode,
-            resolvedSelection,
-            undefined,
-            true,
-            attachFiles,
-          ),
-        );
-        return {
-          opened: true,
-          resolvedSelection,
-          resolvedModel,
-        };
-      } catch (error) {
-        logDebug(
-          `[CopilotScheduler] chat.open mode-only retry failed: ${toSafeErrorDetails(error)}`,
-        );
-      }
     }
 
     if (mode) {
@@ -970,7 +967,11 @@ export class CopilotExecutor {
     };
     return {
       selection: supportsConfiguredModelExecution()
-        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        ? migrateLegacyModelConfiguration(
+            matchedSelection,
+            matched,
+            supportsSystemMessageForwarding(),
+          )
         : matchedSelection,
       matched,
     };

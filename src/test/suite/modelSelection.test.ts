@@ -195,6 +195,32 @@ suite("Model Selection Catalog Tests", () => {
     assert.strictEqual(pickerCatalog[0]?.id, "claude-opus-4.6-copilot");
   });
 
+  test("filterPickerModelCatalog excludes CLI provider groups without removing ordinary providers", () => {
+    const models = [
+      "copilotcli",
+      "agent-host-copilotcli",
+      "CopilotCLI",
+      "copilot",
+      "openai-codex",
+      "azure",
+      "ollama",
+      "copilot-client-demo",
+    ].map((vendor) => ({
+      id: "gpt-6-luna",
+      name: "GPT 6 Luna",
+      vendor,
+      family: "gpt-6-luna",
+      description: "",
+    }));
+    const before = JSON.stringify(models);
+    const picker = filterPickerModelCatalog(models);
+    assert.deepStrictEqual(
+      picker.map((model) => model.vendor),
+      ["copilot", "openai-codex", "azure", "ollama", "copilot-client-demo"],
+    );
+    assert.strictEqual(JSON.stringify(models), before);
+  });
+
   test("filterPickerModelCatalog includes extension and BYOK providers", () => {
     const catalog = normalizeModelCatalog([
       {

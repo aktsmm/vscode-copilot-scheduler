@@ -442,6 +442,11 @@ export const messages = {
       "Could not prepare the configured task model. Dynamic execution requires VS Code 1.141 or later and an available, authorized source model. No fallback model was used.",
       "設定固定タスクモデルを準備できませんでした。動的実行には VS Code 1.141 以降と、利用可能で承認済みの元モデルが必要です。別モデルへの fallback は行っていません。",
     ),
+  dynamicConfigurationSystemMessagesUnsupported: () =>
+    t(
+      "Per-task model options cannot forward system instructions on this host. Use inherited model settings or a compatible explicit Chat participant. The saved options were not cleared and no fallback model was used.",
+      "この環境ではタスク別モデル設定でシステム指示を転送できません。共有モデル設定の継承、または対応する明示的な Chat 参加者を利用してください。保存済み設定の解除や別モデルへの代替は行っていません。",
+    ),
   providerModelUnavailable: () =>
     t(
       "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
@@ -449,8 +454,8 @@ export const messages = {
     ),
   providerModelDispatchFailed: () =>
     t(
-      "Could not dispatch to the selected provider model through VS Code Chat. Check authentication, connectivity and support for the selected chat mode. No fallback model was used.",
-      "選択した提供元のモデルに VS Code Chat 経由で送信できませんでした。認証、接続、選択したチャットモードへの対応を確認してください。別モデルへの代替は行っていません。",
+      "Could not dispatch to the selected provider model through VS Code Chat. Check sign-in, connectivity, mode support and any model-access approval dialog in Chat. No settings were dropped and no fallback model was used.",
+      "選択した提供元のモデルに VS Code Chat 経由で送信できませんでした。サインイン、接続、モードへの対応と、Chat のモデルアクセス承認ダイアログを確認してください。設定の省略や別モデルへの代替は行っていません。",
     ),
 
   // ==================== Execution Errors ====================
@@ -533,8 +538,8 @@ export const messages = {
     t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
   labelDynamicModelOptionsBlocked: () =>
     t(
-      "Task options are fixed for each request without changing shared Chat settings. Requires VS Code 1.141 or later and source-provider access.",
-      "タスク設定は共有 Chat 設定を変更せず、リクエストごとに固定します。VS Code 1.141 以降と元の提供元へのアクセスが必要です。",
+      "Detailed options require compatible VS Code/provider APIs and model-access approval. Agent system instructions also require the languageModelSystem API permission. Without the required support or permissions, or after API changes, only model selection with inherited settings may be available. Saved overrides are not cleared automatically.",
+      "詳細設定には対応する VS Code・提供元の API とモデルへのアクセス承認が必要です。Agent のシステム指示には languageModelSystem API の利用許可も必要です。未対応・未許可、または仕様変更時には、モデル指定と現在の設定の継承だけが利用可能になる場合があります。保存した個別設定は自動解除しません。",
     ),
   labelInvalidModelConfiguration: () =>
     t(

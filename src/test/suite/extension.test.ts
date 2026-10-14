@@ -596,6 +596,54 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("installed VSIX smoke reads the archive version and rejects missing or invalid manifests", async () => {
+    const root = path.resolve(__dirname, "../../..");
+    const verifier = require(
+      path.join(root, "scripts/verify-vsix-contents.js"),
+    ) as { readVsixManifest(file: string): Promise<{ version: string }> };
+    const { ZipFile } = require("yazl");
+    const fixtureRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "copilot-installed-manifest-"),
+    );
+    const fixture = path.join(fixtureRoot, "different-version.vsix");
+    const write = async (name: string, content: string) => {
+      const zip = new ZipFile();
+      const output = fs.createWriteStream(fixture);
+      const done = new Promise<void>((resolve, reject) => {
+        output.once("close", resolve);
+        output.once("error", reject);
+        zip.outputStream.once("error", reject);
+      });
+      zip.addBuffer(Buffer.from(content), name);
+      zip.end();
+      zip.outputStream.pipe(output);
+      await done;
+    };
+    try {
+      await write(
+        "extension/package.json",
+        JSON.stringify({
+          publisher: "fixture",
+          name: "fixture",
+          version: "9.8.7",
+        }),
+      );
+      assert.strictEqual(
+        (await verifier.readVsixManifest(fixture)).version,
+        "9.8.7",
+      );
+      await write("extension/README.md", "no manifest");
+      await assert.rejects(
+        verifier.readVsixManifest(fixture),
+        /manifest was not found/,
+      );
+      await write("extension/package.json", "{invalid");
+      await assert.rejects(verifier.readVsixManifest(fixture), SyntaxError);
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   test("VSIX build verification rejects stale payloads and runtime metadata", async () => {
     const root = path.resolve(__dirname, "../../..");
     const verifier = require(

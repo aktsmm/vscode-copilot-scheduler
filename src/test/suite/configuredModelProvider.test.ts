@@ -3,11 +3,463 @@ import * as vscode from "vscode";
 import {
   buildConfiguredRequestOptions,
   ConfiguredModelProvider,
+  supportsSystemMessageForwarding,
 } from "../../configured-model-provider";
 import type { ModelInfo } from "../../types";
 import { enrichModelConfigurationCatalog } from "../../model-configuration";
 
 suite("Configured Model Provider", () => {
+  test("provider disposal cancels the downstream model request token", async () => {
+    const token = new vscode.CancellationTokenSource();
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let downstream: vscode.CancellationToken | undefined;
+    let cancellations = 0;
+    let subscription: vscode.Disposable | undefined;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      sendRequest: async (
+        _messages: unknown,
+        _options: unknown,
+        active: vscode.CancellationToken,
+      ) => {
+        downstream = active;
+        subscription = active.onCancellationRequested(() => {
+          cancellations++;
+        });
+        started();
+        return new Promise(() => {});
+      },
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      async () => [source],
+      async () => [model],
+    );
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const pending = provider.provideLanguageModelChatResponse(
+        binding,
+        [],
+        { toolMode: vscode.LanguageModelChatToolMode.Auto },
+        { report() {} },
+        token.token,
+      );
+      await ready;
+      provider.dispose();
+      await assert.rejects(pending, vscode.CancellationError);
+      assert.strictEqual(downstream?.isCancellationRequested, true);
+      assert.strictEqual(cancellations, 1);
+      assert.strictEqual(token.token.isCancellationRequested, false);
+    } finally {
+      subscription?.dispose();
+      provider.dispose();
+      token.dispose();
+    }
+  });
+  test("catalog invalidation rejects stale pending token preparation and permits a fresh lookup", async () => {
+    const changed = new vscode.EventEmitter<void>();
+    const token = new vscode.CancellationTokenSource();
+    let release!: (models: vscode.LanguageModelChat[]) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let selections = 0;
+    let counts = 0;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      countTokens: async () => {
+        counts++;
+        return 1;
+      },
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      () => {
+        selections++;
+        if (selections === 1) {
+          started();
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        }
+        return Promise.resolve([source]);
+      },
+      async () => [model],
+      changed.event,
+    );
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const pending = provider.provideTokenCount(binding, "old", token.token);
+      await ready;
+      changed.fire();
+      assert.strictEqual(
+        await provider.provideTokenCount(binding, "fresh", token.token),
+        1,
+      );
+      release([source]);
+      await assert.rejects(pending, vscode.CancellationError);
+      assert.strictEqual(counts, 1);
+      assert.strictEqual(selections, 2);
+    } finally {
+      provider.dispose();
+      changed.dispose();
+      token.dispose();
+    }
+  });
+  test("cancelled token callers detach promptly without cancelling shared preparation", async () => {
+    const first = new vscode.CancellationTokenSource();
+    const second = new vscode.CancellationTokenSource();
+    let release!: (models: vscode.LanguageModelChat[]) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let counts = 0;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      countTokens: async () => {
+        counts++;
+        return 1;
+      },
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      () => {
+        started();
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+      async () => [model],
+    );
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const cancelled = provider.provideTokenCount(
+        binding,
+        "first",
+        first.token,
+      );
+      await ready;
+      const surviving = provider.provideTokenCount(
+        binding,
+        "second",
+        second.token,
+      );
+      first.cancel();
+      await Promise.race([
+        assert.rejects(cancelled, vscode.CancellationError),
+        new Promise<never>((_resolve, reject) => {
+          deadline = setTimeout(
+            () =>
+              reject(
+                new Error("Caller cancellation waited for shared preparation"),
+              ),
+            300,
+          );
+        }),
+      ]);
+      assert.strictEqual(counts, 0);
+      release([source]);
+      assert.strictEqual(await surviving, 1);
+      assert.strictEqual(counts, 1);
+    } finally {
+      clearTimeout(deadline);
+      provider.dispose();
+      first.dispose();
+      second.dispose();
+    }
+  });
+
+  test("disposal stops a pending stream before reporting late parts", async () => {
+    const token = new vscode.CancellationTokenSource();
+    let release!: (
+      part: IteratorResult<vscode.LanguageModelResponsePart>,
+    ) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let returned = 0;
+    let reported = 0;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      sendRequest: async () => ({
+        stream: {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              started();
+              return new Promise((resolve) => {
+                release = resolve;
+              });
+            },
+            return: () => {
+              returned++;
+              return Promise.resolve({ done: true, value: undefined });
+            },
+          }),
+        },
+      }),
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      async () => [source],
+      async () => [model],
+    );
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const pending = provider.provideLanguageModelChatResponse(
+        binding,
+        [],
+        { toolMode: vscode.LanguageModelChatToolMode.Auto },
+        {
+          report() {
+            reported++;
+          },
+        },
+        token.token,
+      );
+      await ready;
+      provider.dispose();
+      await assert.rejects(pending, vscode.CancellationError);
+      release({ done: false, value: new vscode.LanguageModelTextPart("late") });
+      assert.strictEqual(reported, 0);
+      assert.strictEqual(returned, 1);
+      assert.throws(
+        () => provider.bind(model, { mode: "normal:low" }),
+        vscode.CancellationError,
+      );
+    } finally {
+      provider.dispose();
+      token.dispose();
+    }
+  });
+  test("disposal during response preparation prevents a late source request", async () => {
+    const token = new vscode.CancellationTokenSource();
+    let release!: (models: vscode.LanguageModelChat[]) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let calls = 0;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      sendRequest: async () => {
+        calls++;
+        return { stream: (async function* () {})() };
+      },
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      () => {
+        started();
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+      async () => [model],
+    );
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const pending = provider.provideLanguageModelChatResponse(
+        binding,
+        [],
+        { toolMode: vscode.LanguageModelChatToolMode.Auto },
+        { report() {} },
+        token.token,
+      );
+      await ready;
+      provider.dispose();
+      release([source]);
+      await assert.rejects(pending, vscode.CancellationError);
+      assert.strictEqual(calls, 0);
+    } finally {
+      provider.dispose();
+      token.dispose();
+    }
+  });
+  test("effective proposal permissions control System forwarding independently of declarations", async () => {
+    const originalExtension = vscode.extensions.getExtension;
+    const token = new vscode.CancellationTokenSource();
+    try {
+      for (const enabled of [false, true]) {
+        Object.defineProperty(vscode.extensions, "getExtension", {
+          configurable: true,
+          value: () => ({
+            packageJSON: {
+              enabledApiProposals: enabled ? ["languageModelSystem"] : [],
+              originalEnabledApiProposals: ["languageModelSystem"],
+            },
+          }),
+        });
+        assert.strictEqual(supportsSystemMessageForwarding(), enabled);
+        let calls = 0;
+        const source = {
+          id: model.id,
+          vendor: model.vendor,
+          version: model.version,
+          sendRequest: async (messages: vscode.LanguageModelChatMessage[]) => {
+            calls++;
+            assert.strictEqual(Number(messages[0].role), 3);
+            return { stream: (async function* () {})() };
+          },
+        } as unknown as vscode.LanguageModelChat;
+        const provider = new ConfiguredModelProvider(
+          async () => [source],
+          async () => [model],
+        );
+        try {
+          const binding = provider.bind(model, { mode: "normal:low" });
+          const request = () =>
+            provider.provideLanguageModelChatResponse(
+              binding,
+              [
+                {
+                  role: 3,
+                  name: undefined,
+                  content: [new vscode.LanguageModelTextPart("synthetic")],
+                },
+              ] as never,
+              { toolMode: vscode.LanguageModelChatToolMode.Auto },
+              { report() {} },
+              token.token,
+            );
+          if (enabled) await request();
+          else await assert.rejects(request, vscode.LanguageModelError);
+          assert.strictEqual(calls, enabled ? 1 : 0);
+        } finally {
+          provider.dispose();
+        }
+      }
+    } finally {
+      Object.defineProperty(vscode.extensions, "getExtension", {
+        configurable: true,
+        value: originalExtension,
+      });
+      token.dispose();
+    }
+  });
+  test("configured relays stay selectable in native Chat model compatibility checks", () => {
+    const provider = new ConfiguredModelProvider();
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      const advertised = provider.provideLanguageModelChatInformation();
+      assert.strictEqual(advertised.length, 1);
+      assert.strictEqual(advertised[0].id, binding.id);
+      assert.strictEqual(
+        Object.hasOwn(advertised[0], "isUserSelectable"),
+        false,
+      );
+    } finally {
+      provider.dispose();
+    }
+  });
+  test("token preparation is shared, invalidated on catalog changes, and recovers after lookup failure", async () => {
+    const changed = new vscode.EventEmitter<void>();
+    const token = new vscode.CancellationTokenSource();
+    let selections = 0;
+    let schemas = 0;
+    let counts = 0;
+    let available = true;
+    const source = {
+      id: model.id,
+      vendor: model.vendor,
+      version: model.version,
+      countTokens: async () => {
+        counts++;
+        return 1;
+      },
+    } as unknown as vscode.LanguageModelChat;
+    const provider = new ConfiguredModelProvider(
+      async () => {
+        selections++;
+        return available ? [source] : [];
+      },
+      async () => {
+        schemas++;
+        return [model];
+      },
+      changed.event,
+    );
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      await Promise.all(
+        Array.from({ length: 20 }, () =>
+          provider.provideTokenCount(binding, "synthetic", token.token),
+        ),
+      );
+      assert.strictEqual(selections, 1);
+      assert.strictEqual(schemas, 1);
+      assert.strictEqual(counts, 20);
+      available = false;
+      changed.fire();
+      await assert.rejects(
+        provider.provideTokenCount(binding, "synthetic", token.token),
+      );
+      assert.strictEqual(counts, 20);
+      available = true;
+      assert.strictEqual(
+        await provider.provideTokenCount(binding, "synthetic", token.token),
+        1,
+      );
+      assert.strictEqual(selections, 3);
+      assert.strictEqual(schemas, 2);
+    } finally {
+      provider.dispose();
+      changed.dispose();
+      token.dispose();
+    }
+  });
+  test("unsupported message roles are blocked before source lookup or token counting", async () => {
+    let calls = 0;
+    const provider = new ConfiguredModelProvider(async () => {
+      calls++;
+      throw new Error("Unsupported roles must not reach source lookup");
+    });
+    const token = new vscode.CancellationTokenSource();
+    try {
+      const binding = provider.bind(model, { mode: "normal:low" });
+      for (const role of [3, 99]) {
+        const message = {
+          role,
+          name: undefined,
+          content: [new vscode.LanguageModelTextPart("synthetic")],
+        } as vscode.LanguageModelChatRequestMessage;
+        for (const operation of [
+          () =>
+            provider.provideLanguageModelChatResponse(
+              binding,
+              [message],
+              { toolMode: vscode.LanguageModelChatToolMode.Auto },
+              { report() {} },
+              token.token,
+            ),
+          () => provider.provideTokenCount(binding, message, token.token),
+        ]) {
+          await assert.rejects(
+            operation,
+            (error: unknown) =>
+              error instanceof vscode.LanguageModelError &&
+              error.code === "Blocked",
+          );
+        }
+      }
+      assert.strictEqual(calls, 0);
+      assert.deepStrictEqual(binding.configuration, { mode: "normal:low" });
+    } finally {
+      provider.dispose();
+      token.dispose();
+    }
+  });
   test("advertised zero context keeps a usable source input budget", () => {
     const provider = new ConfiguredModelProvider();
     try {

@@ -154,6 +154,10 @@ suite("ScheduleManager Dynamic Model Configuration", () => {
       provider,
       "supportsConfiguredModelExecution",
     )!;
+    const permissionDescriptor = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsSystemMessageForwarding",
+    )!;
     const root = fs.mkdtempSync(
       path.join(os.tmpdir(), "scheduler-option-migration-"),
     );
@@ -190,6 +194,23 @@ suite("ScheduleManager Dynamic Model Configuration", () => {
         ...descriptor,
         value: () => true,
       });
+      Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+        ...permissionDescriptor,
+        value: () => false,
+      });
+      await manager.healTaskModelSelections(models);
+      assert.strictEqual(
+        manager.getTask(task.id)?.modelConfiguration,
+        undefined,
+      );
+      assert.strictEqual(
+        manager.getTask(task.id)?.modelReasoningEffort,
+        "high",
+      );
+      Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+        ...permissionDescriptor,
+        value: () => true,
+      });
       assert.strictEqual(await manager.healTaskModelSelections(models), 1);
       assert.deepStrictEqual(manager.getTask(task.id)?.modelConfiguration, {
         reasoningEffort: "high",
@@ -208,6 +229,11 @@ suite("ScheduleManager Dynamic Model Configuration", () => {
         { reasoningEffort: "high" },
       );
     } finally {
+      Object.defineProperty(
+        provider,
+        "supportsSystemMessageForwarding",
+        permissionDescriptor,
+      );
       Object.defineProperty(
         provider,
         "supportsConfiguredModelExecution",

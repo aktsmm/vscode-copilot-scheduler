@@ -3338,6 +3338,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       `
       var modelSelect = { value: "group" };
       var modelConfigurationState;
+      var modelConfigurationExecutionEnabled = true;
       const clearPendingModelSelection = () => {};
       const getActiveModelPickerGroups = () => [];
       const renderModelConfigurationControls = () => {};
@@ -3437,6 +3438,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       htmlFor = "";
       className = "";
       checked = false;
+      disabled = false;
       style: Record<string, string> = {};
       listeners: Record<string, () => void> = {};
       set innerHTML(_value: string) {
@@ -3452,11 +3454,13 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const controls = new Element();
     const group = new Element();
     const note = new Element();
+    const reset = new Element();
     const factory = new Function(
       "document",
       "modelConfigurationControls",
       "modelConfigurationGroup",
       "modelConfigurationNote",
+      "modelConfigurationReset",
       `
       var modelConfigurationState = {};
       var modelConfigurationExecutionEnabled = true;
@@ -3469,9 +3473,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       ${render}
       ${extractFunctionSource(source, "copyModelConfigurationForForm")}
       ${extractFunctionSource(source, "isEditableModelConfiguration")}
-      var modelConfigurationReset = null;
       ${extractBlockFromStartToken(source, "if (modelConfigurationReset) {")}
-      return { render: renderModelConfigurationControls, state: () => modelConfigurationState };
+      return { render: renderModelConfigurationControls, state: () => modelConfigurationState, disable: () => modelConfigurationExecutionEnabled = false };
     `,
     );
     const api = factory(
@@ -3479,6 +3482,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       controls,
       group,
       note,
+      reset,
     );
     const model = {
       configurationStatus: "available",
@@ -3504,6 +3508,15 @@ suite("SchedulerWebview Script Contract Tests", () => {
     select.value = "2";
     select.listeners.change();
     assert.strictEqual(api.state().contextSize, "4096");
+    api.disable();
+    api.render(model, { modelConfiguration: { contextSize: 4096 } });
+    assert.strictEqual(controls.children[0].children[1].disabled, true);
+    assert.strictEqual(reset.style.display, "inline-flex");
+    assert.deepStrictEqual(api.state(), { contextSize: 4096 });
+    reset.listeners.click();
+    assert.deepStrictEqual(api.state(), {});
+    assert.strictEqual(controls.children.length, 0);
+    assert.strictEqual(group.style.display, "block");
     api.render(model, { modelConfiguration: { contextSize: 8192 } });
     const missing = controls.children[0].children[1];
     assert.strictEqual(missing.value, "unavailable");
@@ -3555,6 +3568,27 @@ suite("SchedulerWebview Script Contract Tests", () => {
       api.diff({ mode: "fast:high", contextSize: 4096 }),
     );
     assert.notStrictEqual(api.diff(null), api.diff({}));
+  });
+
+  test("unpermitted variant changes preserve saved overrides without clearing pending selection", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let changed: (() => void) | undefined;
+    const selector = {
+      addEventListener: (_event: string, listener: () => void) => {
+        changed = listener;
+      },
+    };
+    const api = new Function(
+      "modelVariantSelect",
+      `var modelConfigurationExecutionEnabled=false;var modelConfigurationState={reasoningEffort:'high'};var cleared=0;function clearPendingModelSelection(){cleared++;}${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}return {state:()=>modelConfigurationState,cleared:()=>cleared};`,
+    )(selector);
+    assert.ok(changed);
+    changed!();
+    assert.deepStrictEqual(api.state(), { reasoningEffort: "high" });
+    assert.strictEqual(api.cleared(), 0);
   });
 
   test("invalid model configuration repairs only on explicit reset", () => {

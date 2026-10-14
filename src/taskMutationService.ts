@@ -9,7 +9,10 @@ import {
   migrateLegacyModelConfiguration,
   validateModelConfiguration,
 } from "./model-configuration";
-import { supportsConfiguredModelExecution } from "./configured-model-provider";
+import {
+  supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
+} from "./configured-model-provider";
 import type { ScheduleManager } from "./scheduleManager";
 import type {
   CreateTaskInput,
@@ -432,7 +435,11 @@ export function createModelSelectionResolver(
     };
     const resolved = normalizeModelSelection(
       supportsConfiguredModelExecution()
-        ? migrateLegacyModelConfiguration(matchedSelection, matched)
+        ? migrateLegacyModelConfiguration(
+            matchedSelection,
+            matched,
+            supportsSystemMessageForwarding(),
+          )
         : matchedSelection,
     );
     if (resolved.modelConfiguration !== undefined) {

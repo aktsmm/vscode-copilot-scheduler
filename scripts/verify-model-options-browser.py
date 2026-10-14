@@ -15,14 +15,26 @@ const names = new Set(['copyModelConfigurationForForm', 'isEditableModelConfigur
   'clearUnavailableModelOptions', 'buildUnavailableModelLabel', 'clearModelVariantOptions',
   'updateModelExperimentalNote', 'updateModelVariantOptions', 'renderModelConfigurationControls',
   'updateModelOptions', 'ensureUnavailableModelOption']);
+names.add('modelConfigurationResetClick');
 const found = new Map();
 function visit(node) {
+  if (ts.isIfStatement(node) && node.expression.getText(source) === 'modelConfigurationReset' &&
+      ts.isBlock(node.thenStatement) && node.getText(source).includes('addEventListener'))
+    found.set('modelConfigurationResetClick', node.getText(source));
   if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) found.set(node.name.text, node.getText(source));
   ts.forEachChild(node, visit);
 }
 visit(source);
 if (found.size !== names.size) throw new Error('Production function extraction failed');
-console.log([...found.values()].join('\n'));
+const Module = require('module'), path = require('path'), load = Module._load;
+const vscode = { env: { language: 'en' }, workspace: { getConfiguration: () => ({ get: (_key, value) => value }) } };
+let notices;
+try {
+  Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+  const messages = require(path.resolve(path.dirname(process.argv[1]), '../out/i18n.js')).messages;
+  notices = ['en', 'ja'].map(locale => { vscode.env.language = locale; return { locale, text: messages.labelDynamicModelOptionsBlocked() }; });
+} finally { Module._load = load; }
+console.log(JSON.stringify({ functions: [...found.values()].join('\n'), notices }));
 """
 BOOTSTRAP = """
 var modelSelect = document.querySelector('#model-select');
@@ -32,7 +44,7 @@ var modelConfigurationGroup = document.querySelector('#model-configuration-group
 var modelConfigurationControls = document.querySelector('#model-configuration-controls');
 var modelConfigurationNote = document.querySelector('#model-configuration-note');
 var modelExperimentalNote = document.querySelector('#model-experimental-note');
-var modelConfigurationReset = null;
+var modelConfigurationReset = document.querySelector('#model-configuration-reset');
 var modelConfigurationState, activeConfigurationModel, pendingModelReasoningEffort = '';
 var modelConfigurationExecutionEnabled = true, experimentalModelQualityEnabled = true;
 var experimentalModelQualityNote = 'Legacy fallback';
@@ -60,6 +72,8 @@ window.fixture = {
   refresh: (items, selection) => { groups = items; return updateModelOptions(selection); },
   missing: selection => ensureUnavailableModelOption(modelSelect, selection),
   state: () => modelConfigurationState
+  , permissions: enabled => modelConfigurationExecutionEnabled = enabled
+  , notice: value => strings.labelDynamicModelOptionsBlocked = value
 };
 """
 HTML = """<style>
@@ -68,14 +82,16 @@ body { margin: 16px; } select { max-width: 100%; width: 100%; }
 </style><select id="model-select"></select>
 <div id="model-variant-group"><select id="model-variant-select"></select></div>
 <p id="model-experimental-note"></p><div id="model-configuration-group">
-<div class="form-grid" id="model-configuration-controls"></div><p id="model-configuration-note"></p></div>"""
+<div class="form-grid" id="model-configuration-controls"></div><p id="model-configuration-note"></p>
+<button id="model-configuration-reset">Use inherited settings</button></div>"""
 
 
 def main():
-    functions = subprocess.run(
+    extracted = json.loads(subprocess.run(
         ["node", "-e", EXTRACT, str(SCRIPT)],
         cwd=ROOT, check=True, capture_output=True, text=True, encoding="utf-8",
-    ).stdout
+    ).stdout)
+    functions = extracted["functions"]
     model = {"id": "synthetic", "vendor": "fixture", "configurationStatus": "available",
              "configurationOptions": [{"key": "contextSize", "label": "Context",
                                        "choices": [{"value": 4096, "label": "4096"}]}]}
@@ -124,6 +140,21 @@ def main():
                 expect(page.locator("#model-experimental-note")).to_be_hidden()
                 assert page.locator("input[type='checkbox']").count() == 0
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                for localized in extracted["notices"]:
+                  locale, notice = localized["locale"], localized["text"]
+                  page.evaluate("value => fixture.notice(value)", notice)
+                  page.evaluate("() => fixture.permissions(false)")
+                  page.evaluate("args => fixture.refresh(...args)", [[group], saved])
+                  expect(control).to_be_disabled()
+                  assert page.evaluate("fixture.state()") == saved["modelConfiguration"]
+                  reset = page.locator("#model-configuration-reset")
+                  expect(reset).to_be_visible()
+                  reset.click()
+                  assert page.evaluate("fixture.state()") == {}
+                  expect(page.locator("#model-configuration-controls select")).to_have_count(0)
+                  expect(page.locator("#model-configuration-note")).to_have_text(notice)
+                  assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                  results.append({"viewport": label, "locale": locale, "permissionDisabled": "PASS"})
                 assert not errors, errors
                 results.append({"viewport": label, "result": "PASS"})
                 page.close()

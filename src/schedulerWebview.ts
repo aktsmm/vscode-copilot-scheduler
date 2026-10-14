@@ -38,7 +38,10 @@ import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import { migrateLegacyModelConfiguration } from "./model-configuration";
-import { supportsConfiguredModelExecution } from "./configured-model-provider";
+import {
+  supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
+} from "./configured-model-provider";
 import {
   MAX_TASK_ATTACHMENTS,
   getAttachmentDisplayName,
@@ -179,9 +182,10 @@ export class SchedulerWebview {
     experimentalModelQualityNote: string;
     modelConfigurationExecutionEnabled: boolean;
   } {
-    const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
+    const experimentalModelQualityEnabled =
+      isExperimentalModelQualityEnabled() && supportsSystemMessageForwarding();
     const modelConfigurationExecutionEnabled =
-      supportsConfiguredModelExecution();
+      supportsConfiguredModelExecution() && supportsSystemMessageForwarding();
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
     ) =>

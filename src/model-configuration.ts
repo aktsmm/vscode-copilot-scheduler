@@ -238,6 +238,7 @@ export async function loadModelConfigurationCatalog(
 export function migrateLegacyModelConfiguration(
   selection: ModelSelectionFields,
   model: ModelInfo,
+  allowExplicitOverrides = true,
 ): ModelSelectionFields {
   if (
     selection.modelConfiguration !== undefined ||
@@ -247,6 +248,7 @@ export function migrateLegacyModelConfiguration(
     return selection;
   const effort = selection.modelReasoningEffort?.trim();
   if (!effort) return { ...selection, modelConfiguration: {} };
+  if (!allowExplicitOverrides) return selection;
   const descriptor = model.configurationOptions.find(
     (entry) => entry.key === "reasoningEffort",
   );
