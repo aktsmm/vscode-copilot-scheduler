@@ -11,7 +11,9 @@ Schedule recurring or one-time AI prompts in VS Code.
 
 ## Stable And Preview
 
-Stable 1.8.6 supports Agent and model selection. It does not offer detailed model options or new legacy thinking-effort choices. Existing task settings are retained; explicit detailed overrides require Preview instead of silently falling back. Use the explicit inherit action to clear task overrides. The task form's channel link opens the distribution page only.
+Stable mutation tools reject new explicit detailed overrides before model resolution or persistence. Echoing the same saved map with unchanged model binding is a no-op; changing its values or binding still requires Preview. Unrelated edits preserve existing overrides; an explicit empty override map clears only task overrides and inherits shared settings. Preview still accepts detailed selections.
+
+Stable 1.8.7 supports Agent and model selection. It does not offer detailed model options or new legacy thinking-effort choices. Existing task settings are retained; explicit detailed overrides require Preview instead of silently falling back. Use the explicit inherit action to clear task overrides. The task form's channel link opens the distribution page only.
 
 [GitHub Preview 1.9.0](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0) supports experimental detailed options on authorized hosts. It uses the same extension ID and replaces Stable in that profile; use a separate test profile if needed. Preview instructions below describe experimental capabilities, not Stable availability.
 

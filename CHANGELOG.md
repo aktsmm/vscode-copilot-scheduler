@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.7] - 2026-10-15
+
+### Fixed
+
+- Stable mutation tools reject new explicit detailed model overrides before resolution or persistence. Unchanged saved-map echoes with unchanged model binding are treated as no-op fields, not new selections; changed values or binding remain blocked. Existing overrides survive unrelated edits, and explicit inheritance remains available; Preview retains detailed-option writes.
+
 ## [1.8.6] - 2026-10-15
 
 Stable release: Agent and model selection only. Detailed model inputs and new legacy thinking-effort choices are reserved for GitHub Preview. Existing task values are retained; explicit detailed overrides stop without fallback in Stable and can be cleared only through an explicit inheritance action. Both release routes are supported, with fixed channel links that do not install extensions or grant permission.

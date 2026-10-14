@@ -369,61 +369,80 @@ suite("lmTools scheduler_query", () => {
 
   test("kind=list_models returns ids and supported reasoning efforts", async () => {
     const provider = require("../../configured-model-provider");
-    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
-    Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => true });
-    try {
-    const tool = createSchedulerQueryTool(
-      new FakeScheduleManager([]) as unknown as ScheduleManager,
-      fakeCatalogProvider(),
-    );
-    const payload = parseJson(await invoke(tool, { kind: "list_models" }));
-    assert.strictEqual(payload.ok, true);
-    assert.strictEqual(payload.source, "api");
-    assert.deepStrictEqual(payload.configurationExecutionRequirements, {
-      explicitChatParticipant: true,
-      forwardedMessageRoles: ["user", "assistant"],
-      systemMessages: "blocked",
-      inheritedSettings: "shared_values_not_reset",
+    const declaration = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
+    Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+      ...declaration,
+      value: () => true,
     });
-    const models = payload.models as Array<Record<string, unknown>>;
-    assert.strictEqual(models.length, 7);
-    assert.strictEqual(models[1]?.id, "gpt-5-codex");
-    assert.ok(Array.isArray(models[1]?.supportedReasoningEfforts));
-    assert.deepStrictEqual(models[2]?.supportedReasoningEfforts, [
-      "none",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]);
-    for (const model of models.slice(3, 5)) {
-      assert.deepStrictEqual(model.supportedReasoningEfforts, [
+    try {
+      const tool = createSchedulerQueryTool(
+        new FakeScheduleManager([]) as unknown as ScheduleManager,
+        fakeCatalogProvider(),
+      );
+      const payload = parseJson(await invoke(tool, { kind: "list_models" }));
+      assert.strictEqual(payload.ok, true);
+      assert.strictEqual(payload.source, "api");
+      assert.deepStrictEqual(payload.configurationExecutionRequirements, {
+        explicitChatParticipant: true,
+        forwardedMessageRoles: ["user", "assistant"],
+        systemMessages: "blocked",
+        inheritedSettings: "shared_values_not_reset",
+      });
+      const models = payload.models as Array<Record<string, unknown>>;
+      assert.strictEqual(models.length, 7);
+      assert.strictEqual(models[1]?.id, "gpt-5-codex");
+      assert.ok(Array.isArray(models[1]?.supportedReasoningEfforts));
+      assert.deepStrictEqual(models[2]?.supportedReasoningEfforts, [
+        "none",
         "low",
         "medium",
         "high",
+        "xhigh",
+        "max",
       ]);
-    }
-    assert.deepStrictEqual(
-      models
-        .slice(5)
-        .map((model) => [model.id, model.supportedReasoningEfforts]),
-      [
-        ["auto", []],
-        ["copilot-utility", []],
-      ],
-    );
+      for (const model of models.slice(3, 5)) {
+        assert.deepStrictEqual(model.supportedReasoningEfforts, [
+          "low",
+          "medium",
+          "high",
+        ]);
+      }
+      assert.deepStrictEqual(
+        models
+          .slice(5)
+          .map((model) => [model.id, model.supportedReasoningEfforts]),
+        [
+          ["auto", []],
+          ["copilot-utility", []],
+        ],
+      );
     } finally {
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declaration,
+      );
     }
   });
 
   test("Stable model discovery keeps model ids but hides detailed and legacy options", async () => {
     const provider = require("../../configured-model-provider");
-    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
+    const declaration = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
     try {
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => false });
-      const tool = createSchedulerQueryTool(new FakeScheduleManager([]) as unknown as ScheduleManager, fakeCatalogProvider());
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declaration,
+        value: () => false,
+      });
+      const tool = createSchedulerQueryTool(
+        new FakeScheduleManager([]) as unknown as ScheduleManager,
+        fakeCatalogProvider(),
+      );
       const payload = parseJson(await invoke(tool, { kind: "list_models" }));
       const models = payload.models as Array<Record<string, unknown>>;
       assert.strictEqual(models.length, 7);
@@ -433,7 +452,11 @@ suite("lmTools scheduler_query", () => {
         assert.strictEqual(model.configurationExecution, "preview_required");
       }
     } finally {
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declaration,
+      );
     }
   });
 

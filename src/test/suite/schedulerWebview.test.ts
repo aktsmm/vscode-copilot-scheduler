@@ -3714,7 +3714,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       const stable = wv.buildModelPickerPayload(models);
       assert.strictEqual(stable.experimentalModelQualityEnabled, false);
       assert.strictEqual(stable.modelConfigurationExecutionEnabled, false);
-      assert.ok(stable.modelPickerDefault[0].variants.every((variant) => !variant.reasoningEffort));
+      assert.ok(
+        stable.modelPickerDefault[0].variants.every(
+          (variant) => !variant.reasoningEffort,
+        ),
+      );
       Object.defineProperty(provider, "hasSystemMessageDeclaration", {
         ...declarationDescriptor,
         value: () => true,
@@ -3742,7 +3746,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
         false,
       );
     } finally {
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declarationDescriptor);
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declarationDescriptor,
+      );
       Object.defineProperty(
         provider,
         "supportsSystemMessageForwarding",
@@ -3919,14 +3927,31 @@ suite("SchedulerWebview Script Contract Tests", () => {
 
   test("release channel navigation opens only fixed Stable and Preview destinations", async () => {
     const provider = require("../../configured-model-provider");
-    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
-    const external = Object.getOwnPropertyDescriptor(vscode.env, "openExternal")!;
+    const declaration = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
+    const external = Object.getOwnPropertyDescriptor(
+      vscode.env,
+      "openExternal",
+    )!;
     const destinations: string[] = [];
-    const webview = SchedulerWebview as unknown as { handleMessage(message: { type: "openReleaseChannel" }): Promise<void> };
+    const webview = SchedulerWebview as unknown as {
+      handleMessage(message: { type: "openReleaseChannel" }): Promise<void>;
+    };
     try {
-      Object.defineProperty(vscode.env, "openExternal", { ...external, value: async (uri: vscode.Uri) => { destinations.push(uri.toString(true)); return true; } });
+      Object.defineProperty(vscode.env, "openExternal", {
+        ...external,
+        value: async (uri: vscode.Uri) => {
+          destinations.push(uri.toString(true));
+          return true;
+        },
+      });
       for (const preview of [false, true]) {
-        Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => preview });
+        Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+          ...declaration,
+          value: () => preview,
+        });
         await webview.handleMessage({ type: "openReleaseChannel" });
       }
       assert.deepStrictEqual(destinations, [
@@ -3935,7 +3960,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       ]);
     } finally {
       Object.defineProperty(vscode.env, "openExternal", external);
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declaration,
+      );
     }
   });
 

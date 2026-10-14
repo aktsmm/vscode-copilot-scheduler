@@ -716,11 +716,13 @@ export class SchedulerWebview {
         break;
 
       case "openReleaseChannel":
-        await vscode.env.openExternal(vscode.Uri.parse(
-          hasSystemMessageDeclaration()
-            ? "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler"
-            : "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
-        ));
+        await vscode.env.openExternal(
+          vscode.Uri.parse(
+            hasSystemMessageDeclaration()
+              ? "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler"
+              : "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
+          ),
+        );
         break;
 
       case "openModelRuntimeArguments":

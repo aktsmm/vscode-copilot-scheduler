@@ -277,14 +277,16 @@ async function handleListModels(
       configurationExecution: !preview
         ? "preview_required"
         : supportsConfiguredModelExecution()
-        ? "per_request_bound_model"
-        : "requires_vscode_1_141",
-      supportedReasoningEfforts: preview ? getSupportedExperimentalReasoningEfforts({
-        id: model.id,
-        name: model.name,
-        vendor: model.vendor,
-        family: model.family,
-      }) : [],
+          ? "per_request_bound_model"
+          : "requires_vscode_1_141",
+      supportedReasoningEfforts: preview
+        ? getSupportedExperimentalReasoningEfforts({
+            id: model.id,
+            name: model.name,
+            vendor: model.vendor,
+            family: model.family,
+          })
+        : [],
     })),
   });
 }
