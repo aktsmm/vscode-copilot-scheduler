@@ -182,10 +182,9 @@ export class SchedulerWebview {
     experimentalModelQualityNote: string;
     modelConfigurationExecutionEnabled: boolean;
   } {
-    const experimentalModelQualityEnabled =
-      isExperimentalModelQualityEnabled() && supportsSystemMessageForwarding();
+    const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
     const modelConfigurationExecutionEnabled =
-      supportsConfiguredModelExecution() && supportsSystemMessageForwarding();
+      supportsConfiguredModelExecution();
     const relabelDefaultVariant = (
       groups: ReturnType<typeof buildModelPickerGroups>,
     ) =>
@@ -197,6 +196,7 @@ export class SchedulerWebview {
             ? migrateLegacyModelConfiguration(
                 { modelReasoningEffort: variant.reasoningEffort },
                 variant.model,
+                supportsSystemMessageForwarding(),
               ).modelConfiguration
             : undefined,
           label:

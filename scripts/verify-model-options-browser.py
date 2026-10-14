@@ -72,7 +72,7 @@ window.fixture = {
   refresh: (items, selection) => { groups = items; return updateModelOptions(selection); },
   missing: selection => ensureUnavailableModelOption(modelSelect, selection),
   state: () => modelConfigurationState
-  , permissions: enabled => modelConfigurationExecutionEnabled = enabled
+  , dynamicSupport: enabled => modelConfigurationExecutionEnabled = enabled
   , notice: value => strings.labelDynamicModelOptionsBlocked = value
 };
 """
@@ -143,7 +143,7 @@ def main():
                 for localized in extracted["notices"]:
                   locale, notice = localized["locale"], localized["text"]
                   page.evaluate("value => fixture.notice(value)", notice)
-                  page.evaluate("() => fixture.permissions(false)")
+                  page.evaluate("() => fixture.dynamicSupport(false)")
                   page.evaluate("args => fixture.refresh(...args)", [[group], saved])
                   expect(control).to_be_disabled()
                   assert page.evaluate("fixture.state()") == saved["modelConfiguration"]
@@ -154,7 +154,7 @@ def main():
                   expect(page.locator("#model-configuration-controls select")).to_have_count(0)
                   expect(page.locator("#model-configuration-note")).to_have_text(notice)
                   assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-                  results.append({"viewport": label, "locale": locale, "permissionDisabled": "PASS"})
+                  results.append({"viewport": label, "locale": locale, "dynamicUnsupportedDisabled": "PASS"})
                 assert not errors, errors
                 results.append({"viewport": label, "result": "PASS"})
                 page.close()

@@ -3591,6 +3591,138 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.strictEqual(api.cleared(), 0);
   });
 
+  test("legacy variant changes still apply when dynamic options are unsupported", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    let changed: (() => void) | undefined;
+    const selector = {
+      value: "",
+      addEventListener: (_event: string, listener: () => void) => {
+        changed = listener;
+      },
+    };
+    const api = new Function(
+      "modelVariantSelect",
+      `var modelConfigurationExecutionEnabled=false;var modelConfigurationState=undefined;var cleared=0;var updated=0;var modelSelect={value:''};function getActiveModelPickerGroups(){return [];}function findModelPickerGroup(){return null;}function updateModelVariantOptions(){updated++;}function updateModelSelectionStatus(){}function scheduleLayoutRefresh(){}function clearPendingModelSelection(){cleared++;}${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}return {cleared:()=>cleared,updated:()=>updated};`,
+    )(selector);
+    assert.ok(changed);
+    changed!();
+    assert.strictEqual(api.cleared(), 1);
+    assert.strictEqual(api.updated(), 1);
+  });
+
+  test("model picker payload enables detailed and legacy options without System permission", () => {
+    const provider = require("../../configured-model-provider");
+    const executionDescriptor = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsConfiguredModelExecution",
+    )!;
+    const systemDescriptor = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsSystemMessageForwarding",
+    )!;
+    const wv = SchedulerWebview as unknown as {
+      buildModelPickerPayload(models: ModelInfo[]): {
+        modelConfigurationExecutionEnabled: boolean;
+        experimentalModelQualityEnabled: boolean;
+        modelPickerDefault: Array<{
+          variants: Array<{
+            reasoningEffort?: string;
+            legacyModelConfiguration?: unknown;
+          }>;
+        }>;
+      };
+    };
+    const models: ModelInfo[] = [
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        vendor: "copilot",
+        family: "gpt-5",
+        description: "",
+        configurationStatus: "available",
+        configurationOptions: [
+          {
+            key: "reasoningEffort",
+            label: "Thinking",
+            choices: [{ value: "high", label: "High" }],
+          },
+        ],
+      },
+    ];
+    try {
+      Object.defineProperty(provider, "supportsConfiguredModelExecution", {
+        ...executionDescriptor,
+        value: () => true,
+      });
+      Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+        ...systemDescriptor,
+        value: () => false,
+      });
+      const payload = wv.buildModelPickerPayload(models);
+      assert.strictEqual(payload.modelConfigurationExecutionEnabled, true);
+      assert.strictEqual(payload.experimentalModelQualityEnabled, true);
+      const variants = payload.modelPickerDefault[0].variants;
+      assert.ok(variants.some((variant) => variant.reasoningEffort === "high"));
+      // Without System permission only the inherit variant maps to a dynamic selection.
+      for (const variant of variants)
+        assert.strictEqual(
+          variant.legacyModelConfiguration !== undefined,
+          !variant.reasoningEffort,
+        );
+
+      Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+        ...systemDescriptor,
+        value: () => true,
+      });
+      const permitted = wv.buildModelPickerPayload(models);
+      assert.strictEqual(permitted.modelConfigurationExecutionEnabled, true);
+      assert.deepStrictEqual(
+        permitted.modelPickerDefault[0].variants.find(
+          (variant) => variant.reasoningEffort === "high",
+        )?.legacyModelConfiguration,
+        { reasoningEffort: "high" },
+      );
+
+      Object.defineProperty(provider, "supportsConfiguredModelExecution", {
+        ...executionDescriptor,
+        value: () => false,
+      });
+      assert.strictEqual(
+        wv.buildModelPickerPayload(models).modelConfigurationExecutionEnabled,
+        false,
+      );
+    } finally {
+      Object.defineProperty(
+        provider,
+        "supportsSystemMessageForwarding",
+        systemDescriptor,
+      );
+      Object.defineProperty(
+        provider,
+        "supportsConfiguredModelExecution",
+        executionDescriptor,
+      );
+    }
+  });
+
+  test("detailed options note states the explicit participant requirement without System permission", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/i18n.ts"),
+      "utf8",
+    );
+    for (const token of [
+      "must start its prompt with an explicit chat participant",
+      "チャット参加者を明示する必要があり",
+    ])
+      assert.ok(
+        sourceContainsToken(source, token),
+        `Missing note token: ${token}`,
+      );
+  });
+
   test("invalid model configuration repairs only on explicit reset", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),

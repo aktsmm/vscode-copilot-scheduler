@@ -1778,7 +1778,8 @@
   }
   if (modelVariantSelect) {
     modelVariantSelect.addEventListener("change", function () {
-      if (!modelConfigurationExecutionEnabled) return;
+      if (!modelConfigurationExecutionEnabled && modelConfigurationState)
+        return;
       clearPendingModelSelection();
       if (modelConfigurationState !== undefined) modelConfigurationState = {};
       var group = findModelPickerGroup(

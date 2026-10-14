@@ -415,7 +415,7 @@ export const messages = {
     ),
 
   // ==================== Agent / Model Descriptions ====================
-  agentNoneName: () => t("None", "なし"),
+  agentNoneName: () => t("Default behavior", "既定の動作"),
   agentNoneDesc: () => t("Default behavior", "デフォルトの動作"),
   agentAgentName: () => t("Agent", "Agent"),
   agentAskName: () => t("Ask", "Ask"),
@@ -528,8 +528,8 @@ export const messages = {
   labelAgent: () => t("Agent", "Agent"),
   labelAgentNote: () =>
     t(
-      "Only user-invocable agents are listed. Agents with `user-invocable: false` in their frontmatter are subagent-only and are hidden.",
-      "直接呼び出せるエージェントのみ表示します。フロントマターで `user-invocable: false` のエージェントはサブエージェント専用のため非表示です。",
+      "When no agent is selected, the prompt's `agent:` setting is used if present; otherwise the default behavior is used. Only user-invocable agents are listed. Agents with `user-invocable: false` in their frontmatter are hidden.",
+      "Agentを指定しない場合、プロンプトに `agent:` の指定があればそれを使い、なければ既定の動作になります。直接呼び出せるエージェントのみ表示します。フロントマターで `user-invocable: false` のエージェントは非表示です。",
     ),
   labelModel: () => t("Model", "モデル"),
   labelDynamicModelOptions: () =>
@@ -538,8 +538,8 @@ export const messages = {
     t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
   labelDynamicModelOptionsBlocked: () =>
     t(
-      "Detailed options require compatible VS Code/provider APIs and model-access approval. Agent system instructions also require the languageModelSystem API permission. Without the required support or permissions, or after API changes, only model selection with inherited settings may be available. Saved overrides are not cleared automatically.",
-      "詳細設定には対応する VS Code・提供元の API とモデルへのアクセス承認が必要です。Agent のシステム指示には languageModelSystem API の利用許可も必要です。未対応・未許可、または仕様変更時には、モデル指定と現在の設定の継承だけが利用可能になる場合があります。保存した個別設定は自動解除しません。",
+      "Detailed options require VS Code 1.141 or later, compatible provider APIs and model-access approval. Without the languageModelSystem API permission, a task with options must start its prompt with an explicit chat participant other than @workspace, @terminal or @vscode; otherwise it stops before sending instead of dropping system instructions. After API changes only inherited settings may be available. Saved overrides are not cleared automatically.",
+      "詳細設定には VS Code 1.141 以降、対応する提供元の API、モデルへのアクセス承認が必要です。languageModelSystem API の利用許可がない場合、個別指定を持つタスクはプロンプト先頭で @workspace・@terminal・@vscode 以外のチャット参加者を明示する必要があり、明示がなければシステム指示を落とさず送信前に停止します。仕様変更時にはモデル指定と現在の設定の継承だけが利用可能になる場合があります。保存した個別設定は自動解除しません。",
     ),
   labelInvalidModelConfiguration: () =>
     t(
