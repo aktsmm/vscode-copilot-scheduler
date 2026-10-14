@@ -356,20 +356,23 @@ async function readVsixManifest(file) {
   });
 }
 
-async function verifyVsixMarketplace(vsixPath) {
+async function verifyVsixMarketplace(vsixPath, allowedProposals = []) {
+  if (allowedProposals.some((proposal) => proposal !== "languageModelSystem")) {
+    throw new Error("Unsupported publication exception: only languageModelSystem is permitted.");
+  }
   const manifest = await readVsixManifest(vsixPath);
   if (
     manifest.enableProposedApi ||
     (Object.hasOwn(manifest, "enabledApiProposals") &&
       (!Array.isArray(manifest.enabledApiProposals) ||
-        manifest.enabledApiProposals.length > 0))
+        manifest.enabledApiProposals.some((proposal) => !allowedProposals.includes(proposal))))
   ) {
     throw new Error(
       "Marketplace publication blocked: the VSIX declares proposed APIs. Keep this build local or prepare an explicitly approved stable-API package.",
     );
   }
   console.log(
-    "Verified Marketplace eligibility: no proposed API declarations.",
+    "Verified Marketplace publication guard: only explicitly allowed proposals, if any.",
   );
   return true;
 }
@@ -586,6 +589,7 @@ async function main() {
     options: {
       "verify-build": { type: "boolean", default: false },
       "verify-marketplace": { type: "boolean", default: false },
+      "allow-proposed-apis": { type: "string" },
       "verify-installed": { type: "boolean", default: false },
       "vscode-executable": { type: "string" },
     },
@@ -614,7 +618,10 @@ async function main() {
           ? await verifyVsixBuild(vsixPath)
           : verifyVsix(vsixPath)) && ok;
       if (ok && values["verify-marketplace"]) {
-        ok = await verifyVsixMarketplace(vsixPath);
+        ok = await verifyVsixMarketplace(
+          vsixPath,
+          values["allow-proposed-apis"] ? [values["allow-proposed-apis"]] : [],
+        );
       }
       if (ok && values["verify-installed"]) {
         if (!values["vscode-executable"])

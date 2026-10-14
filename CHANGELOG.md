@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-10-15
+
+Marketplace Pre-release candidate (`marketplace-preview-v1.9.2`). Packaged and published with `--pre-release`; the only explicitly approved publishing-validation exception is `languageModelSystem`. Stable remains on its normal release channel. Runtime activation and provider-model consent are still separate requirements.
+
+### Changed
+
+- Added a dedicated Marketplace Preview publishing route while keeping GitHub-only Preview and Stable routes independent. No all-API allowance or disabled verification is used.
+- Kept the shared extension display name; the Marketplace Pre-release property identifies this channel. VS Code can offer Switch to Pre-Release Version when publication is accepted.
+
 ## [1.9.1] - 2026-10-15
 
 GitHub-only Preview release (`preview-v1.9.1`); Marketplace Stable remains 1.8.7. The proposed System API declaration and explicit host-activation requirement are unchanged.

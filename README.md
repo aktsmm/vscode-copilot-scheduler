@@ -1,6 +1,6 @@
 # ⏰ Copilot Scheduler
 
-[![Status](https://badgen.net/badge/Status/Preview/yellow)](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.1)
+[![Status](https://badgen.net/badge/Status/Pre-release/yellow)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![VS Marketplace](https://badgen.net/vs-marketplace/v/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![Installs](https://badgen.net/vs-marketplace/i/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![License](https://badgen.net/badge/License/CC%20BY-NC-SA%204.0/gray)](LICENSE)
@@ -9,11 +9,13 @@
 
 Schedule recurring or one-time AI prompts in VS Code.
 
-[**Download the 1.9.1 Preview VSIX from GitHub**](https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.1)
+[**Open Copilot Scheduler on Marketplace**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 
 ## Preview Distribution
 
-This branch (`preview/system-api`) is distributed only as a GitHub Pre-release. Current Marketplace Stable is 1.8.7. Preview 1.9.1 includes the Stable navigation link and shared saved-option update fixes. Install `copilot-scheduler-1.9.1.vsix` using **Extensions: Install from VSIX**. The extension ID remains `yamapan.copilot-scheduler`, so Preview replaces the stable extension in the selected profile and uses the same task storage; a separate test profile is recommended.
+This branch (`preview/system-api`) targets Marketplace Pre-release 1.9.2, with a matching GitHub Pre-release and VSIX. In VS Code's extension details, choose **Switch to Pre-Release Version** after publication is accepted. Current Stable is 1.8.7 and stays on its normal release channel. The extension ID remains `yamapan.copilot-scheduler`; changing channels replaces the version in that profile and uses the same task storage, so a separate test profile is recommended.
+
+Publishing validation allows only the explicitly approved `languageModelSystem` proposal; it does not grant runtime permission or guarantee Marketplace acceptance. The GitHub-only route remains available under `preview-v*` tags; `marketplace-preview-v*` tags use the dedicated pre-release publishing route. A rejection must be investigated, not bypassed with all-API or no-verification flags.
 
 For detailed model options, use the task form's **Open Runtime Arguments** guidance, add Scheduler to `enable-proposed-api`, then fully quit and restart VS Code. Installing Preview does not grant permission, and provider-model consent is separate. To return to Stable 1.8.7, run `code --install-extension yamapan.copilot-scheduler@1.8.7 --force`; Preview-specific saved overrides are not automatically cleared.
 

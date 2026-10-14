@@ -1,8 +1,8 @@
 {
   "name": "copilot-scheduler",
-  "displayName": "Copilot Scheduler (Preview)",
+  "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",

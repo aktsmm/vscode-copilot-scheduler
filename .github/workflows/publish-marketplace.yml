@@ -9,6 +9,7 @@ on:
     tags:
       - "v*.*.*"
       - "preview-v*.*.*"
+      - "marketplace-preview-v*.*.*"
   workflow_dispatch:
     inputs:
       publish:
@@ -50,15 +51,17 @@ jobs:
           }
 
           $ref = "$env:GITHUB_REF"
-          $preview = $ref.StartsWith('refs/tags/preview-v') -or $ref.StartsWith('refs/heads/preview/')
+          $marketplacePreview = $ref.StartsWith('refs/tags/marketplace-preview-v')
+          $preview = $marketplacePreview -or $ref.StartsWith('refs/tags/preview-v') -or $ref.StartsWith('refs/heads/preview/')
           if ($preview -and "${{ inputs.publish }}" -eq 'true') {
             throw "Preview builds cannot publish to VS Code Marketplace."
           }
-          $tagPrefix = if ($preview) { 'preview-v' } else { 'v' }
+          $tagPrefix = if ($marketplacePreview) { 'marketplace-preview-v' } elseif ($preview) { 'preview-v' } else { 'v' }
 
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tagPrefix$version" >> $env:GITHUB_OUTPUT
           "preview=$($preview.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "marketplacePreview=$($marketplacePreview.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "artifact=copilot-scheduler-$version.vsix" >> $env:GITHUB_OUTPUT
 
       - name: Validate tag matches package version
@@ -94,14 +97,24 @@ jobs:
       - name: Package VSIX
         shell: pwsh
         run: |
-          npx vsce package --out "${{ steps.meta.outputs.artifact }}"
+          $packageArgs = @('vsce', 'package', '--out', '${{ steps.meta.outputs.artifact }}')
+          if ('${{ steps.meta.outputs.marketplacePreview }}' -eq 'true') {
+            $packageArgs += '--pre-release'
+          }
+          npx @packageArgs
 
       - name: Verify VSIX contents
         run: npm run verify:vsix -- "${{ steps.meta.outputs.artifact }}"
 
       - name: Verify Marketplace eligibility
-        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish)
-        run: node scripts/verify-vsix-contents.js --verify-marketplace "${{ steps.meta.outputs.artifact }}"
+        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish) || steps.meta.outputs.marketplacePreview == 'true'
+        shell: pwsh
+        run: |
+          $verifyArgs = @('scripts/verify-vsix-contents.js', '--verify-marketplace', '${{ steps.meta.outputs.artifact }}')
+          if ('${{ steps.meta.outputs.marketplacePreview }}' -eq 'true') {
+            $verifyArgs += @('--allow-proposed-apis', 'languageModelSystem')
+          }
+          node @verifyArgs
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v6
@@ -111,7 +124,7 @@ jobs:
           if-no-files-found: error
 
       - name: Ensure marketplace secret is configured
-        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish)
+        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish) || steps.meta.outputs.marketplacePreview == 'true'
         shell: pwsh
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -121,12 +134,16 @@ jobs:
           }
 
       - name: Publish to VS Code Marketplace
-        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish)
+        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish) || steps.meta.outputs.marketplacePreview == 'true'
         shell: pwsh
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          npx vsce publish --packagePath "${{ steps.meta.outputs.artifact }}" -p "$env:VSCE_PAT"
+          $publishArgs = @('vsce', 'publish', '--packagePath', '${{ steps.meta.outputs.artifact }}', '-p', $env:VSCE_PAT)
+          if ('${{ steps.meta.outputs.marketplacePreview }}' -eq 'true') {
+            $publishArgs += @('--pre-release', '--allow-proposed-apis', 'languageModelSystem')
+          }
+          npx @publishArgs
 
       - name: Create GitHub release with VSIX
         if: startsWith(github.ref, 'refs/tags/')
@@ -135,6 +152,6 @@ jobs:
           files: ${{ steps.meta.outputs.artifact }}
           generate_release_notes: true
           name: ${{ steps.meta.outputs.preview == 'true' && format('Copilot Scheduler {0} Preview', steps.meta.outputs.version) || steps.meta.outputs.tag }}
-          body: ${{ steps.meta.outputs.preview == 'true' && 'GitHub-only Preview; not published to VS Code Marketplace. Install the attached VSIX manually. It uses the stable extension ID and replaces the stable version in that profile, so a separate test profile is recommended. Detailed model options require explicit enable-proposed-api activation and a full VS Code restart; installation alone does not grant permission. Follow the Preview Distribution instructions in the README. Provider-model consent is separate.' || '' }}
+          body: ${{ steps.meta.outputs.marketplacePreview == 'true' && 'Marketplace Pre-release. Use Switch to Pre-Release Version in VS Code, or install the attached VSIX. Publication uses only the explicit languageModelSystem verification exception, not automatic runtime authorization. Detailed options require host activation/full restart and separate provider-model consent. Stable stays on the release channel.' || (steps.meta.outputs.preview == 'true' && 'GitHub-only Preview; not published to VS Code Marketplace. Install the attached VSIX manually. It uses the stable extension ID and replaces the stable version in that profile, so a separate test profile is recommended. Detailed model options require explicit enable-proposed-api activation and a full VS Code restart; installation alone does not grant permission. Follow the Preview Distribution instructions in the README. Provider-model consent is separate.' || '') }}
           prerelease: ${{ steps.meta.outputs.preview == 'true' }}
           make_latest: ${{ steps.meta.outputs.preview == 'true' && 'false' || 'true' }}

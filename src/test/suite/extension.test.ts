@@ -419,6 +419,12 @@ suite("Extension Test Suite", () => {
         blocked: false,
       },
       {
+        ref: `refs/tags/marketplace-preview-v${manifest.version}`,
+        preview: true,
+        publish: false,
+        blocked: false,
+      },
+      {
         ref: "refs/heads/preview/system-api",
         preview: true,
         publish: false,
@@ -457,7 +463,7 @@ suite("Extension Test Suite", () => {
         );
         assert.ok(
           result.stdout.includes(
-            `tag=${scenario.preview ? "preview-v" : "v"}${manifest.version}`,
+            `tag=${scenario.ref.startsWith("refs/tags/marketplace-preview-v") ? "marketplace-preview-v" : scenario.preview ? "preview-v" : "v"}${manifest.version}`,
           ),
           result.stdout,
         );
@@ -695,7 +701,7 @@ suite("Extension Test Suite", () => {
       path.join(root, "scripts/verify-vsix-contents.js"),
     ) as {
       readVsixManifest(file: string): Promise<{ version: string }>;
-      verifyVsixMarketplace(file: string): Promise<boolean>;
+      verifyVsixMarketplace(file: string, allowed?: string[]): Promise<boolean>;
     };
     const { ZipFile } = require("yazl");
     const fixtureRoot = fs.mkdtempSync(
@@ -749,6 +755,10 @@ suite("Extension Test Suite", () => {
           verifier.verifyVsixMarketplace(fixture),
           /Marketplace publication blocked/,
         );
+        if (Array.isArray(proposals)) {
+          assert.strictEqual(await verifier.verifyVsixMarketplace(fixture, ["languageModelSystem"]), true);
+          await assert.rejects(verifier.verifyVsixMarketplace(fixture, ["otherApi"]), /Unsupported publication exception/);
+        }
       }
       await write(
         "extension/package.json",
