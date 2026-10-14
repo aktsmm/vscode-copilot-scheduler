@@ -429,46 +429,155 @@ suite("taskMutationService model resolution", () => {
     );
   });
 
-  test("explicit dynamic updates replace inherited legacy effort without a manual clear", async () => {
-    const selected = fakeModel({
-      id: "shared",
-      vendor: "copilot",
-      configurationStatus: "available",
-      configurationOptions: [
-        {
-          key: "reasoningEffort",
-          label: "Thinking",
-          choices: [{ value: "low", label: "Low" }],
-        },
-      ],
+  test("Stable mutations reject new detailed overrides before persistence", async () => {
+    const provider = require("../../configured-model-provider");
+    const declaration = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
+    const saved = {
+      ...baseInput(),
+      id: "stable-existing",
+      enabled: false,
+      model: "shared",
+      modelConfiguration: { reasoningEffort: "high" },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as ScheduledTask;
+    const fake = new FakeScheduleManager([saved]);
+    const mutation = createLmToolMutationClient({
+      scheduleManager: fake as unknown as ScheduleManager,
     });
-    for (const identity of [{}, { model: selected.id }]) {
-      const task = {
+    try {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declaration,
+        value: () => false,
+      });
+      const created = await mutation.createTask({
         ...baseInput(),
-        id: "legacy",
         enabled: false,
-        model: selected.id,
-        modelVendor: selected.vendor,
-        modelReasoningEffort: "high",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as ScheduledTask;
-      const fake = new FakeScheduleManager([task]);
-      const c = client(fake, catalogResolver([selected]));
-      const result = await c.updateTask(task.id, {
-        ...identity,
+        model: "shared",
         modelConfiguration: { reasoningEffort: "low" },
       });
-      assertOk(result);
-      assert.deepStrictEqual(result.task.modelConfiguration, {
+      assert.strictEqual(created.ok, false);
+      assert.strictEqual(fake.lastCreateInput, undefined);
+      const updated = await mutation.updateTask(saved.id, {
+        modelConfiguration: { reasoningEffort: "low" },
+      });
+      assert.strictEqual(updated.ok, false);
+      assert.strictEqual(fake.lastUpdates, undefined);
+      assert.deepStrictEqual(fake.getTask(saved.id)?.modelConfiguration, {
+        reasoningEffort: "high",
+      });
+      const echoed = {
+        name: "echoed-existing-settings",
+        modelConfiguration: { reasoningEffort: "high" },
+      };
+      const originalEcho = JSON.stringify(echoed);
+      assertOk(await mutation.updateTask(saved.id, echoed));
+      assert.strictEqual(JSON.stringify(echoed), originalEcho);
+      assert.deepStrictEqual(fake.lastUpdates, {
+        name: "echoed-existing-settings",
+      });
+      assert.deepStrictEqual(fake.getTask(saved.id)?.modelConfiguration, {
+        reasoningEffort: "high",
+      });
+      for (const field of ["model", "modelVendor", "modelVersion"] as const) {
+        const previousUpdates: Partial<CreateTaskInput> | undefined =
+          fake.lastUpdates;
+        const rebound = await mutation.updateTask(saved.id, {
+          [field]: "different",
+          modelConfiguration: { reasoningEffort: "high" },
+        });
+        assert.strictEqual(rebound.ok, false);
+        assert.strictEqual(fake.lastUpdates, previousUpdates);
+      }
+      assertOk(await mutation.updateTask(saved.id, { name: "renamed" }));
+      assert.deepStrictEqual(fake.getTask(saved.id)?.modelConfiguration, {
+        reasoningEffort: "high",
+      });
+      assertOk(await mutation.updateTask(saved.id, { modelConfiguration: {} }));
+      assert.deepStrictEqual(fake.getTask(saved.id)?.modelConfiguration, {});
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declaration,
+        value: () => true,
+      });
+      const previewCreated = await mutation.createTask({
+        ...baseInput(),
+        enabled: false,
+        model: "shared",
+        modelConfiguration: { reasoningEffort: "low" },
+      });
+      assertOk(previewCreated);
+      assert.deepStrictEqual(previewCreated.task.modelConfiguration, {
         reasoningEffort: "low",
       });
-      assert.ok(!result.task.modelReasoningEffort);
-      const conflict = await c.updateTask(task.id, {
-        modelConfiguration: { reasoningEffort: "low" },
-        modelReasoningEffort: "high",
+    } finally {
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declaration,
+      );
+    }
+  });
+
+  test("explicit dynamic updates replace inherited legacy effort without a manual clear", async () => {
+    const provider = require("../../configured-model-provider");
+    const declaration = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
+    Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+      ...declaration,
+      value: () => true,
+    });
+    try {
+      const selected = fakeModel({
+        id: "shared",
+        vendor: "copilot",
+        configurationStatus: "available",
+        configurationOptions: [
+          {
+            key: "reasoningEffort",
+            label: "Thinking",
+            choices: [{ value: "low", label: "Low" }],
+          },
+        ],
       });
-      assert.strictEqual(conflict.ok, false);
+      for (const identity of [{}, { model: selected.id }]) {
+        const task = {
+          ...baseInput(),
+          id: "legacy",
+          enabled: false,
+          model: selected.id,
+          modelVendor: selected.vendor,
+          modelReasoningEffort: "high",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as ScheduledTask;
+        const fake = new FakeScheduleManager([task]);
+        const c = client(fake, catalogResolver([selected]));
+        const result = await c.updateTask(task.id, {
+          ...identity,
+          modelConfiguration: { reasoningEffort: "low" },
+        });
+        assertOk(result);
+        assert.deepStrictEqual(result.task.modelConfiguration, {
+          reasoningEffort: "low",
+        });
+        assert.ok(!result.task.modelReasoningEffort);
+        const conflict = await c.updateTask(task.id, {
+          modelConfiguration: { reasoningEffort: "low" },
+          modelReasoningEffort: "high",
+        });
+        assert.strictEqual(conflict.ok, false);
+      }
+    } finally {
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declaration,
+      );
     }
   });
 
@@ -486,21 +595,23 @@ suite("taskMutationService model resolution", () => {
         },
       ],
     });
-    const fake = new FakeScheduleManager();
-    const c = client(fake, catalogResolver([selected]));
-    const created = await c.createTask({
+    const saved = {
       ...baseInput(),
+      id: "saved-dynamic",
       model: selected.id,
       modelVendor: selected.vendor,
       modelConfiguration: { mode: "normal:high" },
-    });
-    assertOk(created);
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as ScheduledTask;
+    const fake = new FakeScheduleManager([saved]);
+    const c = client(fake, catalogResolver([selected]));
     for (const updates of [
       { model: selected.id },
       { model: selected.id, modelVendor: selected.vendor },
       { modelVendor: selected.vendor },
     ]) {
-      const result = await c.updateTask(created.task.id, updates);
+      const result = await c.updateTask(saved.id, updates);
       assertOk(result);
       assert.deepStrictEqual(result.task.modelConfiguration, {
         mode: "normal:high",
@@ -522,25 +633,27 @@ suite("taskMutationService model resolution", () => {
         },
       ],
     });
-    const fake = new FakeScheduleManager();
+    const saved = {
+      ...baseInput(),
+      id: "saved-provider",
+      model: selected.id,
+      modelVendor: selected.vendor,
+      modelConfiguration: { mode: "normal:high" },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as ScheduledTask;
+    const fake = new FakeScheduleManager([saved]);
     const c = client(
       fake,
       catalogResolver([selected, { ...selected, vendor: "other" }]),
     );
-    const created = await c.createTask({
-      ...baseInput(),
-      model: selected.id,
-      modelVendor: selected.vendor,
-      modelConfiguration: { mode: "normal:high" },
-    });
-    assertOk(created);
-    const changed = await c.updateTask(created.task.id, {
+    const changed = await c.updateTask(saved.id, {
       modelVendor: "other",
     });
     assertOk(changed);
     assert.strictEqual(changed.task.modelVendor, "other");
     assert.deepStrictEqual(changed.task.modelConfiguration, {});
-    const cleared = await c.updateTask(created.task.id, { model: "" });
+    const cleared = await c.updateTask(saved.id, { model: "" });
     assertOk(cleared);
     assert.strictEqual(cleared.task.modelConfiguration, undefined);
   });

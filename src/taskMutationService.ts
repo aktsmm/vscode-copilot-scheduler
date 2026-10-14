@@ -5,15 +5,18 @@ import {
   normalizeModelSelection,
 } from "./modelSelection";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { isDeepStrictEqual } from "util";
 import {
   migrateLegacyModelConfiguration,
   validateModelConfiguration,
 } from "./model-configuration";
 import {
+  hasSystemMessageDeclaration,
   supportsConfiguredModelExecution,
   supportsSystemMessageForwarding,
 } from "./configured-model-provider";
 import type { ScheduleManager } from "./scheduleManager";
+import { messages } from "./i18n";
 import type {
   CreateTaskInput,
   ModelInfo,
@@ -514,6 +517,12 @@ export function createLmToolMutationClient(
               "First-time execution disclaimer has not been accepted. Open the Copilot Scheduler view and accept the disclaimer before creating enabled tasks.",
           };
         }
+        if (
+          !hasSystemMessageDeclaration() &&
+          input.modelConfiguration &&
+          Object.keys(input.modelConfiguration).length > 0
+        )
+          throw new Error(messages.newDetailedOptionsRequirePreview());
         const modelOutcome = await resolveModelFieldsForMutation(
           resolveModelSelection,
           input,
@@ -565,6 +574,35 @@ export function createLmToolMutationClient(
       }
 
       try {
+        if (
+          !hasSystemMessageDeclaration() &&
+          updates.modelConfiguration &&
+          Object.keys(updates.modelConfiguration).length > 0
+        ) {
+          const fields = [
+            "model",
+            "modelName",
+            "modelVendor",
+            "modelFamily",
+            "modelVersion",
+            "modelReasoningEffort",
+          ] as const;
+          if (
+            !isDeepStrictEqual(
+              updates.modelConfiguration,
+              existing.modelConfiguration,
+            ) ||
+            fields.some(
+              (field) =>
+                updates[field] !== undefined &&
+                updates[field] !== existing[field],
+            )
+          )
+            throw new Error(messages.newDetailedOptionsRequirePreview());
+          updates = { ...updates };
+          delete updates.modelConfiguration;
+          for (const field of fields) delete updates[field];
+        }
         const modelOutcome = await resolveModelFieldsForMutation(
           resolveModelSelection,
           updates,
