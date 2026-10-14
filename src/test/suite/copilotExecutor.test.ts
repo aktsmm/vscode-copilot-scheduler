@@ -318,7 +318,9 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
                   .copilotSchedulerPromptBlocked ===
                   "modelConfigurationUnavailable" &&
                 (error as Error).message ===
-                  messages.dynamicConfigurationSystemMessagesUnsupported(),
+                  (require("../../configured-model-provider").hasSystemMessageDeclaration()
+                    ? messages.dynamicConfigurationSystemMessagesUnsupported()
+                    : messages.detailedOptionsRequirePreview()),
             );
             assert.strictEqual(JSON.stringify(configuration), before);
           }

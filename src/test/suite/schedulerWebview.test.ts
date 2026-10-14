@@ -3653,6 +3653,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
       provider,
       "supportsSystemMessageForwarding",
     )!;
+    const declarationDescriptor = Object.getOwnPropertyDescriptor(
+      provider,
+      "hasSystemMessageDeclaration",
+    )!;
     const wv = SchedulerWebview as unknown as {
       buildModelPickerPayload(models: ModelInfo[]): {
         modelConfigurationExecutionEnabled: boolean;
@@ -3683,6 +3687,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
       },
     ];
     try {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declarationDescriptor,
+        value: () => true,
+      });
       Object.defineProperty(provider, "supportsConfiguredModelExecution", {
         ...executionDescriptor,
         value: () => true,
@@ -3698,6 +3706,19 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.ok(variants.some((variant) => variant.reasoningEffort === "high"));
       for (const variant of variants)
         assert.strictEqual(variant.legacyModelConfiguration, undefined);
+
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declarationDescriptor,
+        value: () => false,
+      });
+      const stable = wv.buildModelPickerPayload(models);
+      assert.strictEqual(stable.experimentalModelQualityEnabled, false);
+      assert.strictEqual(stable.modelConfigurationExecutionEnabled, false);
+      assert.ok(stable.modelPickerDefault[0].variants.every((variant) => !variant.reasoningEffort));
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", {
+        ...declarationDescriptor,
+        value: () => true,
+      });
 
       Object.defineProperty(provider, "supportsSystemMessageForwarding", {
         ...systemDescriptor,
@@ -3721,6 +3742,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         false,
       );
     } finally {
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", declarationDescriptor);
       Object.defineProperty(
         provider,
         "supportsSystemMessageForwarding",
@@ -3892,6 +3914,28 @@ suite("SchedulerWebview Script Contract Tests", () => {
       fields.forEach((field, index) =>
         Object.defineProperty(provider, field, descriptors[index]),
       );
+    }
+  });
+
+  test("release channel navigation opens only fixed Stable and Preview destinations", async () => {
+    const provider = require("../../configured-model-provider");
+    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
+    const external = Object.getOwnPropertyDescriptor(vscode.env, "openExternal")!;
+    const destinations: string[] = [];
+    const webview = SchedulerWebview as unknown as { handleMessage(message: { type: "openReleaseChannel" }): Promise<void> };
+    try {
+      Object.defineProperty(vscode.env, "openExternal", { ...external, value: async (uri: vscode.Uri) => { destinations.push(uri.toString(true)); return true; } });
+      for (const preview of [false, true]) {
+        Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => preview });
+        await webview.handleMessage({ type: "openReleaseChannel" });
+      }
+      assert.deepStrictEqual(destinations, [
+        "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
+        "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler",
+      ]);
+    } finally {
+      Object.defineProperty(vscode.env, "openExternal", external);
+      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
     }
   });
 

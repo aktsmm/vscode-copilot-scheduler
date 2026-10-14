@@ -185,11 +185,13 @@ export class SchedulerWebview {
     modelConfigurationSetupAvailable: boolean;
     modelConfigurationSetupNote: string;
   } {
-    const experimentalModelQualityEnabled = isExperimentalModelQualityEnabled();
     const hostSupported = supportsConfiguredModelExecution();
     const systemAllowed = supportsSystemMessageForwarding();
     const systemDeclared = hasSystemMessageDeclaration();
-    const modelConfigurationExecutionEnabled = hostSupported && systemAllowed;
+    const experimentalModelQualityEnabled =
+      systemDeclared && isExperimentalModelQualityEnabled();
+    const modelConfigurationExecutionEnabled =
+      systemDeclared && hostSupported && systemAllowed;
     const modelConfigurationSetupAvailable =
       hostSupported && systemDeclared && !systemAllowed;
     const modelConfigurationSetupNote = !hostSupported
@@ -711,6 +713,14 @@ export class SchedulerWebview {
             modelConfiguration: message.modelConfiguration,
           });
         }
+        break;
+
+      case "openReleaseChannel":
+        await vscode.env.openExternal(vscode.Uri.parse(
+          hasSystemMessageDeclaration()
+            ? "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler"
+            : "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
+        ));
         break;
 
       case "openModelRuntimeArguments":
@@ -1642,6 +1652,9 @@ export class SchedulerWebview {
       labelDynamicModelOptions: messages.labelDynamicModelOptions(),
       actionOpenModelRuntimeArguments:
         messages.actionOpenModelRuntimeArguments(),
+      actionOpenReleaseChannel: hasSystemMessageDeclaration()
+        ? messages.actionOpenStableRelease()
+        : messages.actionOpenPreviewRelease(),
       labelInheritModelOptions: messages.labelInheritModelOptions(),
       labelDynamicModelOptionsBlocked:
         messages.labelDynamicModelOptionsBlocked(),
@@ -2848,6 +2861,9 @@ export class SchedulerWebview {
               <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
             </div>
 
+            <div class="form-group col-12">
+              <button type="button" class="btn-secondary" id="release-channel-button">${escapeHtml(strings.actionOpenReleaseChannel)}</button>
+            </div>
             <div class="form-group col-12" id="model-configuration-group" style="display:none;">
               <div class="form-grid" id="model-configuration-controls"></div>
               <p class="note" id="model-configuration-note"></p>

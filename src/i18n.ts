@@ -447,6 +447,11 @@ export const messages = {
       "Per-task model options cannot forward system instructions on this host. Use inherited model settings or a compatible explicit Chat participant. The saved options were not cleared and no fallback model was used.",
       "この環境ではタスク別モデル設定でシステム指示を転送できません。共有モデル設定の継承、または対応する明示的な Chat 参加者を利用してください。保存済み設定の解除や別モデルへの代替は行っていません。",
     ),
+  detailedOptionsRequirePreview: () =>
+    t(
+      "These saved detailed model options require Preview. Use Preview or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
+      "保存したモデルの詳細設定にはPreview版が必要です。Previewを使うか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
+    ),
   providerModelUnavailable: () =>
     t(
       "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
@@ -551,6 +556,10 @@ export const messages = {
     ),
   actionOpenModelRuntimeArguments: () =>
     t("Open Runtime Arguments", "起動設定を開く"),
+  actionOpenPreviewRelease: () =>
+    t("Try detailed options in Preview", "詳細設定を試す：Preview版"),
+  actionOpenStableRelease: () =>
+    t("View the Stable version", "安定版はこちら"),
   modelRuntimeArgumentsUnavailable: () =>
     t(
       "Could not open runtime arguments. Use Preferences: Configure Runtime Arguments from the Command Palette on desktop VS Code.",

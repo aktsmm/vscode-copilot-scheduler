@@ -1855,6 +1855,12 @@
       scheduleLayoutRefresh();
     });
   }
+  var releaseChannelButton = document.getElementById("release-channel-button");
+  if (releaseChannelButton) {
+    releaseChannelButton.addEventListener("click", function () {
+      vscode.postMessage({ type: "openReleaseChannel" });
+    });
+  }
   if (modelConfigurationSetupButton) {
     modelConfigurationSetupButton.addEventListener("click", function () {
       if (!modelConfigurationSetupAvailable) return;
