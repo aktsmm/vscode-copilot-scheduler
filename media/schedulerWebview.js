@@ -587,6 +587,12 @@
   var modelConfigurationSetupButton = document.getElementById(
     "model-configuration-setup-button",
   );
+  var modelConfigurationApplyButton = document.getElementById(
+    "model-configuration-apply-button",
+  );
+  var modelConfigurationHelpButton = document.getElementById(
+    "model-configuration-help-button",
+  );
   var activeConfigurationModel = null;
   var modelConfigurationReset = document.getElementById(
     "model-configuration-reset",
@@ -1382,6 +1388,12 @@
     if (modelConfigurationSetupButton)
       modelConfigurationSetupButton.style.display =
         visible && modelConfigurationSetupAvailable ? "inline-flex" : "none";
+    if (modelConfigurationApplyButton)
+      modelConfigurationApplyButton.style.display =
+        visible && modelConfigurationSetupAvailable ? "inline-flex" : "none";
+    if (modelConfigurationHelpButton)
+      modelConfigurationHelpButton.style.display =
+        visible && modelConfigurationSetupAvailable ? "inline-flex" : "none";
     return !!visible;
   }
 
@@ -1865,6 +1877,18 @@
     modelConfigurationSetupButton.addEventListener("click", function () {
       if (!modelConfigurationSetupAvailable) return;
       vscode.postMessage({ type: "openModelRuntimeArguments" });
+    });
+  }
+  if (modelConfigurationApplyButton) {
+    modelConfigurationApplyButton.addEventListener("click", function () {
+      if (!modelConfigurationSetupAvailable) return;
+      vscode.postMessage({ type: "applyModelRuntimeArguments" });
+    });
+  }
+  if (modelConfigurationHelpButton) {
+    modelConfigurationHelpButton.addEventListener("click", function () {
+      if (!modelConfigurationSetupAvailable) return;
+      vscode.postMessage({ type: "openAutoEnableSettings" });
     });
   }
   if (modelConfigurationReset) {

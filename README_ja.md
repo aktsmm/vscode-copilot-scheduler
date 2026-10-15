@@ -1,6 +1,6 @@
 # ⏰ Copilot Scheduler
 
-[![Status](https://badgen.net/badge/Status/Pre-release/yellow)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
+[![Channels](https://badgen.net/badge/Channels/Stable%20%2B%20Pre-release/blue)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![VS Marketplace](https://badgen.net/vs-marketplace/v/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![Installs](https://badgen.net/vs-marketplace/i/yamapan.copilot-scheduler)](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 [![License](https://badgen.net/badge/License/CC%20BY-NC-SA%204.0/gray)](LICENSE)
@@ -9,15 +9,22 @@
 
 VS Code で AI プロンプトを Cron 式で定期実行、または日時指定で一度だけ実行
 
-[**MarketplaceでCopilot Schedulerを開く**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
+## StableとPre-release
 
-## Preview版の配布
+Copilot Schedulerは、同じ拡張ID（`yamapan.copilot-scheduler`）・同じタスク保存先で、Marketplaceの2つのチャネルに公開しています。
 
-このブランチ（`preview/system-api`）はMarketplaceのプレリリース1.9.2と、対応するGitHub Pre-release・VSIXを対象にします。公開が受理されたら、VS Codeの拡張詳細で「プレリリース版に切り替え」を選べます。Stable 1.8.7は通常リリースのチャネルを維持します。同じ拡張ID・タスク保存先を使い、チャネル変更はそのプロファイルの拡張を置き換えるため、別の検証用プロファイルを推奨します。
+| チャネル                      | 内容                                                                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stable（安定版）              | Agent・モデル指定に対応します。モデルの詳細設定と旧思考負荷の新規選択肢は表示しません。保存済みのタスク設定は保持します。                                |
+| Pre-release（プレリリース版） | Stableに加え、対応ホスト（VS Code 1.141 以降）で試験的なモデル詳細設定を提供します。初回のみ起動設定の準備とVS Codeの完全再起動が必要です（後述）。      |
 
-公開検査の例外は明示承認された `languageModelSystem` だけで、実行時の許可付与やMarketplace受理を保証するものではありません。従来の `preview-v*` タグはGitHub専用のまま、`marketplace-preview-v*` タグだけが専用のプレリリース公開経路を使います。拒否時は原因を調べ、全API許可や検査無効化では迂回しません。
+チャネルの切り替えは、VS Codeでこの拡張の詳細ページを開き（タスク画面のチャネルボタンからも開けます）、「プレリリース バージョンへの切り替え」または「リリース バージョンへの切り替え」を選びます。切り替えるとそのプロファイルの拡張が置き換わり、両チャネルは同じタスク保存先を使うため、別の検証用プロファイルを推奨します。コマンドラインでは、`code --install-extension yamapan.copilot-scheduler --pre-release --force` でPre-release版を、`code --install-extension yamapan.copilot-scheduler --force` でStableを導入します。Stableへ戻しても保存済みの詳細設定は解除せず、共有設定の継承を明示的に選ぶまで読み取り専用で保持します。
 
-モデルの詳細設定を使う場合は、タスク画面の「起動設定を開く」の案内に沿って `enable-proposed-api` にSchedulerを追加し、VS Codeを完全終了して再起動します。Previewの導入だけでは許可は付かず、モデルへのアクセス承認も別途必要です。安定版1.8.7へ戻す場合は `code --install-extension yamapan.copilot-scheduler@1.8.7 --force` を実行してください。Previewで保存した個別設定は自動解除しません。
+Stableの変更ツールは、新しい詳細設定の明示指定をモデル解決・保存の前に拒否します。モデル束縛を変えず保存済みと同じmapを再送する場合は変更なしとして扱いますが、値や束縛の変更にはPre-release版が必要です。名前変更などは既存値を保持し、明示的な空設定はタスクの上書きだけを解除して共有設定を継承します。Pre-release版では詳細設定の保存を引き続き利用できます。
+
+モデルの詳細設定を使うには、Pre-release版が起動時に `argv.json` の `enable-proposed-api` へScheduler を自動で追記します（設定 `copilotScheduler.autoEnableProposedApi`、既定はオン）。その後 **VS Code を完全に終了して再起動**してください（ウィンドウの再読み込みでは反映されません）。Pre-release版の導入だけでは許可は付かず、モデルへのアクセス承認も別途必要です。詳しくは下の「動的モデル設定」を参照してください。
+
+[**📥 VS Code Marketplace からインストール**](https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler)
 
 [English / 英語版はこちら](README.md)
 
@@ -129,21 +136,21 @@ Codex Bridge 1.0.0 の GPT 6 Luna（`openai-codex`、`<profile>::gpt-6-luna`）�
 
 タスクフォームと `scheduler_query kind=list_models` は、VS Code 内部の `vscode://schemas/language-models` からモデル別の enum 候補値・表示名を取得します。対象は `mode` / `reasoningEffort` / `speedMode` / `contextSize` です。数値は数値のまま保存し、Fast・コンテキスト候補は選択モデルが公開する場合だけ表示します。未対応・取得不可のスキーマから候補を推測せず、保存済みの候補が消えても表示を残します。内部スキーマ形式は VS Code の更新で変わる可能性があります。
 
-ホストAPI（VS Code 1.141 以降）・実効的なSystem API利用許可・モデルの広告項目が揃う環境だけで、詳細設定をチェックボックスなしで直接表示します。未指定の項目は現在の共有 Chat 設定を継承します。許可がない環境では詳細入力を有効にせず、保存済み値を読み取り専用で残します。従来の思考負荷は別の共有設定経路を使うためSystem許可を必要としません。継承への変更は明示操作だけで行います。思考負荷のプレビュー案内は旧方式の候補が使える場合だけ表示します。
+Pre-release版の詳細入力には、対応ホストAPI（VS Code 1.141 以降）・実効的なSystem API利用許可・モデルの広告項目が必要です。条件が揃うと、詳細設定をチェックボックスなしで直接表示し、未指定の項目は現在の共有 Chat 設定を継承します。許可がない環境では詳細入力を有効にせず、保存済み値を読み取り専用で残します（解除は共有設定の継承を明示的に選んだ場合のみ）。Stableは詳細設定と旧思考負荷の新規選択を隠し、保存済み値を読み取り専用で保持します。旧共有設定経路とネイティブな個別設定は別の仕組みで、未対応の明示値を黙って解除しません。思考負荷の案内は旧方式の候補が使える場合だけ表示します。
 
 VS Code 1.141 以降では、モデル一覧に基づく修復・保存・実行時に、スキーマで同等性を確認できる旧設定を移行します。旧 effort 未指定は共有設定の継承へ変換します。明示した effort は実効System API許可がある場合だけ同じ広告 `reasoningEffort` 値へ移行し、許可がなければ利用できないnative上書きに変えず旧指定を保持します。既存の明示 map は変更しません。effort だけから複合 `mode` 値を推測せず、対応値がない旧設定や古いホストは旧方式を維持します。起動時の修復で移行できた値は、通常のタスク保存経路で永続化します。
 
 新規タスクの `modelConfiguration: {}` は、共有 Chat 設定を変更せず継承します。更新で map を省略すると既存値を維持し、`{}` はタスクの上書きだけを解除します。ユーザーや旧方式が共有設定に残した値は削除しません。**詳細設定には VS Code 1.141 以降が必要ですが、それだけでは利用できません。** Agent のシステム指示には、Scheduler に対する実効的な `languageModelSystem` API 利用許可が必要です。GUIは動的実行APIと実効許可が揃う場合だけ詳細編集を有効にします。保存済みの個別値は表示を残し、自動解除しません。実効的なSystem許可がなければ通常 Chat / Agent の個別指定は送信前に停止します。モデル指定と現在値の継承は利用できます。
 
-ローカル開発版のmanifestには、許可付き検証用の `languageModelSystem` 宣言を追加しています。宣言だけでは許可は付きません。この提案API利用版はローカル検証用で、Marketplace公開用ではありません。インストールやVS Code更新だけでは有効化されず、実行環境から `yamapan.copilot-scheduler` への明示的な利用許可が必要です。
+Stableのmanifestには `languageModelSystem` 宣言がなく、起動設定の変更だけでは詳細設定を有効化できません。Pre-release版のmanifestには宣言がありますが、宣言やインストールだけでは許可は付きません。Pre-release版では、後述の起動設定への追記・VS Codeの完全再起動・別途モデルへのアクセス承認が必要です。
 
-詳細項目を持つモデルでは、タスク設定画面に不足する条件を表示します。対応ホストで宣言済み・未有効化の場合の「起動設定を開く」は、VS Code のランタイム引数編集画面を開くだけで、設定を自動変更しません。既存の `enable-proposed-api` 配列に `yamapan.copilot-scheduler` を追加し、項目がなければ `"enable-proposed-api": ["yamapan.copilot-scheduler"]` を追加します。他の項目は維持し、VS Code を完全終了して再起動してください。宣言なしの配布版・非対応ホストには、それぞれの制限理由を表示し、有効化ボタンは出しません。保存済みのタスク設定は保持します。
+詳細項目を持つモデルでは、タスク設定画面に不足する条件を短く表示します。対応ホストで宣言済み・未有効化の場合、「自動で追加する」は確認後に `argv.json` の `enable-proposed-api` へ `yamapan.copilot-scheduler` を追記します（既存の項目とコメントは維持、ファイルがなければ作成）。「起動設定を開く」は VS Code のランタイム引数編集画面を開くだけで何も書き込みません。「詳しくはこちら」は `copilotScheduler.autoEnableProposedApi` の設定を開きます。プレリリース版では、この設定をオフにしない限り起動時に同じ追記を行います。いずれも VS Code を完全に終了して再起動してください（ウィンドウの再読み込みでは反映されません）。宣言なしの配布版・非対応ホストには、それぞれの制限理由を表示し、有効化ボタンは出しません。保存済みのタスク設定は保持します。
 
 System ロールの提案元は、Johannes Rieken（`jrieken`）氏の [Language model access API Issue #206265](https://github.com/microsoft/vscode/issues/206265) です。[PR #212082](https://github.com/microsoft/vscode/pull/212082) で2024年5月6日に独立した提案へ分離され、理由は API 設計と Responsible AI の検討とされています。モデルへのアクセス承認は別の仕組みです。
 
 選択モデルの設定スキーマが未取得・不正なら、API 有効化後も理由を表示します。ただし設定項目は推測で追加しません。有効化の手順は未有効化の場合だけ案内します。取得済みスキーマで設定項目がないと確認できたモデルには、不要な設定ボタンを出しません。API の有効化だけで、そのモデルの詳細設定に対応するとは限りません。
 
-Marketplace公開前は `node scripts/verify-vsix-contents.js <candidate.vsix> --verify-marketplace` を実行します。公開ワークフローは実際の配布物のmanifestを検査し、提案API宣言があれば公開前に停止します。ローカル検証用候補の `--verify-build` は引き続き利用できますが、それだけでMarketplace公開可能とは判定しません。
+Marketplace公開前は `node scripts/verify-vsix-contents.js <candidate.vsix> --verify-marketplace` を実行します。Stableの公開ワークフローは実際の配布物のmanifestを検査し、提案API宣言があれば公開前に停止します。Pre-release版の公開では、承認済みの唯一の例外として `--allow-proposed-apis languageModelSystem` を付けます（実行時の許可付与ではありません）。ローカル検証用候補の `--verify-build` は引き続き利用できますが、それだけでMarketplace公開可能とは判定しません。
 
 API の利用許可と、提供元モデルへのアクセス承認は別です。初回の「Scheduler が GitHub Copilot などのモデルへアクセスしてよいか」というダイアログは、要求したアクセスを承認する必要があります。この承認だけで提案 API の利用許可が付くわけではありません。拡張自身が VS Code の許可を付与することはできず、対応したビルドと正規の実行環境の許可が必要です。拡張に必要な API 宣言がない場合、起動オプションだけでは有効化できません。提案 API には[配布上の制限](https://code.visualstudio.com/api/advanced-topics/using-proposed-api)もあります。
 
@@ -212,6 +219,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | このウィンドウの自動プロンプト送信処理の最大同時数（jitterを含む、1〜10）。モデル応答の完了は待ちません。「今すぐ実行」は対象外です。                                                                                                                                    |
 | `copilotScheduler.chatSession`                | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
+| `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |
 | `copilotScheduler.commandDelayFactor`         | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
 | `copilotScheduler.showNotifications`          | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
 | `copilotScheduler.notificationMode`           | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |
@@ -326,6 +334,8 @@ node scripts/verify-vsix-contents.js artifacts/vsix/copilot-scheduler-allfix-lif
 - GitHub Actions が `npm ci`、`npm run compile`、`npm test`、`.vsix` 作成、VS Code Marketplace 公開、GitHub Release への `.vsix` 添付まで実行します。
 - 公開前の確認は、対象ブランチで `Publish Extension` を `publish=false`（既定値）として手動起動します。全ゲート成功後にバージョンタグをpushします。ブランチ・タグをまたいでジョブは直列化されます。明示的な `publish=true` はMarketplaceのみへ公開し、GitHub Releaseには対応するタグが必要です。
 - 利用前に repository secret `VSCE_PAT` を設定してください。
+- Pre-release版は、`package.json` と一致する `marketplace-preview-vX.Y.Z` タグで公開します。ワークフローが `--pre-release` を付けてパッケージ化・公開します。公開検査の例外は、明示承認された `languageModelSystem` 提案だけです。実行時の許可付与やMarketplace受理を保証するものではなく、拒否時は原因を調べ、全API許可や検査無効化では迂回しません。
+- `preview-vX.Y.Z` タグはGitHub専用のビルド（VSIX添付、Marketplaceには公開しない）を作成します。 `preview/*` ブランチでの手動 `publish=true` は拒否されます。公開はタグのpushで行います。
 
 ## ⚠️ 既知の問題
 

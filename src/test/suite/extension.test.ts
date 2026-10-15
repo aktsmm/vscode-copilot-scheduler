@@ -225,6 +225,40 @@ suite("Extension Test Suite", () => {
     }
   });
 
+  test("auto-enable setting is on by default and documents restart in both locales", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    const property =
+      manifest.contributes.configuration.properties[
+        "copilotScheduler.autoEnableProposedApi"
+      ];
+    assert.strictEqual(property.type, "boolean");
+    assert.strictEqual(property.default, true);
+    assert.strictEqual(
+      property.markdownDescription,
+      "%config.autoEnableProposedApi%",
+    );
+    const expected: Record<string, string[]> = {
+      "package.nls.json": ["argv.json", "reloading the window is not enough"],
+      "package.nls.ja.json": [
+        "argv.json",
+        "ウィンドウの再読み込みでは反映されません",
+      ],
+    };
+    for (const [filename, tokens] of Object.entries(expected)) {
+      const strings: Record<string, string> = JSON.parse(
+        fs.readFileSync(path.join(root, filename), "utf8"),
+      );
+      for (const token of tokens)
+        assert.ok(
+          strings["config.autoEnableProposedApi"].includes(token),
+          `${filename}: ${token}`,
+        );
+    }
+  });
+
   test("FULL_SPECIFICATION stays aligned with package manifest basics", () => {
     const root = path.resolve(__dirname, "../../..");
     const specPath = path.join(root, "FULL_SPECIFICATION.md");
@@ -756,8 +790,16 @@ suite("Extension Test Suite", () => {
           /Marketplace publication blocked/,
         );
         if (Array.isArray(proposals)) {
-          assert.strictEqual(await verifier.verifyVsixMarketplace(fixture, ["languageModelSystem"]), true);
-          await assert.rejects(verifier.verifyVsixMarketplace(fixture, ["otherApi"]), /Unsupported publication exception/);
+          assert.strictEqual(
+            await verifier.verifyVsixMarketplace(fixture, [
+              "languageModelSystem",
+            ]),
+            true,
+          );
+          await assert.rejects(
+            verifier.verifyVsixMarketplace(fixture, ["otherApi"]),
+            /Unsupported publication exception/,
+          );
         }
       }
       await write(

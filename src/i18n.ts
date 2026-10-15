@@ -449,13 +449,13 @@ export const messages = {
     ),
   detailedOptionsRequirePreview: () =>
     t(
-      "These saved detailed model options require Preview. Use Preview or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
-      "保存したモデルの詳細設定にはPreview版が必要です。Previewを使うか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
+      "These saved detailed model options require the Pre-release version. Switch to Pre-release or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
+      "保存したモデルの詳細設定にはプレリリース版が必要です。プレリリース版に切り替えるか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
     ),
   newDetailedOptionsRequirePreview: () =>
     t(
-      "New detailed model selections require Preview. Stable supports Agent and model selection. No task was changed.",
-      "モデルの詳細設定を新しく指定するにはPreview版が必要です。StableはAgent・モデル指定までに対応し、タスクの作成・更新は行っていません。",
+      "New detailed model selections require the Pre-release version. Stable supports Agent and model selection. No task was changed.",
+      "モデルの詳細設定を新しく指定するにはプレリリース版が必要です。安定版はAgent・モデル指定までに対応し、タスクの作成・更新は行っていません。",
     ),
   providerModelUnavailable: () =>
     t(
@@ -546,8 +546,8 @@ export const messages = {
     t("Dynamic Model Options (Experimental)", "動的モデル設定（試験的）"),
   modelOptionsEnableInstructions: () =>
     t(
-      "Model-specific options are not enabled in this environment. Open runtime arguments and add Scheduler to the existing enable-proposed-api list, or add the entry below if absent. Fully quit and restart VS Code afterward. Model-access approval is separate.",
-      "この環境ではモデルの詳細設定がまだ有効化されていません。起動設定を開き、既存の enable-proposed-api 配列に Scheduler を追加してください。項目がなければ下の設定例を追加します。その後、VS Code を完全終了して再起動してください。モデルへのアクセス承認は別途必要です。",
+      "Detailed options need a one-time setup and a full VS Code restart; reloading the window is not enough. Add Automatically does the setup.",
+      "詳細設定には初回のみ設定と VS Code の完全な再起動が必要です（ウィンドウの再読み込みでは反映されません）。「自動で追加する」で設定できます。",
     ),
   modelOptionsDeclarationMissing: () =>
     t(
@@ -561,9 +561,34 @@ export const messages = {
     ),
   actionOpenModelRuntimeArguments: () =>
     t("Open Runtime Arguments", "起動設定を開く"),
+  actionApplyModelRuntimeArguments: () =>
+    t("Add Automatically", "自動で追加する"),
+  actionConfirmRuntimeArguments: () => t("Add", "追加する"),
+  actionLearnMoreRuntimeArguments: () => t("Learn more", "詳しくはこちら"),
+  runtimeArgumentsConfirm: (target: string) =>
+    t(
+      `Add Scheduler to "enable-proposed-api" in ${target}? Existing entries and comments are kept; the file is created if missing. A full VS Code restart is required afterward.`,
+      `${target} の "enable-proposed-api" に Scheduler を追加します。既存の項目とコメントは維持し、ファイルがなければ作成します。追加後は VS Code の完全再起動が必要です。`,
+    ),
+  runtimeArgumentsApplied: () =>
+    t(
+      "Added Scheduler to enable-proposed-api. Fully quit and restart VS Code to apply it; reloading the window is not enough. Model-access approval is separate.",
+      "enable-proposed-api に Scheduler を追加しました。反映するには VS Code を完全に終了して再起動してください（ウィンドウの再読み込みでは反映されません）。モデルへのアクセス承認は別途必要です。",
+    ),
+  runtimeArgumentsAlreadyEnabled: () =>
+    t(
+      "Scheduler is already listed in enable-proposed-api. If detailed options are still unavailable, fully quit and restart VS Code.",
+      "enable-proposed-api には既に Scheduler が登録されています。詳細設定がまだ使えない場合は、VS Code を完全に終了して再起動してください（ウィンドウの再読み込みでは反映されません）。",
+    ),
+  runtimeArgumentsAutoFailed: () =>
+    t(
+      "Could not update the runtime arguments file automatically, and nothing was changed. Use Open Runtime Arguments and add the entry manually.",
+      "起動設定ファイルを自動で更新できませんでした。変更は行っていません。「起動設定を開く」から手動で追加してください。",
+    ),
   actionOpenPreviewRelease: () =>
-    t("Try detailed options in Preview", "詳細設定を試す：Preview版"),
-  actionOpenStableRelease: () => t("View the Stable version", "安定版はこちら"),
+    t("Try detailed options in Pre-release", "詳細設定を試す：プレリリース版"),
+  actionOpenStableRelease: () =>
+    t("Return to the Stable version", "安定版に戻す"),
   modelRuntimeArgumentsUnavailable: () =>
     t(
       "Could not open runtime arguments. Use Preferences: Configure Runtime Arguments from the Command Palette on desktop VS Code.",
@@ -573,8 +598,8 @@ export const messages = {
     t("Use current shared Chat settings", "現在の共有 Chat 設定を継承"),
   labelDynamicModelOptionsBlocked: () =>
     t(
-      "Detailed inputs are available only with VS Code 1.141 or later, compatible provider APIs and effective languageModelSystem permission for Scheduler. Declaring the API or installing the extension alone does not grant permission. Model access requires separate approval. Without support or permission, saved overrides remain read-only and are not cleared automatically; explicitly inherit shared settings to clear task overrides.",
-      "詳細入力は VS Code 1.141 以降、対応する提供元の API、Scheduler への実効的な languageModelSystem 利用許可が揃う環境だけで利用できます。API の宣言や拡張のインストールだけでは許可は付きません。モデルへのアクセス承認は別途必要です。未対応・未許可の環境では保存済み設定を読み取り専用で保持し、自動解除しません。タスクの個別指定を解除する場合は、共有設定の継承を明示的に選んでください。",
+      "Detailed inputs need VS Code 1.141 or later, compatible provider APIs and Scheduler's languageModelSystem permission. Without them, saved overrides stay read-only and are not cleared automatically; choose inherit to clear them.",
+      "詳細入力には VS Code 1.141 以降、対応する提供元 API、Scheduler の languageModelSystem 許可が必要です。満たさない場合、保存済みの個別設定は読み取り専用のまま保持され、自動では解除されません。解除するには共有設定の継承を選んでください。",
     ),
   labelInvalidModelConfiguration: () =>
     t(
@@ -594,8 +619,8 @@ export const messages = {
     ),
   labelModelNote: () =>
     t(
-      "Preview: Copilot Scheduler tries to mirror Copilot Chat's thinking effort options.",
-      "プレビュー: Copilot Scheduler は Copilot Chat の思考の負荷候補をできるだけ再現します。",
+      "Experimental: Copilot Scheduler tries to mirror Copilot Chat's thinking effort options.",
+      "試験的: Copilot Scheduler は Copilot Chat の思考の負荷候補をできるだけ再現します。",
     ),
   labelModelExperimentalNote: () =>
     t(

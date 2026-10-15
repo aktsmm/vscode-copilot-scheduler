@@ -27,6 +27,12 @@ import {
   formatCronForDisplay,
 } from "./i18n";
 import { logError } from "./logger";
+import {
+  applyEnableProposedApi,
+  planEnableProposedApi,
+  readRuntimeArguments,
+  resolveRuntimeArgumentsPath,
+} from "./runtime-arguments";
 import { validateTemplateLoadRequest } from "./templateValidation";
 import {
   getPromptTemplateDisplayName,
@@ -175,6 +181,49 @@ export class SchedulerWebview {
         vendor: "",
       };
     });
+  }
+
+  private static async applyModelRuntimeArguments(): Promise<void> {
+    const target = resolveRuntimeArgumentsPath(
+      vscode.env.appName,
+      process.env,
+      undefined,
+      vscode.env.remoteName,
+    );
+    try {
+      if (!target) throw new Error("unsupported application");
+      const initial = planEnableProposedApi(await readRuntimeArguments(target));
+      if (initial.status === "unchanged") {
+        await vscode.window.showInformationMessage(
+          messages.runtimeArgumentsAlreadyEnabled(),
+        );
+        return;
+      }
+      if (initial.status === "invalid") throw new Error("unsupported content");
+
+      const confirmed = await vscode.window.showInformationMessage(
+        messages.runtimeArgumentsConfirm(target),
+        { modal: true },
+        messages.actionConfirmRuntimeArguments(),
+      );
+      if (confirmed !== messages.actionConfirmRuntimeArguments()) return;
+
+      // Writes through the same re-read-before-replace path as the startup hook.
+      const result = await applyEnableProposedApi(target);
+      if (result === "invalid") throw new Error("unsupported content");
+      await vscode.window.showInformationMessage(
+        messages.runtimeArgumentsApplied(),
+      );
+    } catch (error) {
+      logError("[CopilotScheduler] Runtime arguments update failed:", {
+        reason: this.sanitizeErrorDetailsForUser(
+          error instanceof Error ? error.message : "",
+        ),
+      });
+      await vscode.window.showWarningMessage(
+        messages.runtimeArgumentsAutoFailed(),
+      );
+    }
   }
 
   private static buildModelPickerPayload(models: readonly ModelInfo[]): {
@@ -716,11 +765,19 @@ export class SchedulerWebview {
         break;
 
       case "openReleaseChannel":
-        await vscode.env.openExternal(vscode.Uri.parse(
-          hasSystemMessageDeclaration()
-            ? "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler"
-            : "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
-        ));
+        // The extension details page hosts the Pre-Release/Release switch.
+        try {
+          await vscode.commands.executeCommand(
+            "extension.open",
+            "yamapan.copilot-scheduler",
+          );
+        } catch {
+          await vscode.env.openExternal(
+            vscode.Uri.parse(
+              "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler",
+            ),
+          );
+        }
         break;
 
       case "openModelRuntimeArguments":
@@ -739,6 +796,23 @@ export class SchedulerWebview {
             messages.modelRuntimeArgumentsUnavailable(),
           );
         }
+        break;
+
+      case "applyModelRuntimeArguments":
+        if (
+          !supportsConfiguredModelExecution() ||
+          !hasSystemMessageDeclaration() ||
+          supportsSystemMessageForwarding()
+        )
+          break;
+        await this.applyModelRuntimeArguments();
+        break;
+
+      case "openAutoEnableSettings":
+        await vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          "copilotScheduler.autoEnableProposedApi",
+        );
         break;
 
       case "refreshAgents":
@@ -1652,6 +1726,10 @@ export class SchedulerWebview {
       labelDynamicModelOptions: messages.labelDynamicModelOptions(),
       actionOpenModelRuntimeArguments:
         messages.actionOpenModelRuntimeArguments(),
+      actionApplyModelRuntimeArguments:
+        messages.actionApplyModelRuntimeArguments(),
+      actionLearnMoreRuntimeArguments:
+        messages.actionLearnMoreRuntimeArguments(),
       actionOpenReleaseChannel: hasSystemMessageDeclaration()
         ? messages.actionOpenStableRelease()
         : messages.actionOpenPreviewRelease(),
@@ -2870,7 +2948,9 @@ export class SchedulerWebview {
               <div id="model-configuration-setup" style="display:none;">
                 <p class="note" id="model-configuration-setup-note"></p>
                 <code id="model-configuration-setup-code" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml('"enable-proposed-api": ["yamapan.copilot-scheduler"]')}</code>
+                <button type="button" class="btn-primary" id="model-configuration-apply-button" style="display:none;">${escapeHtml(strings.actionApplyModelRuntimeArguments)}</button>
                 <button type="button" class="btn-secondary" id="model-configuration-setup-button" style="display:none;">${escapeHtml(strings.actionOpenModelRuntimeArguments)}</button>
+                <button type="button" class="btn-secondary" id="model-configuration-help-button" style="display:none;">${escapeHtml(strings.actionLearnMoreRuntimeArguments)}</button>
               </div>
               <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
             </div>

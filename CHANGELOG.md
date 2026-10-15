@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-10-15
+
+Marketplace Pre-release (`marketplace-preview-v1.9.3`). Runtime activation and provider-model consent are still separate requirements.
+
+### Added
+
+- Pre-release builds add Scheduler to `enable-proposed-api` in `argv.json` at startup (setting `copilotScheduler.autoEnableProposedApi`, on by default). Existing entries and comments are kept, the file is created if missing, and the write is atomic. Skipped on remote/web hosts and outside production mode. Detailed options still need a full VS Code restart; a window reload does not apply the change.
+- Task form: Add Automatically (with confirmation) and Learn more buttons. The setup and permission notes are shortened and point to the setting for details.
+
+### Changed
+
+- Stable and Pre-release wording is unified in the task form, error messages and README. The retired GitHub-only Preview 1.9.0 link is removed.
+- The task form's channel button opens this extension's details page in VS Code, where **Switch to Release Version** is offered, and falls back to the fixed Marketplace page if that command is unavailable. It does not install an extension or grant permission.
+- The README starts with a version-neutral Stable and Pre-release section, including the command-line way to switch channels. The Pre-release manifest is no longer described as a local-only build, and publishing details moved to Release Automation.
+- The legacy thinking-effort note is labelled Experimental instead of Preview to avoid confusion with the release channel.
+
 ## [1.9.2] - 2026-10-15
 
 Marketplace Pre-release candidate (`marketplace-preview-v1.9.2`). Packaged and published with `--pre-release`; the only explicitly approved publishing-validation exception is `languageModelSystem`. Stable remains on its normal release channel. Runtime activation and provider-model consent are still separate requirements.

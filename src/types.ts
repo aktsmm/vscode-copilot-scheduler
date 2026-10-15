@@ -459,6 +459,8 @@ export type WebviewToExtensionMessage =
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
   | { type: "openModelRuntimeArguments" }
+  | { type: "applyModelRuntimeArguments" }
+  | { type: "openAutoEnableSettings" }
   | { type: "openReleaseChannel" }
   | { type: "refreshPrompts" }
   | { type: "runTask"; taskId: string }

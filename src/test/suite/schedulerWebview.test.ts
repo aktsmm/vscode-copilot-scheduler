@@ -3714,7 +3714,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       const stable = wv.buildModelPickerPayload(models);
       assert.strictEqual(stable.experimentalModelQualityEnabled, false);
       assert.strictEqual(stable.modelConfigurationExecutionEnabled, false);
-      assert.ok(stable.modelPickerDefault[0].variants.every((variant) => !variant.reasoningEffort));
+      assert.ok(
+        stable.modelPickerDefault[0].variants.every(
+          (variant) => !variant.reasoningEffort,
+        ),
+      );
       Object.defineProperty(provider, "hasSystemMessageDeclaration", {
         ...declarationDescriptor,
         value: () => true,
@@ -3742,7 +3746,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
         false,
       );
     } finally {
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declarationDescriptor);
+      Object.defineProperty(
+        provider,
+        "hasSystemMessageDeclaration",
+        declarationDescriptor,
+      );
       Object.defineProperty(
         provider,
         "supportsSystemMessageForwarding",
@@ -3917,25 +3925,50 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("release channel navigation opens only fixed Stable and Preview destinations", async () => {
-    const provider = require("../../configured-model-provider");
-    const declaration = Object.getOwnPropertyDescriptor(provider, "hasSystemMessageDeclaration")!;
-    const external = Object.getOwnPropertyDescriptor(vscode.env, "openExternal")!;
+  test("release channel navigation opens this extension's details and falls back to the fixed Marketplace page", async () => {
+    const command = Object.getOwnPropertyDescriptor(
+      vscode.commands,
+      "executeCommand",
+    )!;
+    const external = Object.getOwnPropertyDescriptor(
+      vscode.env,
+      "openExternal",
+    )!;
+    const commands: Array<{ command: string; args: unknown[] }> = [];
     const destinations: string[] = [];
-    const webview = SchedulerWebview as unknown as { handleMessage(message: { type: "openReleaseChannel" }): Promise<void> };
+    let failCommand = false;
+    const webview = SchedulerWebview as unknown as {
+      handleMessage(message: { type: "openReleaseChannel" }): Promise<void>;
+    };
     try {
-      Object.defineProperty(vscode.env, "openExternal", { ...external, value: async (uri: vscode.Uri) => { destinations.push(uri.toString(true)); return true; } });
-      for (const preview of [false, true]) {
-        Object.defineProperty(provider, "hasSystemMessageDeclaration", { ...declaration, value: () => preview });
-        await webview.handleMessage({ type: "openReleaseChannel" });
-      }
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        ...command,
+        value: async (id: string, ...args: unknown[]) => {
+          commands.push({ command: id, args });
+          if (failCommand) throw new Error("synthetic command failure");
+        },
+      });
+      Object.defineProperty(vscode.env, "openExternal", {
+        ...external,
+        value: async (uri: vscode.Uri) => {
+          destinations.push(uri.toString(true));
+          return true;
+        },
+      });
+      await webview.handleMessage({ type: "openReleaseChannel" });
+      assert.deepStrictEqual(commands, [
+        { command: "extension.open", args: ["yamapan.copilot-scheduler"] },
+      ]);
+      assert.deepStrictEqual(destinations, []);
+
+      failCommand = true;
+      await webview.handleMessage({ type: "openReleaseChannel" });
       assert.deepStrictEqual(destinations, [
-        "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
         "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler",
       ]);
     } finally {
+      Object.defineProperty(vscode.commands, "executeCommand", command);
       Object.defineProperty(vscode.env, "openExternal", external);
-      Object.defineProperty(provider, "hasSystemMessageDeclaration", declaration);
     }
   });
 
@@ -3970,20 +4003,53 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.deepStrictEqual(posted, [{ type: "openModelRuntimeArguments" }]);
   });
 
+  test("apply and help buttons post only eligible fixed actions", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const handlers: Record<string, () => void> = {};
+    const posted: unknown[] = [];
+    const button = (name: string) => ({
+      addEventListener: (_event: string, handler: () => void) => {
+        handlers[name] = handler;
+      },
+    });
+    const api = new Function(
+      "modelConfigurationApplyButton",
+      "modelConfigurationHelpButton",
+      "vscode",
+      `
+      var modelConfigurationSetupAvailable = false;
+      ${extractBlockFromStartToken(source, "if (modelConfigurationApplyButton) {")}
+      ${extractBlockFromStartToken(source, "if (modelConfigurationHelpButton) {")}
+      return { enable: () => modelConfigurationSetupAvailable = true };
+    `,
+    )(button("apply"), button("help"), {
+      postMessage: (message: unknown) => posted.push(message),
+    });
+    handlers.apply();
+    handlers.help();
+    assert.deepStrictEqual(posted, []);
+    api.enable();
+    handlers.apply();
+    handlers.help();
+    assert.deepStrictEqual(posted, [
+      { type: "applyModelRuntimeArguments" },
+      { type: "openAutoEnableSettings" },
+    ]);
+  });
+
   test("detailed options note distinguishes effective permission from declaration and model consent", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../src/i18n.ts"),
       "utf8",
     );
     for (const token of [
-      "effective languageModelSystem permission for Scheduler",
-      "Declaring the API or installing the extension alone does not grant permission",
-      "Model access requires separate approval",
-      "saved overrides remain read-only",
-      "利用許可が揃う環境だけで利用できます",
-      "インストールだけでは許可は付きません",
-      "モデルへのアクセス承認は別途必要です",
-      "保存済み設定を読み取り専用で保持",
+      "Scheduler's languageModelSystem permission",
+      "saved overrides stay read-only",
+      "languageModelSystem 許可が必要です",
+      "読み取り専用のまま保持",
     ])
       assert.ok(
         sourceContainsToken(source, token),

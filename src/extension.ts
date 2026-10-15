@@ -48,7 +48,16 @@ import {
   type ExecutionTrigger,
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
-import { registerConfiguredModelProvider } from "./configured-model-provider";
+import {
+  hasSystemMessageDeclaration,
+  registerConfiguredModelProvider,
+  supportsConfiguredModelExecution,
+  supportsSystemMessageForwarding,
+} from "./configured-model-provider";
+import {
+  applyEnableProposedApi,
+  resolveRuntimeArgumentsPath,
+} from "./runtime-arguments";
 import { createModelSelectionResolver } from "./taskMutationService";
 import {
   getAttachmentDisplayName,
@@ -1128,6 +1137,47 @@ function buildTaskQuickPickItem(task: ScheduledTask): {
   };
 }
 
+// Writes user-level runtime arguments, so it never runs in development/test hosts.
+function autoEnableProposedApi(context: vscode.ExtensionContext): void {
+  if (context.extensionMode !== vscode.ExtensionMode.Production) return;
+  if (
+    !vscode.workspace
+      .getConfiguration("copilotScheduler")
+      .get<boolean>("autoEnableProposedApi", true)
+  )
+    return;
+  if (
+    !hasSystemMessageDeclaration() ||
+    !supportsConfiguredModelExecution() ||
+    supportsSystemMessageForwarding()
+  )
+    return;
+  const target = resolveRuntimeArgumentsPath(
+    vscode.env.appName,
+    process.env,
+    undefined,
+    vscode.env.remoteName,
+  );
+  if (!target) return;
+  void applyEnableProposedApi(target)
+    .then((status) => {
+      if (status === "updated")
+        void vscode.window.showInformationMessage(
+          messages.runtimeArgumentsApplied(),
+        );
+    })
+    .catch((error) =>
+      logError(
+        "[CopilotScheduler] Automatic runtime arguments update failed:",
+        {
+          reason: sanitizeErrorDetailsForLog(
+            error instanceof Error ? error.message : "",
+          ),
+        },
+      ),
+    );
+}
+
 /**
  * Extension activation
  */
@@ -1167,6 +1217,7 @@ export function activate(context: vscode.ExtensionContext): void {
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
   registerConfiguredModelProvider(context);
+  autoEnableProposedApi(context);
   treeProvider = new ScheduledTaskTreeProvider(scheduleManager);
   // Chat must only offer models the user can also see in the Webview picker and
   // that startup healing can resolve, so all three share one filtered catalog.
