@@ -3925,21 +3925,29 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
-  test("release channel navigation opens only fixed Stable and Preview destinations", async () => {
-    const provider = require("../../configured-model-provider");
-    const declaration = Object.getOwnPropertyDescriptor(
-      provider,
-      "hasSystemMessageDeclaration",
+  test("release channel navigation opens this extension's details and falls back to the fixed Marketplace page", async () => {
+    const command = Object.getOwnPropertyDescriptor(
+      vscode.commands,
+      "executeCommand",
     )!;
     const external = Object.getOwnPropertyDescriptor(
       vscode.env,
       "openExternal",
     )!;
+    const commands: Array<{ command: string; args: unknown[] }> = [];
     const destinations: string[] = [];
+    let failCommand = false;
     const webview = SchedulerWebview as unknown as {
       handleMessage(message: { type: "openReleaseChannel" }): Promise<void>;
     };
     try {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        ...command,
+        value: async (id: string, ...args: unknown[]) => {
+          commands.push({ command: id, args });
+          if (failCommand) throw new Error("synthetic command failure");
+        },
+      });
       Object.defineProperty(vscode.env, "openExternal", {
         ...external,
         value: async (uri: vscode.Uri) => {
@@ -3947,24 +3955,20 @@ suite("SchedulerWebview Script Contract Tests", () => {
           return true;
         },
       });
-      for (const preview of [false, true]) {
-        Object.defineProperty(provider, "hasSystemMessageDeclaration", {
-          ...declaration,
-          value: () => preview,
-        });
-        await webview.handleMessage({ type: "openReleaseChannel" });
-      }
+      await webview.handleMessage({ type: "openReleaseChannel" });
+      assert.deepStrictEqual(commands, [
+        { command: "extension.open", args: ["yamapan.copilot-scheduler"] },
+      ]);
+      assert.deepStrictEqual(destinations, []);
+
+      failCommand = true;
+      await webview.handleMessage({ type: "openReleaseChannel" });
       assert.deepStrictEqual(destinations, [
-        "https://github.com/aktsmm/vscode-copilot-scheduler/releases/tag/preview-v1.9.0",
         "https://marketplace.visualstudio.com/items?itemName=yamapan.copilot-scheduler",
       ]);
     } finally {
+      Object.defineProperty(vscode.commands, "executeCommand", command);
       Object.defineProperty(vscode.env, "openExternal", external);
-      Object.defineProperty(
-        provider,
-        "hasSystemMessageDeclaration",
-        declaration,
-      );
     }
   });
 

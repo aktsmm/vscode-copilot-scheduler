@@ -449,13 +449,13 @@ export const messages = {
     ),
   detailedOptionsRequirePreview: () =>
     t(
-      "These saved detailed model options require Preview. Use Preview or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
-      "保存したモデルの詳細設定にはPreview版が必要です。Previewを使うか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
+      "These saved detailed model options require the Pre-release version. Switch to Pre-release or explicitly inherit shared model settings. Saved values were retained; no fallback was used.",
+      "保存したモデルの詳細設定にはプレリリース版が必要です。プレリリース版に切り替えるか、共有モデル設定の継承を明示的に選んでください。保存値は保持し、設定を落とす代替実行は行っていません。",
     ),
   newDetailedOptionsRequirePreview: () =>
     t(
-      "New detailed model selections require Preview. Stable supports Agent and model selection. No task was changed.",
-      "モデルの詳細設定を新しく指定するにはPreview版が必要です。StableはAgent・モデル指定までに対応し、タスクの作成・更新は行っていません。",
+      "New detailed model selections require the Pre-release version. Stable supports Agent and model selection. No task was changed.",
+      "モデルの詳細設定を新しく指定するにはプレリリース版が必要です。安定版はAgent・モデル指定までに対応し、タスクの作成・更新は行っていません。",
     ),
   providerModelUnavailable: () =>
     t(
@@ -562,8 +562,9 @@ export const messages = {
   actionOpenModelRuntimeArguments: () =>
     t("Open Runtime Arguments", "起動設定を開く"),
   actionOpenPreviewRelease: () =>
-    t("Try detailed options in Preview", "詳細設定を試す：Preview版"),
-  actionOpenStableRelease: () => t("View the Stable version", "安定版はこちら"),
+    t("Try detailed options in Pre-release", "詳細設定を試す：プレリリース版"),
+  actionOpenStableRelease: () =>
+    t("Return to the Stable version", "安定版に戻す"),
   modelRuntimeArgumentsUnavailable: () =>
     t(
       "Could not open runtime arguments. Use Preferences: Configure Runtime Arguments from the Command Palette on desktop VS Code.",
@@ -594,8 +595,8 @@ export const messages = {
     ),
   labelModelNote: () =>
     t(
-      "Preview: Copilot Scheduler tries to mirror Copilot Chat's thinking effort options.",
-      "プレビュー: Copilot Scheduler は Copilot Chat の思考の負荷候補をできるだけ再現します。",
+      "Experimental: Copilot Scheduler tries to mirror Copilot Chat's thinking effort options.",
+      "試験的: Copilot Scheduler は Copilot Chat の思考の負荷候補をできるだけ再現します。",
     ),
   labelModelExperimentalNote: () =>
     t(

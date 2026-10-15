@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.8] - 2026-10-15
+
+Channel consistency release: documentation and wording only; no change to how Stable saves or runs tasks.
+
+### Changed
+
+- Stable and Pre-release wording is unified in the task form, error messages and README. The retired GitHub-only Preview 1.9.0 link is removed.
+- The task form's channel button opens this extension's details page in VS Code, where **Switch to Pre-Release Version** is offered, and falls back to the fixed Marketplace page if that command is unavailable. It does not install an extension or grant permission.
+- The README starts with a version-neutral Stable and Pre-release section, including the command-line way to switch channels, and its dynamic model options section matches the Pre-release README.
+- The legacy thinking-effort note is labelled Experimental instead of Preview to avoid confusion with the release channel.
+
 ## [1.8.7] - 2026-10-15
 
 ### Fixed
