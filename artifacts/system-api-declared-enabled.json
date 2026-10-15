@@ -1,0 +1,11 @@
+{
+  "runId": "223c4a2d-5966-44ba-962a-e7f7dab2fea0",
+  "vscodeVersion": "1.141.1",
+  "permissionProbe": true,
+  "proposalDeclared": true,
+  "effectiveSystemDeclaration": true,
+  "productSystemForwarding": true,
+  "permission": "allowed",
+  "syntheticSourceCalls": 1,
+  "realNetworkInference": false
+}
