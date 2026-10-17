@@ -72,6 +72,7 @@ import type {
   PromptPreview,
   PromptSource,
   PromptExecutionRequest,
+  ModelFallbackInfo,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -183,6 +184,7 @@ function buildPromptExecutionOptions(
     modelFamily: request.modelFamily,
     modelVersion: request.modelVersion,
     modelReasoningEffort: request.modelReasoningEffort,
+    ...(request.modelFallback === true ? { modelFallback: true } : {}),
     ...(request.modelConfiguration !== undefined
       ? { modelConfiguration: request.modelConfiguration }
       : {}),
@@ -647,6 +649,17 @@ let promptSyncInterval: ReturnType<typeof setInterval> | undefined;
 let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
+
+/** Fallback model used by the most recent run per task, consumed by history writers. */
+const lastModelFallbackByTaskId = new Map<string, ModelFallbackInfo>();
+
+function takeModelFallbackDetail(taskId: string): string | undefined {
+  const fallback = lastModelFallbackByTaskId.get(taskId);
+  lastModelFallbackByTaskId.delete(taskId);
+  return fallback
+    ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
+    : undefined;
+}
 /**
  * Attachment sets already reported as blocked, so the warning is not repeated
  * every tick. Keyed by task id and valued by the attachment set that failed, so
@@ -1069,6 +1082,7 @@ async function appendManualRunHistory(
       runAt: task.runAt,
       nextRunAt,
       attachmentCount: latestTask.attachments?.length,
+      detail: takeModelFallbackDetail(task.id),
       ...promptMetadata,
     };
     if (task.runAt && task.afterRun === "delete") {
@@ -1455,6 +1469,7 @@ export function deactivate(): void {
   manualRunInFlightTaskIds.clear();
   attachmentBlockNotifications.clear();
   lastPromptResolutionByTaskId.clear();
+  lastModelFallbackByTaskId.clear();
   resetExecutionHistoryQueueForTests();
   setExecutionHistoryContextForTests(undefined);
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
@@ -1475,16 +1490,26 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       : undefined;
   // notifyInfo already checks shouldNotify() internally — no need for an outer guard.
   notifyInfo(messages.taskExecuting(task.name));
+  lastModelFallbackByTaskId.delete(task.id);
 
   try {
     const resolved = await resolvePromptExecution(task);
 
     // Execute the prompt
     try {
-      await copilotExecutor.executePrompt(
+      const executionResult = await copilotExecutor.executePrompt(
         resolved.prompt,
         buildPromptExecutionOptions(resolved, getTaskAttachmentRoots(task)),
       );
+      if (executionResult?.modelFallback) {
+        lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
+        notifyInfo(
+          messages.modelFallbackApplied(
+            executionResult.modelFallback.from,
+            executionResult.modelFallback.to,
+          ),
+        );
+      }
     } catch (error) {
       // executePrompt displays its own warning on failure.
       markExecutionErrorAsUserNotified(error);
@@ -1507,6 +1532,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         runAt: task.runAt,
         nextRunAt: nextRunDate?.toISOString(),
         attachmentCount: task.attachments?.length,
+        detail: takeModelFallbackDetail(task.id),
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
@@ -2009,6 +2035,7 @@ async function resolvePromptExecution(
     modelVersion: task.modelVersion,
     modelReasoningEffort: task.modelReasoningEffort,
     modelConfiguration: task.modelConfiguration,
+    ...(task.modelFallback === true ? { modelFallback: true } : {}),
     attachments: task.attachments,
   };
 }

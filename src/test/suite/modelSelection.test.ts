@@ -4,6 +4,9 @@ import {
   filterExpandedPickerModelCatalog,
   filterPickerModelCatalog,
   findBestMatchingModel,
+  findFallbackModel,
+  MODEL_FALLBACK_CHAIN_MAX,
+  normalizeModelFallbackChain,
   normalizeModelSelection,
   normalizeModelCatalog,
 } from "../../modelSelection";
@@ -1120,5 +1123,66 @@ suite("Model Selection Catalog Tests", () => {
       catalog.map((model) => model.label),
       ["GPT-5.4 (32k)", "GPT-5.4 (128k)"],
     );
+  });
+
+  test("normalizeModelFallbackChain trims, de-duplicates, ignores junk and caps the length", () => {
+    assert.deepStrictEqual(normalizeModelFallbackChain(undefined), []);
+    assert.deepStrictEqual(normalizeModelFallbackChain("auto"), []);
+    assert.deepStrictEqual(
+      normalizeModelFallbackChain([
+        " hydrafusion ",
+        "Hydra-Fusion",
+        "",
+        42,
+        null,
+        "auto",
+      ]),
+      ["hydrafusion", "auto"],
+    );
+    assert.strictEqual(
+      normalizeModelFallbackChain(["a", "b", "c", "d", "e", "f", "g"]).length,
+      MODEL_FALLBACK_CHAIN_MAX,
+    );
+  });
+
+  test("findFallbackModel picks the first chain entry present in the catalog", () => {
+    const models = normalizeModelCatalog([
+      { id: "claude", name: "Claude", description: "", vendor: "copilot" },
+      {
+        id: "hydrafusion",
+        name: "HydraFusion",
+        description: "",
+        vendor: "copilot",
+      },
+      { id: "auto", name: "Auto", description: "", vendor: "copilot" },
+    ]);
+
+    assert.strictEqual(
+      findFallbackModel(["hydrafusion", "auto"], models)?.id,
+      "hydrafusion",
+    );
+    assert.strictEqual(
+      findFallbackModel(["Hydra Fusion", "auto"], models)?.id,
+      "hydrafusion",
+    );
+    assert.strictEqual(
+      findFallbackModel(["missing", "auto"], models)?.id,
+      "auto",
+    );
+    assert.strictEqual(findFallbackModel(["missing"], models), undefined);
+    assert.strictEqual(findFallbackModel([], models), undefined);
+  });
+
+  test("findFallbackModel skips entries that are the unavailable model and Default", () => {
+    const models = normalizeModelCatalog([
+      { id: "", name: "Default", description: "", vendor: "" },
+      { id: "auto", name: "Auto", description: "", vendor: "copilot" },
+    ]);
+
+    assert.strictEqual(
+      findFallbackModel(["auto"], models, { model: "auto" }),
+      undefined,
+    );
+    assert.strictEqual(findFallbackModel([""], models), undefined);
   });
 });

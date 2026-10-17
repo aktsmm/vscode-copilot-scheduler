@@ -1958,6 +1958,56 @@ suite("ScheduleManager Auto Mode Tests", () => {
     }
   });
 
+  test("model fallback opt-in persists through create, update and duplicate", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const plain = await manager.createTask({
+        name: "model-fallback-default",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+      });
+      assert.strictEqual(plain.modelFallback, undefined);
+
+      const created = await manager.createTask({
+        name: "model-fallback-on",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        modelFallback: true,
+      });
+      assert.strictEqual(created.modelFallback, true);
+
+      const copy = await manager.duplicateTask(created.id);
+      assert.strictEqual(copy?.modelFallback, true);
+
+      const cleared = await manager.updateTask(created.id, {
+        modelFallback: false,
+      });
+      assert.strictEqual(cleared?.modelFallback, undefined);
+      const enabled = await manager.updateTask(plain.id, {
+        modelFallback: true,
+      });
+      assert.strictEqual(enabled?.modelFallback, true);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("updateTask can change autoMode", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

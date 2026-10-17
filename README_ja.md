@@ -160,6 +160,10 @@ VS Code や提供元の仕様変更により、以前動いた環境でも詳細
 
 map は通常編集・複製・再読み込みで維持し、モデル変更時は動的な上書きを解除します。旧 Scheduler で保存すると項目を失う可能性があるため、ダウングレードして保存しないでください。選択したキーはリクエストごとに固定し、未指定キーは元モデルの設定を継承します。スキーマ URI と設定転送は VS Code の内部互換契約です。古いホストは明示設定の実行を拒否し、旧方式と継承を維持します。内部の固定モデルはタスク候補に表示しません。隔離した VS Code 1.141.1 の権限なし中継で System ロールが元モデル呼び出し前に拒否されることと、User / Assistant / tool の設定固定転送・共有設定不変を確認しました。候補取得・保存・送信・実応答・提供元での実効設定確認は別の検証結果です。合成試験は実提供元の推論や設定適用を保証しません。
 
+#### モデルのフォールバック（オプトイン）
+
+タスクで **選択したモデルが使えない場合は別のモデルに切り替える** をオンにすると、保存済みモデルが無くなっていても実行できます。`copilotScheduler.modelFallbackChain`（既定: HydraFusion → Auto）のうち、最新のモデル一覧に存在する最初のモデルで実行します。既定はオフなので、既存タスクは従来どおり別モデルでは実行せず停止します。発動するのはモデルが利用できない場合だけです。送信に失敗しても再送せず、モデル一覧を取得できないときも発動せず、モデルの詳細オプションや旧来の思考の負荷は引き継ぎません。切り替えは通知と実行履歴に記録されます。`scheduler_create_task` / `scheduler_update_task` は `modelFallback` を受け付けます。
+
 #### 追加 Provider の検証手順
 
 明示したモデルとタスク設定は厳守します。未指定の項目だけ共有設定を継承し、適用できない明示設定は説明付きで停止して保存値を保持します。自動的に継承へ切り替えません。明示モデルは選択した識別情報で1回だけ送信し、失敗時に旧思考設定を落とす、モデル指定なしで再試行する、旧テキストコマンドへ代替する処理は行いません。
@@ -220,6 +224,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.chatSession`                | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |
+| `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
 | `copilotScheduler.commandDelayFactor`         | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
 | `copilotScheduler.showNotifications`          | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
 | `copilotScheduler.notificationMode`           | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |

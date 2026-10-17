@@ -180,6 +180,9 @@ export interface ScheduledTask {
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
+  /** Opt in to the configured fallback model chain when the saved model is unavailable. */
+  modelFallback?: boolean;
+
   /** Task-specific chat session override. Undefined means use the global setting. */
   chatSession?: ChatSessionBehavior;
 
@@ -280,6 +283,9 @@ export interface CreateTaskInput {
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
+  /** Opt in to the configured fallback model chain when the saved model is unavailable. */
+  modelFallback?: boolean;
+
   /** Per-task chat session override. "default" uses the global setting. */
   chatSession?: TaskChatSessionMode;
 
@@ -375,6 +381,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Files attached to the chat request, in their stored (relative) form. */
   attachments?: TaskAttachment[];
+
+  /** Opt in to the configured fallback model chain when the model is unavailable. */
+  modelFallback?: boolean;
 }
 
 /**
@@ -447,6 +456,21 @@ export interface ExecuteOptions extends ModelSelectionFields {
 
   /** Absolute paths of attachment files, already resolved and validated. */
   attachFilePaths?: string[];
+
+  /** Opt in to the configured fallback model chain when the model is unavailable. */
+  modelFallback?: boolean;
+}
+
+/** Records that a fallback model replaced an unavailable requested model. */
+export interface ModelFallbackInfo {
+  /** Display label of the model the task asked for. */
+  from: string;
+  /** Display label of the model actually used. */
+  to: string;
+}
+
+export interface ExecutePromptResult {
+  modelFallback?: ModelFallbackInfo;
 }
 
 /**

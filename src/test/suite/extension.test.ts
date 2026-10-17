@@ -1197,6 +1197,7 @@ suite("Extension Test Suite", () => {
       "model",
       "modelReasoningEffort",
       "autoMode",
+      "modelFallback",
       "jitterSeconds",
       "maxExecutionsPerDay",
       "runAt",
@@ -3587,6 +3588,45 @@ suite("Frontmatter Resolution Tests", () => {
       resolved.prompt,
       "[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.\n\nBody",
     );
+  });
+
+  test("Carries the model fallback opt-in into execution options only when enabled", async () => {
+    const { __testOnly } = await import("../../extension");
+    const resolvePromptExecution = __testOnly.resolvePromptExecution as (
+      task: ScheduledTask,
+      preferOpenDocument?: boolean,
+    ) => Promise<{ prompt: string; modelFallback?: boolean }>;
+    const buildPromptExecutionOptions =
+      __testOnly.buildPromptExecutionOptions as (request: {
+        prompt: string;
+        modelFallback?: boolean;
+      }) => { modelFallback?: boolean };
+
+    const base = {
+      id: "t-model-fallback",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+
+    const optedIn = await resolvePromptExecution(
+      { ...base, modelFallback: true },
+      true,
+    );
+    assert.strictEqual(optedIn.modelFallback, true);
+    assert.strictEqual(
+      buildPromptExecutionOptions(optedIn).modelFallback,
+      true,
+    );
+
+    const optedOut = await resolvePromptExecution(base, true);
+    assert.ok(!("modelFallback" in optedOut));
+    assert.ok(!("modelFallback" in buildPromptExecutionOptions(optedOut)));
   });
 
   test("Does not insert auto hint when task.autoMode is false", async () => {

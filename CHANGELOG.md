@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.4] - 2026-10-18
+
+Marketplace Pre-release (`marketplace-preview-v1.9.4`). Runtime activation and provider-model consent are still separate requirements.
+
+### Added
+
+- Opt-in model fallback. A task can now be set to fall back to another model when its saved model is unavailable. The first model in the new `copilotScheduler.modelFallbackChain` setting (default: HydraFusion, then Auto; up to 5 entries; `[]` disables) that exists in the live model catalog is used instead. Entries match by id, name or family and ignore separators.
+- The task form has a **Fall back to another model if the selected model is unavailable** checkbox, and `scheduler_create_task` / `scheduler_update_task` accept `modelFallback`.
+- The substitution is shown in a notification and recorded in the execution history as `Model fallback: <requested> -> <used>`.
+
+### Notes
+
+- Default behavior is unchanged: without the opt-in an unavailable model still stops the run. Fallback is used only when the live catalog is readable and the model is missing; a rejected dispatch is not retried, and detailed model options and legacy thinking effort are not carried over to the fallback model.
+
 ## [1.9.3] - 2026-10-15
 
 Marketplace Pre-release (`marketplace-preview-v1.9.3`). Runtime activation and provider-model consent are still separate requirements.

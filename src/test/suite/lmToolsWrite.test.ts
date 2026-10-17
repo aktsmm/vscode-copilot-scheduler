@@ -955,6 +955,7 @@ suite("lmTools write wrappers", () => {
       modelVendor: "openai-codex",
       modelReasoningEffort: "high",
       autoMode: true,
+      modelFallback: true,
       jitterSeconds: 120,
       maxExecutionsPerDay: 3,
       allowedTimeStart: "09:00",
@@ -965,6 +966,7 @@ suite("lmTools write wrappers", () => {
     assert.strictEqual(client.createInput?.modelVendor, "openai-codex");
     assert.strictEqual(client.createInput?.modelReasoningEffort, "high");
     assert.strictEqual(client.createInput?.autoMode, true);
+    assert.strictEqual(client.createInput?.modelFallback, true);
     assert.strictEqual(client.createInput?.jitterSeconds, 120);
     assert.strictEqual(client.createInput?.maxExecutionsPerDay, 3);
     assert.strictEqual(client.createInput?.allowedTimeStart, "09:00");

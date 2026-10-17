@@ -10,6 +10,8 @@ import type {
   AgentInfo,
   ModelInfo,
   ExecuteOptions,
+  ExecutePromptResult,
+  ModelFallbackInfo,
   ChatSessionBehavior,
 } from "./types";
 import { messages, isJapanese } from "./i18n";
@@ -35,11 +37,14 @@ import {
 } from "./promptExecutionErrors";
 import {
   areModelSelectionsEqual,
+  DEFAULT_MODEL_FALLBACK_CHAIN,
   findBestMatchingModel,
+  findFallbackModel,
   hasModelSelection,
   hasStrictModelVariantSelection,
   modelInfoToSelection,
   normalizeModelCatalog,
+  normalizeModelFallbackChain,
   normalizeModelSelection,
   type NormalizedModelSelection,
 } from "./modelSelection";
@@ -92,6 +97,7 @@ type PromptRouting = {
 type ResolvedModelSelectionResult = {
   selection: NormalizedModelSelection;
   matched?: ModelInfo;
+  fallback?: ModelFallbackInfo;
 };
 
 type ChatModelLike = {
@@ -551,7 +557,10 @@ export class CopilotExecutor {
   /**
    * Execute a prompt in Copilot Chat
    */
-  async executePrompt(prompt: string, options?: ExecuteOptions): Promise<void> {
+  async executePrompt(
+    prompt: string,
+    options?: ExecuteOptions,
+  ): Promise<ExecutePromptResult> {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
 
@@ -588,9 +597,15 @@ export class CopilotExecutor {
         "modelConfigurationUnavailable",
       );
     }
-    let resolved =
-      await CopilotExecutor.resolveRequestedModelSelection(requestedModel);
-
+    let resolved = await CopilotExecutor.resolveRequestedModelSelection(
+      requestedModel,
+      options?.modelFallback === true,
+    );
+    if (resolved.fallback) {
+      logDebug(
+        `[CopilotScheduler] Model fallback applied: ${resolved.fallback.from} -> ${resolved.fallback.to}`,
+      );
+    }
     if (resolved.selection.modelConfiguration !== undefined) {
       if (resolved.selection.modelReasoningEffort) {
         throw createPromptBlockedError(
@@ -756,6 +771,8 @@ export class CopilotExecutor {
 
       throw error;
     }
+
+    return resolved.fallback ? { modelFallback: resolved.fallback } : {};
   }
 
   private async tryOpenChatWithPrompt(
@@ -947,14 +964,42 @@ export class CopilotExecutor {
 
   private static async resolveRequestedModelSelection(
     selection: NormalizedModelSelection,
+    allowFallback = false,
   ): Promise<ResolvedModelSelectionResult> {
     if (!hasModelSelection(selection)) {
       return { selection };
     }
 
-    const { models } = await CopilotExecutor.getAvailableModelsWithSource();
+    const { models, source } =
+      await CopilotExecutor.getAvailableModelsWithSource();
     const matched = findBestMatchingModel(selection, models);
     if (!matched) {
+      // Only a live catalog can prove the model is gone; the static list
+      // contains no models and would make every task look unavailable.
+      if (allowFallback && source === "api") {
+        const fallbackModel = findFallbackModel(
+          normalizeModelFallbackChain(
+            vscode.workspace
+              .getConfiguration("copilotScheduler")
+              .get<unknown>(
+                "modelFallbackChain",
+                DEFAULT_MODEL_FALLBACK_CHAIN,
+              ),
+          ),
+          models,
+          selection,
+        );
+        if (fallbackModel) {
+          return {
+            selection: modelInfoToSelection(fallbackModel),
+            matched: fallbackModel,
+            fallback: {
+              from: selection.modelName || selection.model || "",
+              to: fallbackModel.name || fallbackModel.id,
+            },
+          };
+        }
+      }
       if (hasStrictProviderSelection(selection)) {
         throw createPromptBlockedError(
           messages.providerModelUnavailable(),

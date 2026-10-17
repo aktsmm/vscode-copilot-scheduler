@@ -1607,6 +1607,31 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("model fallback checkbox is wired through the form, edit mode, reset and payload", () => {
+    const script = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const html = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    for (const token of [
+      'var modelFallbackInput = document.getElementById("model-fallback");',
+      "modelFallback: source.modelFallback === true,",
+      "modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,",
+      "if (modelFallbackInput) modelFallbackInput.checked = false;",
+      "modelFallbackInput.checked = task.modelFallback === true;",
+    ]) {
+      assert.ok(
+        sourceContainsToken(script, token),
+        `Expected token not found in schedulerWebview.js: ${token}`,
+      );
+    }
+    assert.ok(html.includes('<input type="checkbox" id="model-fallback">'));
+    assert.ok(html.includes("strings.webviewModelFallbackNote"));
+  });
+
   test("updateDefaults applies new defaults immediately only in create mode", () => {
     const scriptPath = path.resolve(
       __dirname,
@@ -1857,6 +1882,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           afterRunSelect: null,
           cronExpression: { value: original.cronExpression },
           autoModeInput: null,
+          modelFallbackInput: null,
           chatSessionSelect: null,
           jitterSecondsInput: null,
           maxExecutionsPerDayInput: null,
