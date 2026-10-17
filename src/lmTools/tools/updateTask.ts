@@ -37,6 +37,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "scope",
   "chatSession",
   "autoMode",
+  "modelFallback",
   "jitterSeconds",
   "maxExecutionsPerDay",
   "allowedTimeStart",

@@ -871,6 +871,7 @@
   }
 
   var autoModeInput = document.getElementById("auto-mode");
+  var modelFallbackInput = document.getElementById("model-fallback");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
@@ -985,6 +986,7 @@
       enabled: source.enabled !== false,
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
+      modelFallback: source.modelFallback === true,
       chatSession:
         source.chatSession === "new" || source.chatSession === "continue"
           ? source.chatSession
@@ -2250,6 +2252,7 @@
         runFirstInOneMinute:
           !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
+        modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
@@ -3383,6 +3386,7 @@
     }
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
+    if (modelFallbackInput) modelFallbackInput.checked = false;
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
     }
@@ -3710,6 +3714,9 @@
 
     if (autoModeInput) {
       autoModeInput.checked = task.autoMode === true;
+    }
+    if (modelFallbackInput) {
+      modelFallbackInput.checked = task.modelFallback === true;
     }
     if (chatSessionSelect) {
       chatSessionSelect.value = task.chatSession || "default";

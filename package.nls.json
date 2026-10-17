@@ -37,6 +37,7 @@
   "config.chatSession": "Default chat session behavior. Tasks can override this.",
   "config.chatSession.new": "Create new chat session for each execution (more isolated, usually slower)",
   "config.chatSession.continue": "Continue in existing chat session (usually faster)",
+  "config.modelFallbackChain": "Fallback model order for tasks that opt in to model fallback. When a task's selected model is unavailable, the first entry that matches an available model (by id, name or family; separators ignored) is used instead. Detailed model options are not carried over. Set to an empty list to disable. Up to 5 entries.",
   "config.autoModeDefault": "Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt). To automatically keep AI-applied edits, configure `#chat.editing.autoAcceptDelay#`. If the link does not open, search for chat.editing.autoAcceptDelay in Settings.",
   "config.commandDelayFactor": "Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster but may reduce stability in some environments.",
   "config.manualRunNextRunPolicy": "How to compute next run after Run Now",

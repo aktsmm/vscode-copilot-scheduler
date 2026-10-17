@@ -833,6 +833,211 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     }
   });
 
+  suite("model fallback", () => {
+    const catalog = [
+      { id: "claude", name: "Claude", vendor: "copilot", description: "" },
+      {
+        id: "hydrafusion",
+        name: "HydraFusion",
+        vendor: "copilot",
+        description: "",
+      },
+      { id: "auto", name: "Auto", vendor: "copilot", description: "" },
+    ];
+    type Resolver = {
+      resolveRequestedModelSelection: (
+        selection: { model: string; modelVendor?: string },
+        allowFallback?: boolean,
+      ) => Promise<{
+        selection: { model?: string };
+        matched?: { id: string };
+        fallback?: { from: string; to: string };
+      }>;
+    };
+    const resolver = CopilotExecutor as unknown as Resolver;
+    let originalModels: typeof CopilotExecutor.getAvailableModelsWithSource;
+    let source: "api" | "fallback";
+    let models: typeof catalog;
+
+    setup(() => {
+      originalModels = CopilotExecutor.getAvailableModelsWithSource;
+      source = "api";
+      models = catalog;
+      CopilotExecutor.getAvailableModelsWithSource = async () => ({
+        source,
+        models,
+      });
+    });
+    teardown(() => {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+    });
+
+    test("an unavailable model keeps the strict behavior unless the task opts in", async () => {
+      const result = await resolver.resolveRequestedModelSelection({
+        model: "gone",
+      });
+      assert.strictEqual(result.matched, undefined);
+      assert.strictEqual(result.fallback, undefined);
+      await assert.rejects(
+        resolver.resolveRequestedModelSelection({
+          model: "gone",
+          modelVendor: "ollama",
+        }),
+        /unavailable|利用できません/,
+      );
+    });
+
+    test("an opted-in task falls back to HydraFusion first", async () => {
+      const result = await resolver.resolveRequestedModelSelection(
+        { model: "gone" },
+        true,
+      );
+      assert.strictEqual(result.matched?.id, "hydrafusion");
+      assert.strictEqual(result.selection.model, "hydrafusion");
+      assert.deepStrictEqual(result.fallback, {
+        from: "gone",
+        to: "HydraFusion",
+      });
+    });
+
+    test("fallback continues to Auto when HydraFusion is unavailable", async () => {
+      models = catalog.filter((model) => model.id !== "hydrafusion");
+      const result = await resolver.resolveRequestedModelSelection(
+        { model: "gone" },
+        true,
+      );
+      assert.strictEqual(result.matched?.id, "auto");
+      assert.strictEqual(result.fallback?.to, "Auto");
+    });
+
+    test("fallback also replaces an unavailable provider-pinned model", async () => {
+      const result = await resolver.resolveRequestedModelSelection(
+        { model: "gone", modelVendor: "ollama" },
+        true,
+      );
+      assert.strictEqual(result.matched?.id, "hydrafusion");
+    });
+
+    test("an available model is never replaced", async () => {
+      const result = await resolver.resolveRequestedModelSelection(
+        { model: "claude" },
+        true,
+      );
+      assert.strictEqual(result.matched?.id, "claude");
+      assert.strictEqual(result.fallback, undefined);
+    });
+
+    test("an unreadable live catalog never triggers fallback", async () => {
+      source = "fallback";
+      const result = await resolver.resolveRequestedModelSelection(
+        { model: "gone" },
+        true,
+      );
+      assert.strictEqual(result.fallback, undefined);
+      assert.strictEqual(result.matched, undefined);
+    });
+
+    test("no chain entry in the catalog keeps the strict failure", async () => {
+      models = catalog.filter((model) => model.id === "claude");
+      await assert.rejects(
+        resolver.resolveRequestedModelSelection(
+          { model: "gone", modelVendor: "ollama" },
+          true,
+        ),
+        /unavailable|利用できません/,
+      );
+    });
+
+    test("the configured chain order and an empty chain are honored", async () => {
+      const config = vscode.workspace.getConfiguration("copilotScheduler");
+      const inspected = config.inspect<string[]>("modelFallbackChain");
+      try {
+        await config.update(
+          "modelFallbackChain",
+          ["auto", "hydrafusion"],
+          vscode.ConfigurationTarget.Global,
+        );
+        const ordered = await resolver.resolveRequestedModelSelection(
+          { model: "gone" },
+          true,
+        );
+        assert.strictEqual(ordered.matched?.id, "auto");
+
+        await config.update(
+          "modelFallbackChain",
+          [],
+          vscode.ConfigurationTarget.Global,
+        );
+        const disabled = await resolver.resolveRequestedModelSelection(
+          { model: "gone" },
+          true,
+        );
+        assert.strictEqual(disabled.fallback, undefined);
+      } finally {
+        await config.update(
+          "modelFallbackChain",
+          inspected?.globalValue,
+          vscode.ConfigurationTarget.Global,
+        );
+      }
+    });
+
+    test("executePrompt dispatches the fallback model and reports it", async () => {
+      const originalCommand = vscode.commands.executeCommand;
+      const requests: Record<string, unknown>[] = [];
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: async (_command: string, args: Record<string, unknown>) => {
+          requests.push(args);
+          return {};
+        },
+      });
+      try {
+        const result = await new CopilotExecutor().executePrompt("synthetic", {
+          agent: "agent",
+          model: "gone",
+          modelFallback: true,
+          chatSession: "continue",
+        });
+        assert.deepStrictEqual(result.modelFallback, {
+          from: "gone",
+          to: "HydraFusion",
+        });
+        assert.strictEqual(requests.length, 1);
+        assert.strictEqual(
+          (requests[0].modelSelector as { id?: string }).id,
+          "hydrafusion",
+        );
+      } finally {
+        Object.defineProperty(vscode.commands, "executeCommand", {
+          configurable: true,
+          value: originalCommand,
+        });
+      }
+    });
+
+    test("executePrompt without opt-in reports no fallback", async () => {
+      const originalCommand = vscode.commands.executeCommand;
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: async () => ({}),
+      });
+      try {
+        const result = await new CopilotExecutor().executePrompt("synthetic", {
+          agent: "agent",
+          model: "claude",
+          chatSession: "continue",
+        });
+        assert.strictEqual(result.modelFallback, undefined);
+      } finally {
+        Object.defineProperty(vscode.commands, "executeCommand", {
+          configurable: true,
+          value: originalCommand,
+        });
+      }
+    });
+  });
+
   test("Codex Bridge quality sync failures block dispatch instead of ignoring the effort", async () => {
     const fs = await import("fs");
     const os = await import("os");

@@ -1161,3 +1161,68 @@ export function findBestMatchingModel(
   }
   return ranked[0]?.model;
 }
+
+export const MODEL_FALLBACK_CHAIN_MAX = 5;
+
+/** Fallback order used when `modelFallbackChain` is unset. */
+export const DEFAULT_MODEL_FALLBACK_CHAIN: readonly string[] = [
+  "hydrafusion",
+  "auto",
+];
+
+/** Normalizes the configured fallback chain: trimmed, de-duplicated, capped. */
+export function normalizeModelFallbackChain(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const chain: string[] = [];
+  for (const item of value) {
+    const text = trimOptionalText(item);
+    if (!text) {
+      continue;
+    }
+    const key = normalizeKey(text).replace(/-/gu, "");
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    chain.push(text);
+    if (chain.length >= MODEL_FALLBACK_CHAIN_MAX) {
+      break;
+    }
+  }
+  return chain;
+}
+
+/**
+ * Picks the first chain entry that resolves to a selectable model in the live
+ * catalog. Entries match by id, display name or family; separators are ignored
+ * so "Hydra Fusion" finds "HydraFusion".
+ */
+export function findFallbackModel(
+  chain: readonly string[],
+  availableModels: readonly ModelInfo[],
+  unavailable?: ModelSelectionFields,
+): ModelInfo | undefined {
+  const unavailableKey = normalizeKey(
+    trimOptionalText(unavailable?.model),
+  ).replace(/-/gu, "");
+  for (const entry of chain) {
+    const candidates = new Set([entry, entry.replace(/[-_.\s]+/gu, "")]);
+    for (const candidate of candidates) {
+      const matched = findBestMatchingModel(
+        { model: candidate },
+        availableModels,
+      );
+      if (
+        matched &&
+        (!unavailableKey ||
+          normalizeKey(matched.id).replace(/-/gu, "") !== unavailableKey)
+      ) {
+        return matched;
+      }
+    }
+  }
+  return undefined;
+}

@@ -1687,6 +1687,7 @@ export class SchedulerWebview {
       labelNever: messages.labelNever(),
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
       labelAutoMode: messages.labelAutoMode(),
+      labelModelFallback: messages.labelModelFallback(),
       labelChatSession: messages.labelChatSession(),
       labelChatSessionDefault: messages.labelChatSessionDefault(),
       labelChatSessionNew: messages.labelChatSessionNew(),
@@ -1792,6 +1793,7 @@ export class SchedulerWebview {
 
       // Webview notes
       webviewAutoModeNote: messages.webviewAutoModeNote(),
+      webviewModelFallbackNote: messages.webviewModelFallbackNote(),
       webviewChatSessionNote: defaultChatSessionNote,
       webviewJitterNote: messages.webviewJitterNote(),
       webviewMaxExecutionsPerDayNote: messages.webviewMaxExecutionsPerDayNote(),
@@ -2867,6 +2869,14 @@ export class SchedulerWebview {
                 <option value="">${escapeHtml(strings.placeholderSelectModelVariant)}</option>
               </select>
               <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
+            </div>
+
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="model-fallback">
+                <label for="model-fallback">${escapeHtml(strings.labelModelFallback)}</label>
+              </div>
+              <p class="note">${escapeHtml(strings.webviewModelFallbackNote)}</p>
             </div>
 
             <div class="form-group col-12">

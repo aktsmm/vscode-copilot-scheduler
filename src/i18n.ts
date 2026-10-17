@@ -462,6 +462,26 @@ export const messages = {
       "The selected provider model is unavailable. Check the provider connection and authentication. No fallback model was used.",
       "選択した提供元のモデルが利用できません。提供元への接続と認証を確認してください。別モデルへの代替は行っていません。",
     ),
+  modelFallbackApplied: (from: string, to: string) =>
+    t(
+      `The saved model "${from}" is unavailable. Ran with fallback model "${to}".`,
+      `保存済みのモデル「${from}」が利用できないため、代替モデル「${to}」で実行しました。`,
+    ),
+  executionHistoryModelFallback: (from: string, to: string) =>
+    t(
+      `Model fallback: ${from} -> ${to}`,
+      `モデルのフォールバック: ${from} -> ${to}`,
+    ),
+  labelModelFallback: () =>
+    t(
+      "Fall back to another model if the selected model is unavailable",
+      "選択したモデルが使えない場合は別のモデルに切り替える",
+    ),
+  webviewModelFallbackNote: () =>
+    t(
+      "Off by default. When on, an unavailable model is replaced by the first available model in the copilotScheduler.modelFallbackChain setting (default: HydraFusion, then Auto). Explicit detailed model options are not carried over. The change is recorded in the execution history.",
+      "既定はオフです。オンにすると、利用できないモデルを copilotScheduler.modelFallbackChain 設定（既定: HydraFusion → Auto）で最初に使えるモデルへ置き換えます。モデルの詳細オプションは引き継ぎません。切り替えは実行履歴に記録されます。",
+    ),
   providerModelDispatchFailed: () =>
     t(
       "Could not dispatch to the selected provider model through VS Code Chat. Check sign-in, connectivity, mode support and any model-access approval dialog in Chat. No settings were dropped and no fallback model was used.",

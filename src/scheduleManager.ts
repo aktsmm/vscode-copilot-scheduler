@@ -1060,6 +1060,14 @@ export class ScheduleManager {
       }
 
       if (
+        task.modelFallback !== undefined &&
+        typeof task.modelFallback !== "boolean"
+      ) {
+        task.modelFallback = false;
+        needsSave = true;
+      }
+
+      if (
         task.chatSession !== undefined &&
         task.chatSession !== "new" &&
         task.chatSession !== "continue"
@@ -1600,6 +1608,7 @@ export class ScheduleManager {
         input.autoMode !== undefined
           ? Boolean(input.autoMode)
           : defaultAutoMode,
+      modelFallback: input.modelFallback === true ? true : undefined,
       chatSession:
         input.chatSession === "new" || input.chatSession === "continue"
           ? input.chatSession
@@ -1911,6 +1920,9 @@ export class ScheduleManager {
     if (updates.autoMode !== undefined) {
       task.autoMode = Boolean(updates.autoMode);
     }
+    if (updates.modelFallback !== undefined) {
+      task.modelFallback = updates.modelFallback === true ? true : undefined;
+    }
     if (updates.chatSession !== undefined) {
       task.chatSession =
         updates.chatSession === "new" || updates.chatSession === "continue"
@@ -2082,6 +2094,7 @@ export class ScheduleManager {
       promptPath: original.promptPath,
       attachments: original.attachments,
       autoMode: original.autoMode,
+      modelFallback: original.modelFallback,
       chatSession: original.chatSession,
       jitterSeconds: original.jitterSeconds,
       maxExecutionsPerDay: original.maxExecutionsPerDay,

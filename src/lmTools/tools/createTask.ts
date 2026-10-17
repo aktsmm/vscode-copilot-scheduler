@@ -34,6 +34,7 @@ interface CreateTaskToolInput {
   enabled?: boolean;
   chatSession?: string;
   autoMode?: boolean;
+  modelFallback?: boolean;
   jitterSeconds?: number;
   maxExecutionsPerDay?: number;
   allowedTimeStart?: string;
@@ -61,6 +62,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
     autoMode: input.autoMode,
+    modelFallback: input.modelFallback,
     jitterSeconds: input.jitterSeconds,
     maxExecutionsPerDay: input.maxExecutionsPerDay,
     allowedTimeStart: input.allowedTimeStart,
