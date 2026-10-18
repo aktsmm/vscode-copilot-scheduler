@@ -5,10 +5,15 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.4] - 2026-10-18
+
+Marketplace Pre-release (`marketplace-preview-v1.9.4`). Runtime activation and provider-model consent are still separate requirements.
 
 ### Added
 
+- Opt-in model fallback. A task can now be set to fall back to another model when its saved model is unavailable. The first model in the new `copilotScheduler.modelFallbackChain` setting (default: HydraFusion, then Auto; up to 5 entries; `[]` disables) that exists in the live model catalog is used instead. Entries match by id, name or family and ignore separators.
+- The task form has a **Fall back to another model if the selected model is unavailable** checkbox, and `scheduler_create_task` / `scheduler_update_task` accept `modelFallback`.
+- The substitution is shown in a notification and recorded in the execution history as `Model fallback: <requested> -> <used>`.
 - Skills in the task form. A new group lets you insert an Agent Skill into the prompt as `/skill-name`; the rest of the prompt is passed to the skill as its arguments. Skills are read from `.github/skills`, `.agents/skills`, `.claude/skills` (local, trusted workspace folders) and `~/.copilot/skills` (or `$COPILOT_HOME/skills`), `~/.agents/skills`, `~/.claude/skills`. By default only skills with `disable-model-invocation: true` are listed; the setting `copilotScheduler.skillTemplates` (`explicit` / `all` / `off`) and a **Show all skills** toggle change that. The prompt text is what runs, so tasks stay compatible with older versions.
 - `#scheduler_query` `kind=list_skills` lists the Agent Skills a task prompt can run as `/<name> <arguments>` (name, scope, description, `argumentHint`, `explicitOnly`), without folder paths, so Chat does not guess skill names.
 - Before a run, a task's saved skill is checked: a skill that is gone, exists in several places at the same level, or lives in an untrusted workspace stops the run with an explanation instead of sending `/skill-name` anyway.
@@ -26,19 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The model fallback texts now state that HydraFusion is skipped unless the model list includes it, and that the replacement may not be applied in Copilot (Agent Host) sessions.
 
-## [1.9.4] - 2026-10-18
-
-Marketplace Pre-release (`marketplace-preview-v1.9.4`). Runtime activation and provider-model consent are still separate requirements.
-
-### Added
-
-- Opt-in model fallback. A task can now be set to fall back to another model when its saved model is unavailable. The first model in the new `copilotScheduler.modelFallbackChain` setting (default: HydraFusion, then Auto; up to 5 entries; `[]` disables) that exists in the live model catalog is used instead. Entries match by id, name or family and ignore separators.
-- The task form has a **Fall back to another model if the selected model is unavailable** checkbox, and `scheduler_create_task` / `scheduler_update_task` accept `modelFallback`.
-- The substitution is shown in a notification and recorded in the execution history as `Model fallback: <requested> -> <used>`.
-
 ### Notes
 
 - Default behavior is unchanged: without the opt-in an unavailable model still stops the run. Fallback is used only when the live catalog is readable and the model is missing; a rejected dispatch is not retried, and detailed model options and legacy thinking effort are not carried over to the fallback model.
+- On VS Code 1.142 the Copilot (Agent Host) harness ignored the model, reasoning effort and context size chosen for a task; choose the model in the chat window there.
 
 ## [1.9.3] - 2026-10-15
 
