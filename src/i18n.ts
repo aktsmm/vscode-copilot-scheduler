@@ -513,6 +513,23 @@ export const messages = {
     ),
   skillScopeWorkspace: () => t("workspace", "ワークスペース"),
   skillScopeUser: () => t("user", "ユーザー"),
+  skillGroupExplicit: () =>
+    t("Runs only when invoked", "呼び出したときだけ実行"),
+  skillGroupAuto: () =>
+    t(
+      "Also used automatically by the model",
+      "モデルが自動で使うこともある",
+    ),
+  skillKindExplicit: () =>
+    t(
+      "Runs only when invoked (disable-model-invocation: true)",
+      "呼び出したときだけ実行（disable-model-invocation: true）",
+    ),
+  skillKindAuto: () =>
+    t(
+      "The model may also use this skill on its own",
+      "モデルが自動で使うこともあるスキル",
+    ),
   sessionHarnessLocalUnavailable: () =>
     t(
       "Could not start a Local chat session, so the task was not sent. This VS Code does not provide the command, or it failed. Set copilotScheduler.sessionHarness to auto to use the session type VS Code chooses.",

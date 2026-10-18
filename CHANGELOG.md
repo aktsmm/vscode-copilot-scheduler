@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The task form's skill list now makes the two kinds of skill easy to tell apart. When skills that run only when invoked (`disable-model-invocation: true`) and skills the model may also use on its own are listed together, they are split under their own headings, and the note under the list states the selected skill's kind.
+
 ## [1.9.4] - 2026-10-18
 
 Marketplace Pre-release (`marketplace-preview-v1.9.4`). Runtime activation and provider-model consent are still separate requirements.
