@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The skill note under the task form's skill list is now announced by screen readers when it changes, and the skill list is linked to it so the note is read with the list.
 - The task form's skill list now makes the two kinds of skill easy to tell apart. When skills that run only when invoked (`disable-model-invocation: true`) and skills the model may also use on its own are listed together, they are split under their own headings, and the note under the list states the selected skill's kind.
 
 ## [1.8.9] - 2026-10-18

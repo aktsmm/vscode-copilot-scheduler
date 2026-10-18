@@ -1631,6 +1631,15 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
     assert.ok(html.includes('id="skill-select-group"'));
     assert.ok(html.includes('id="skill-show-all"'));
+    // The kind/description note must be read with the select and when it changes.
+    assert.ok(
+      html.includes('<select id="skill-select" aria-describedby="skill-detail">'),
+    );
+    assert.ok(
+      html.includes(
+        'id="skill-detail" role="status" aria-live="polite" aria-atomic="true"',
+      ),
+    );
 
     const helpers = new Function(
       [
