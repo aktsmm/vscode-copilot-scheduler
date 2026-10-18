@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A saved model that no longer exists is no longer resolved to Auto when only its family is known. Auto reports the family of the model it currently routes to, so it is now matched only when requested by id or name.
 - A task that selects Auto is now looked up by id and vendor only. Its family and version change with its routing, so including them could miss it.
+- Skills added, edited or removed while the panel is open now appear in the task form's skill list without reopening it. Skill folders are watched, a change to `copilotScheduler.skillTemplates` or granting workspace trust refreshes the list, and bursts of file events (for example a checkout) are coalesced into one refresh.
 - The auto-mode hint is no longer prefixed to a prompt that starts with a slash command (for example a skill). A prefixed hint stopped the command from being recognized.
 
 ### Changed
