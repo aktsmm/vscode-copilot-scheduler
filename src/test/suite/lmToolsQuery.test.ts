@@ -365,6 +365,68 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.ok, false);
     assert.match(String(payload.message), /list_models/);
     assert.match(String(payload.message), /list_agents/);
+    assert.match(String(payload.message), /list_skills/);
+  });
+
+  test("kind=list_skills returns names and descriptions without folder paths", async () => {
+    const provider = fakeCatalogProvider();
+    provider.listSkills = async () => ({
+      skills: [
+        {
+          name: "weekly-report",
+          scope: "workspace",
+          root: ".github/skills",
+          description: "Weekly report",
+          argumentHint: "[team]",
+          explicit: true,
+        },
+        {
+          name: "triage",
+          scope: "user",
+          root: "~/.copilot/skills",
+          description: "Triage",
+          explicit: false,
+        },
+      ],
+      ambiguous: ["dup"],
+      workspaceSkipped: true,
+    });
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      provider,
+    );
+    const payload = parseJson(await invoke(tool, { kind: "list_skills" }));
+    assert.strictEqual(payload.ok, true);
+    assert.strictEqual(payload.count, 2);
+    const skills = payload.skills as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      skills.map((skill) => [skill.name, skill.explicitOnly]),
+      [
+        ["weekly-report", true],
+        ["triage", false],
+      ],
+    );
+    assert.strictEqual(
+      skills.some((skill) => "root" in skill || "filePath" in skill),
+      false,
+    );
+    assert.deepStrictEqual(payload.ambiguousNames, ["dup"]);
+    assert.strictEqual(payload.workspaceSkillsSkipped, true);
+  });
+
+  test("kind=list_skills fails cleanly without a skills provider and rejects extra fields", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      fakeCatalogProvider(),
+    );
+    const missing = parseJson(await invoke(tool, { kind: "list_skills" }));
+    assert.strictEqual(missing.ok, false);
+    assert.strictEqual(missing.reason, "internal_error");
+    const extra = parseJson(
+      await invoke(tool, { kind: "list_skills", scope: "user" }),
+    );
+    assert.strictEqual(extra.ok, false);
+    assert.strictEqual(extra.reason, "validation");
   });
 
   test("kind=list_models returns ids and supported reasoning efforts", async () => {

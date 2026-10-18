@@ -407,9 +407,10 @@
                 "history",
                 "preview_cron",
                 "list_models",
-                "list_agents"
+                "list_agents",
+                "list_skills"
               ],
-              "description": "Which kind of read to perform. Use list_models before setting 'model' on a task, and list_agents before setting 'agent'."
+              "description": "Which kind of read to perform. Use list_models before setting 'model' on a task, list_agents before setting 'agent', and list_skills before writing a '/<skill>' prompt."
             },
             "scope": {
               "type": "string",

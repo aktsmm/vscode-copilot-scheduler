@@ -738,6 +738,32 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     ]);
   });
 
+  test("Auto is selected by id and vendor only, because its family and version follow its routing", () => {
+    assert.deepStrictEqual(
+      __testOnly.buildModelSelectorCandidates({
+        model: "auto",
+        modelVendor: "copilot",
+        modelFamily: "claude-haiku-5.5",
+        modelVersion: "claude-haiku-5.5",
+      }),
+      [{ id: "auto", vendor: "copilot" }],
+    );
+    assert.deepStrictEqual(
+      __testOnly.buildModelSelectorCandidates({ model: "Auto" }),
+      [{ id: "Auto" }],
+    );
+    // Another provider's model named "auto" keeps its strict identity.
+    const other = __testOnly.buildModelSelectorCandidates({
+      model: "auto",
+      modelVendor: "ollama",
+      modelFamily: "x",
+      modelVersion: "1",
+    });
+    assert.deepStrictEqual(other, [
+      { id: "auto", vendor: "ollama", family: "x", version: "1" },
+    ]);
+  });
+
   test("provider selector candidates never discard the vendor", () => {
     for (const selection of [
       { model: "shared", modelVendor: "openai-codex", modelFamily: "gpt" },

@@ -16,6 +16,7 @@ import {
   supportsSystemMessageForwarding,
 } from "../../configured-model-provider";
 import type { ScheduleManager } from "../../scheduleManager";
+import type { DiscoveredSkills } from "../../skillResolver";
 import type {
   AgentInfo,
   ModelInfo,
@@ -30,7 +31,8 @@ type QueryKind =
   | "history"
   | "preview_cron"
   | "list_models"
-  | "list_agents";
+  | "list_agents"
+  | "list_skills";
 
 interface QueryInput {
   kind?: QueryKind | string;
@@ -54,6 +56,7 @@ export interface SchedulerCatalogProvider {
     models: readonly ModelInfo[];
   }>;
   listAgents(): Promise<readonly AgentInfo[]>;
+  listSkills?(): Promise<DiscoveredSkills>;
 }
 
 const VALID_KINDS: readonly QueryKind[] = [
@@ -63,6 +66,7 @@ const VALID_KINDS: readonly QueryKind[] = [
   "preview_cron",
   "list_models",
   "list_agents",
+  "list_skills",
 ];
 
 function invalidKindResult(input: unknown): vscode.LanguageModelToolResult {
@@ -92,6 +96,7 @@ const ALLOWED_BY_KIND: Record<QueryKind, ReadonlySet<string>> = {
   preview_cron: new Set(["kind", "cronExpression", "count", "timezone"]),
   list_models: new Set(["kind"]),
   list_agents: new Set(["kind"]),
+  list_skills: new Set(["kind"]),
 };
 
 function catalogUnavailableResult(
@@ -311,6 +316,28 @@ async function handleListAgents(
   });
 }
 
+async function handleListSkills(
+  listSkills: () => Promise<DiscoveredSkills>,
+): Promise<vscode.LanguageModelToolResult> {
+  const { skills, ambiguous, workspaceSkipped } = await listSkills();
+  // Folder paths are intentionally omitted so absolute paths never reach the model.
+  return buildJsonTextResult({
+    ok: true,
+    count: skills.length,
+    usage:
+      "Put '/<name> <arguments>' at the start of a task prompt to run the skill when the task runs.",
+    skills: skills.map((skill) => ({
+      name: skill.name,
+      scope: skill.scope,
+      description: skill.description,
+      argumentHint: skill.argumentHint,
+      explicitOnly: skill.explicit,
+    })),
+    ambiguousNames: ambiguous,
+    workspaceSkillsSkipped: workspaceSkipped,
+  });
+}
+
 export function createSchedulerQueryTool(
   scheduleManager: ScheduleManager,
   catalogProvider?: SchedulerCatalogProvider,
@@ -345,14 +372,25 @@ export function createSchedulerQueryTool(
         case "preview_cron":
           return handlePreviewCron(input);
         case "list_models":
-        case "list_agents": {
+        case "list_agents":
+        case "list_skills": {
           if (!catalogProvider) {
             return catalogUnavailableResult(kindStrict);
           }
           try {
-            return kindStrict === "list_models"
-              ? await handleListModels(catalogProvider)
-              : await handleListAgents(catalogProvider);
+            if (kindStrict === "list_models") {
+              return await handleListModels(catalogProvider);
+            }
+            if (kindStrict === "list_agents") {
+              return await handleListAgents(catalogProvider);
+            }
+            const listSkills = catalogProvider.listSkills;
+            if (!listSkills) {
+              return catalogUnavailableResult(kindStrict);
+            }
+            return await handleListSkills(() =>
+              listSkills.call(catalogProvider),
+            );
           } catch (error) {
             return catalogUnavailableResult(kindStrict, error);
           }

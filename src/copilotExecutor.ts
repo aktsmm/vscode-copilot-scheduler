@@ -397,6 +397,15 @@ function buildModelSelectorCandidates(
   };
 
   if (selection.model) {
+    // Auto routes between models, so the family and version it reports change with
+    // its routing. Selecting it by those would miss it; id and vendor identify it.
+    if (
+      selection.model.trim().toLowerCase() === "auto" &&
+      !hasStrictProviderSelection(selection)
+    ) {
+      pushSelector({ id: selection.model, vendor: selection.modelVendor });
+      return selectors;
+    }
     pushSelector({
       id: selection.model,
       vendor: selection.modelVendor,
