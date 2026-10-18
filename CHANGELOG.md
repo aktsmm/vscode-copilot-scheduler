@@ -5,7 +5,9 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.10] - 2026-10-19
+
+Skills in the task form get clearer, safer and more accessible. No change to how tasks are saved or run.
 
 ### Fixed
 
