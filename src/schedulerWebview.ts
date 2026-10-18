@@ -2832,7 +2832,7 @@ export class SchedulerWebview {
             <div class="form-group col-12" id="skill-select-group" style="display: none;">
               <label for="skill-select">${escapeHtml(strings.labelSkill)}</label>
               <div class="template-row">
-                <select id="skill-select">
+                <select id="skill-select" aria-describedby="skill-detail">
                   <option value="">${escapeHtml(strings.placeholderSelectSkill)}</option>
                 </select>
               </div>
@@ -2840,7 +2840,7 @@ export class SchedulerWebview {
                 <input type="checkbox" id="skill-show-all">
                 <label for="skill-show-all">${escapeHtml(strings.labelSkillShowAll)}</label>
               </div>
-              <p class="note" id="skill-detail" style="display:none;"></p>
+              <p class="note" id="skill-detail" role="status" aria-live="polite" aria-atomic="true" style="display:none;"></p>
               <p class="note">${escapeHtml(strings.webviewSkillNote)}</p>
             </div>
 
