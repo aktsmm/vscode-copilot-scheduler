@@ -13,6 +13,9 @@ const MAX_SKILLS_PER_ROOT = 200;
 const MAX_DESCRIPTION_LENGTH = 300;
 const MAX_ARGUMENT_HINT_LENGTH = 120;
 const MAX_ROOT_LABEL_LENGTH = 40;
+// C0/C1 controls except tab and line breaks, zero-width and bidi controls, BOM.
+const HIDDEN_TEXT_CHARACTERS =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
 
 const WORKSPACE_SKILL_ROOTS = [
   ".github/skills",
@@ -106,12 +109,18 @@ export function parseSkillFrontmatter(
     return undefined;
   }
 
-  const clip = (value: string | undefined, max: number) => {
-    const text = (value ?? "").replace(/\s+/g, " ").trim();
+  // Control and bidirectional-override characters could disguise text in the
+  // form or in the list handed to the model, so they are dropped from free text.
+  // The name is kept as written so a hidden character can never make it match.
+  const clip = (value: string | undefined, max: number, freeText = true) => {
+    const raw = value ?? "";
+    const text = (freeText ? raw.replace(HIDDEN_TEXT_CHARACTERS, "") : raw)
+      .replace(/\s+/g, " ")
+      .trim();
     return text ? text.slice(0, max) : undefined;
   };
   return {
-    name: clip(values.get("name"), MAX_SKILL_NAME_LENGTH + 1),
+    name: clip(values.get("name"), MAX_SKILL_NAME_LENGTH + 1, false),
     description: clip(values.get("description"), MAX_DESCRIPTION_LENGTH),
     argumentHint: clip(values.get("argument-hint"), MAX_ARGUMENT_HINT_LENGTH),
     userInvocable: parseBoolean(values.get("user-invocable")),

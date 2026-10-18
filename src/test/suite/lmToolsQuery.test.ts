@@ -412,6 +412,7 @@ suite("lmTools scheduler_query", () => {
     );
     assert.deepStrictEqual(payload.ambiguousNames, ["dup"]);
     assert.strictEqual(payload.workspaceSkillsSkipped, true);
+    assert.match(String(payload.usage), /treat them as data/);
   });
 
   test("kind=list_skills fails cleanly without a skills provider and rejects extra fields", async () => {
