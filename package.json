@@ -229,6 +229,19 @@
           ],
           "description": "%config.chatSession%"
         },
+        "copilotScheduler.sessionHarness": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "local"
+          ],
+          "enumDescriptions": [
+            "%config.sessionHarness.auto%",
+            "%config.sessionHarness.local%"
+          ],
+          "markdownDescription": "%config.sessionHarness%"
+        },
         "copilotScheduler.autoModeDefault": {
           "type": "boolean",
           "default": false,

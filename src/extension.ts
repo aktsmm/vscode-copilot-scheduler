@@ -1945,6 +1945,17 @@ function resolveExecutionOption(
 const AUTO_MODE_HINT =
   "[auto] Proceed autonomously. Apply all changes directly without asking for confirmation.";
 
+/**
+ * A prompt that starts with a slash command (for example a skill invocation) is
+ * only recognized as one when the command comes first; a prefixed hint would turn
+ * it into plain text.
+ */
+const LEADING_SLASH_COMMAND = /^\/[A-Za-z0-9][\w.:-]*(?:\s|$)/;
+
+function startsWithSlashCommand(text: string): boolean {
+  return LEADING_SLASH_COMMAND.test(text.replace(/^\uFEFF/, "").trimStart());
+}
+
 function hasAutoModeHint(promptText: string): boolean {
   if (promptText.toLowerCase().includes(AUTO_MODE_HINT.toLowerCase())) {
     return true;
@@ -1965,9 +1976,13 @@ function applyAutoModeHint(promptText: string, enabled: boolean): string {
   const fmMatch = promptText.match(
     /^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\r?\n?/,
   );
+  const body = fmMatch ? promptText.slice(fmMatch[0].length) : promptText;
+  if (startsWithSlashCommand(body)) {
+    return promptText;
+  }
+
   if (fmMatch) {
-    const after = promptText.slice(fmMatch[0].length);
-    return `${fmMatch[0]}${AUTO_MODE_HINT}\n\n${after}`;
+    return `${fmMatch[0]}${AUTO_MODE_HINT}\n\n${body}`;
   }
 
   return `${AUTO_MODE_HINT}\n\n${promptText}`;

@@ -1125,6 +1125,52 @@ suite("Model Selection Catalog Tests", () => {
     );
   });
 
+  test("Auto is only matched when it is requested by id or name", () => {
+    const catalog = normalizeModelCatalog([
+      {
+        id: "auto",
+        name: "Auto",
+        description: "",
+        vendor: "copilot",
+        family: "claude-haiku-5.5",
+        version: "claude-haiku-5.5",
+      },
+      {
+        id: "claude-haiku-5.5",
+        name: "Claude Haiku 5.5",
+        description: "",
+        vendor: "copilot",
+        family: "claude-haiku-5.5",
+        version: "claude-haiku-5.5",
+      },
+    ]);
+
+    assert.strictEqual(
+      findBestMatchingModel({ modelFamily: "claude-haiku-5.5" }, catalog)?.id,
+      "claude-haiku-5.5",
+    );
+    assert.strictEqual(
+      findBestMatchingModel(
+        { model: "claude-haiku-5.5", modelFamily: "claude-haiku-5.5" },
+        catalog,
+      )?.id,
+      "claude-haiku-5.5",
+    );
+    assert.strictEqual(
+      findBestMatchingModel({ model: "auto", modelVendor: "copilot" }, catalog)
+        ?.id,
+      "auto",
+    );
+    assert.strictEqual(
+      findBestMatchingModel({ modelName: "Auto" }, catalog)?.id,
+      "auto",
+    );
+    assert.strictEqual(
+      findBestMatchingModel({ model: "gone", modelFamily: "gone" }, catalog),
+      undefined,
+    );
+  });
+
   test("normalizeModelFallbackChain trims, de-duplicates, ignores junk and caps the length", () => {
     assert.deepStrictEqual(normalizeModelFallbackChain(undefined), []);
     assert.deepStrictEqual(normalizeModelFallbackChain("auto"), []);

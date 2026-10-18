@@ -520,9 +520,21 @@ function resolveChatSessionBehavior(
   return configured === "continue" ? "continue" : "new";
 }
 
+type SessionHarness = "auto" | "local";
+
+/** "auto" leaves the session type to VS Code; unknown values never enable "local". */
+function resolveSessionHarness(
+  config: vscode.WorkspaceConfiguration,
+): SessionHarness {
+  return config.get<string>("sessionHarness", "auto") === "local"
+    ? "local"
+    : "auto";
+}
+
 export const __testOnly = {
   toSafeErrorDetails,
   resolveChatSessionBehavior,
+  resolveSessionHarness,
   normalizeAgentPrefix,
   resolveBuiltInChatMode,
   parseAgentFrontmatterName,
@@ -687,7 +699,15 @@ export class CopilotExecutor {
       // Attachments are added by chat.open itself, so a new session must be
       // started before it, never after.
       if (chatSession === "new") {
-        await this.tryCreateNewChatSession(delayFactor);
+        if (resolveSessionHarness(config) === "local") {
+          await this.startLocalChatSession(delayFactor);
+        } else {
+          await this.tryCreateNewChatSession(delayFactor);
+        }
+      } else if (resolveSessionHarness(config) === "local") {
+        logDebug(
+          "[CopilotScheduler] sessionHarness=local applies to new sessions only; continuing the current session",
+        );
       }
 
       const attachFiles = (options?.attachFilePaths ?? []).map((p) =>
@@ -1148,6 +1168,27 @@ export class CopilotExecutor {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Start a new Local-harness chat session. Unlike the default path, a failure
+   * stops the run: sending into another session type would silently change
+   * where the task runs.
+   */
+  private async startLocalChatSession(delayFactor: number): Promise<void> {
+    try {
+      await vscode.commands.executeCommand("workbench.action.chat.newLocalChat");
+    } catch (error) {
+      logDebug(
+        "[CopilotScheduler] newLocalChat failed:",
+        toSafeErrorDetails(error),
+      );
+      throw createPromptBlockedError(
+        messages.sessionHarnessLocalUnavailable(),
+        "sessionHarnessUnavailable",
+      );
+    }
+    await this.delay(this.getAdjustedDelayMs(DELAY_NEW_SESSION_MS, delayFactor));
   }
 
   private getCommandDelayFactor(config: vscode.WorkspaceConfiguration): number {

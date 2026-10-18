@@ -1038,6 +1038,128 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     });
   });
 
+  suite("session harness", () => {
+    let originalCommand: typeof vscode.commands.executeCommand;
+    let originalWarning: typeof vscode.window.showWarningMessage;
+    let originalModels: typeof CopilotExecutor.getAvailableModelsWithSource;
+    let commands: string[];
+    let failLocal: boolean;
+    let previousSetting: string | undefined;
+
+    const setHarness = async (value: string | undefined) => {
+      await vscode.workspace
+        .getConfiguration("copilotScheduler")
+        .update("sessionHarness", value, vscode.ConfigurationTarget.Global);
+    };
+
+    setup(async () => {
+      commands = [];
+      failLocal = false;
+      originalCommand = vscode.commands.executeCommand;
+      originalWarning = vscode.window.showWarningMessage;
+      originalModels = CopilotExecutor.getAvailableModelsWithSource;
+      previousSetting = vscode.workspace
+        .getConfiguration("copilotScheduler")
+        .inspect<string>("sessionHarness")?.globalValue;
+      CopilotExecutor.getAvailableModelsWithSource = async () => ({
+        source: "api",
+        models: [],
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async () => undefined,
+      });
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: async (command: string) => {
+          commands.push(command);
+          if (failLocal && command === "workbench.action.chat.newLocalChat") {
+            throw new Error("command not found");
+          }
+          return {};
+        },
+      });
+    });
+
+    teardown(async () => {
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: originalCommand,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      await setHarness(previousSetting);
+    });
+
+    test("only the exact value local enables the Local session", () => {
+      const configFor = (value: unknown) =>
+        ({ get: () => value }) as unknown as vscode.WorkspaceConfiguration;
+      assert.strictEqual(
+        __testOnly.resolveSessionHarness(configFor("local")),
+        "local",
+      );
+      for (const value of ["auto", "", "Local", "copilot", undefined, 1]) {
+        assert.strictEqual(
+          __testOnly.resolveSessionHarness(configFor(value)),
+          "auto",
+        );
+      }
+    });
+
+    test("auto keeps the default new chat command", async () => {
+      await setHarness("auto");
+      await new CopilotExecutor().executePrompt("synthetic", {
+        agent: "agent",
+        chatSession: "new",
+      });
+      assert.ok(commands.includes("workbench.action.chat.newChat"));
+      assert.ok(!commands.includes("workbench.action.chat.newLocalChat"));
+      assert.ok(commands.includes("workbench.action.chat.open"));
+    });
+
+    test("local starts a Local session before sending", async () => {
+      await setHarness("local");
+      await new CopilotExecutor().executePrompt("synthetic", {
+        agent: "agent",
+        chatSession: "new",
+      });
+      const local = commands.indexOf("workbench.action.chat.newLocalChat");
+      const open = commands.indexOf("workbench.action.chat.open");
+      assert.ok(local >= 0 && open > local, commands.join(","));
+      assert.ok(!commands.includes("workbench.action.chat.newChat"));
+    });
+
+    test("local never sends when the Local session cannot be started", async () => {
+      await setHarness("local");
+      failLocal = true;
+      await assert.rejects(
+        new CopilotExecutor().executePrompt("synthetic", {
+          agent: "agent",
+          chatSession: "new",
+        }),
+        (error: unknown) =>
+          (error as Record<string, unknown>).copilotSchedulerPromptBlocked ===
+          "sessionHarnessUnavailable",
+      );
+      assert.ok(!commands.includes("workbench.action.chat.open"));
+      assert.ok(!commands.includes("workbench.action.chat.newChat"));
+    });
+
+    test("local does not touch the session when continuing", async () => {
+      await setHarness("local");
+      await new CopilotExecutor().executePrompt("synthetic", {
+        agent: "agent",
+        chatSession: "continue",
+      });
+      assert.ok(!commands.includes("workbench.action.chat.newLocalChat"));
+      assert.ok(!commands.includes("workbench.action.chat.newChat"));
+      assert.ok(commands.includes("workbench.action.chat.open"));
+    });
+  });
+
   test("Codex Bridge quality sync failures block dispatch instead of ignoring the effort", async () => {
     const fs = await import("fs");
     const os = await import("os");
