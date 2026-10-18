@@ -6,6 +6,7 @@ import {
   checkSkillRef,
   discoverSkills,
   findSkillByRef,
+  getCurrentSkillRoots,
   getSkillRoots,
   isValidSkillName,
   normalizeSkillRef,
@@ -167,6 +168,36 @@ suite("Skill resolver", () => {
       path.join("/custom/copilot", "skills"),
     );
     assert.strictEqual(getSkillRoots([], "", undefined).length, 0);
+  });
+
+  test("the roots the watchers observe are the roots discovery reads", () => {
+    const current = getCurrentSkillRoots();
+    assert.ok(current.some((root) => root.scope === "user"));
+    assert.ok(
+      current.every((root) => path.isAbsolute(root.dir)),
+      "watch patterns need absolute folders",
+    );
+    const root = path.resolve(__dirname, "../../..");
+    const source = fs.readFileSync(path.join(root, "src", "extension.ts"), "utf8");
+    for (const token of [
+      "getCurrentSkillRoots()",
+      '"*/SKILL.md"',
+      "watcher.onDidCreate(scheduleSkillRefresh)",
+      "watcher.onDidChange(scheduleSkillRefresh)",
+      "watcher.onDidDelete(scheduleSkillRefresh)",
+      'e.affectsConfiguration("copilotScheduler.skillTemplates")',
+      "onDidGrantWorkspaceTrust",
+    ]) {
+      assert.ok(source.includes(token), `extension.ts must contain: ${token}`);
+    }
+    const resolver = fs.readFileSync(
+      path.join(root, "src", "skillResolver.ts"),
+      "utf8",
+    );
+    assert.ok(
+      resolver.includes("discoverSkills(getCurrentSkillRoots()"),
+      "discovery and watchers must share one root list",
+    );
   });
 
   test("discovery lists valid skills, explicit ones first, and applies the naming rules", async () => {

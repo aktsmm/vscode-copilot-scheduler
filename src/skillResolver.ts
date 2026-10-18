@@ -341,19 +341,23 @@ export function getSkillTemplateMode(): SkillTemplateMode {
   return raw === "all" || raw === "off" ? raw : "explicit";
 }
 
+/** Skill folders for the current window; also what the file watchers observe. */
+export function getCurrentSkillRoots(): SkillRoot[] {
+  return getSkillRoots(
+    getLocalWorkspaceFolderPaths(),
+    os.homedir(),
+    process.env.COPILOT_HOME?.trim() || undefined,
+  );
+}
+
 /** Discovers skills for the current VS Code window. */
 export async function discoverWorkspaceSkills(): Promise<DiscoveredSkills> {
   if (getSkillTemplateMode() === "off") {
     return { skills: [], ambiguous: [], workspaceSkipped: false };
   }
-  return discoverSkills(
-    getSkillRoots(
-      getLocalWorkspaceFolderPaths(),
-      os.homedir(),
-      process.env.COPILOT_HOME?.trim() || undefined,
-    ),
-    { workspaceTrusted: vscode.workspace.isTrusted },
-  );
+  return discoverSkills(getCurrentSkillRoots(), {
+    workspaceTrusted: vscode.workspace.isTrusted,
+  });
 }
 
 export type SkillRefCheck =

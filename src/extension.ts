@@ -38,6 +38,8 @@ import {
 import {
   checkSkillRef,
   discoverWorkspaceSkills,
+  getCurrentSkillRoots,
+  getSkillTemplateMode,
   normalizeSkillRef,
   promptInvokesSkill,
 } from "./skillResolver";
@@ -696,6 +698,19 @@ function pruneRuntimeCachesForRemovedTasks(taskIds: Set<string>): void {
 const PROMPT_PREVIEW_DEBOUNCE_MS = 300;
 const pendingPromptPreviewPaths = new Set<string>();
 let promptPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+const SKILL_REFRESH_DEBOUNCE_MS = 400;
+let skillRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Coalesces bursts of skill file events (for example a checkout) into one picker refresh. */
+function scheduleSkillRefresh(): void {
+  if (skillRefreshTimer) {
+    clearTimeout(skillRefreshTimer);
+  }
+  skillRefreshTimer = setTimeout(() => {
+    skillRefreshTimer = undefined;
+    void SchedulerWebview.refreshCachesAndNotifyPanel(true);
+  }, SKILL_REFRESH_DEBOUNCE_MS);
+}
 
 type PromptExecutionPayload = PromptExecutionRequest;
 
@@ -819,6 +834,10 @@ function disposePromptResourceWatchers(): void {
     clearTimeout(promptPreviewTimer);
     promptPreviewTimer = undefined;
   }
+  if (skillRefreshTimer) {
+    clearTimeout(skillRefreshTimer);
+    skillRefreshTimer = undefined;
+  }
   pendingPromptPreviewPaths.clear();
 
   for (const disposable of promptResourceWatchers) {
@@ -887,6 +906,21 @@ function registerPromptResourceWatchers(): void {
       new vscode.RelativePattern(vscode.Uri.file(root), "**/*.md"),
       schedulePromptPreviewRefresh,
     );
+  }
+
+  // Skill folders change the task form's skill picker, so watch each SKILL.md.
+  if (getSkillTemplateMode() !== "off") {
+    for (const skillRoot of getCurrentSkillRoots()) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(skillRoot.dir), "*/SKILL.md"),
+      );
+      promptResourceWatchers.push(
+        watcher,
+        watcher.onDidCreate(scheduleSkillRefresh),
+        watcher.onDidChange(scheduleSkillRefresh),
+        watcher.onDidDelete(scheduleSkillRefresh),
+      );
+    }
   }
 }
 
@@ -1403,6 +1437,10 @@ export function activate(context: vscode.ExtensionContext): void {
       registerPromptResourceWatchers();
       void SchedulerWebview.refreshCachesAndNotifyPanel(true);
     }
+    if (e.affectsConfiguration("copilotScheduler.skillTemplates")) {
+      registerPromptResourceWatchers();
+      void SchedulerWebview.refreshCachesAndNotifyPanel(true);
+    }
     // Consolidate timezone / enabled recalculation to avoid duplicate
     // recalculateAllNextRuns() when both change in one event (U22/U24).
     let needsRecalculate = false;
@@ -1456,11 +1494,17 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
+  // Workspace skills are hidden until the workspace is trusted.
+  const workspaceTrustWatcher = vscode.workspace.onDidGrantWorkspaceTrust(() => {
+    void SchedulerWebview.refreshCachesAndNotifyPanel(true);
+  });
+
   // Register subscriptions
   context.subscriptions.push(
     treeView,
     configWatcher,
     workspaceFoldersWatcher,
+    workspaceTrustWatcher,
     ...commands,
   );
 }
