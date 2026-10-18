@@ -1660,6 +1660,161 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.strictEqual(helpers.normalizeSkillRefClient(null), null);
   });
 
+  test("skill picker shows explicit skills first, keeps the selected skill visible, and replaces only an earlier skill command", () => {
+    const script = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const names = [
+      "skillKey",
+      "getVisibleSkills",
+      "skillScopeLabel",
+      "updateSkillDetail",
+      "updateSkillGroupVisibility",
+      "renderSkillOptions",
+      "applySkillToPrompt",
+      "escapeHtml",
+      "escapeAttr",
+    ];
+    const factory = new Function(
+      "document",
+      "Event",
+      [
+        'var strings = { placeholderSelectSkill: "Pick", skillScopeWorkspace: "workspace", skillScopeUser: "user" };',
+        "var LEADING_SLASH_COMMAND = /^\\/[A-Za-z0-9][\\w.:-]*(?=\\s|$)/;",
+        "var skillTemplates = [];",
+        "var selectedSkillRef = null;",
+        "var skillsEnabled = true;",
+        "var skillShowAllInput = { checked: false };",
+        'var skillSelect = { innerHTML: "", value: "" };',
+        'var skillDetail = { textContent: "", style: {} };',
+        'var skillSelectGroup = { style: { display: "none" } };',
+        'var promptTextInput = { value: "", dispatchEvent: function () { inputEvents += 1; } };',
+        "var inputEvents = 0;",
+        "function rescueFocusFrom() {}",
+        ...names.map((name) => extractFunctionSource(script, name)),
+        "return {",
+        "  setSkills: function (value) { skillTemplates = value; },",
+        "  select: function (value) { selectedSkillRef = value; },",
+        "  setEnabled: function (value) { skillsEnabled = value; },",
+        "  showAll: function (value) { skillShowAllInput.checked = value; },",
+        "  prompt: promptTextInput,",
+        "  group: skillSelectGroup,",
+        "  detail: skillDetail,",
+        "  select$: skillSelect,",
+        "  events: function () { return inputEvents; },",
+        "  getVisibleSkills: getVisibleSkills,",
+        "  renderSkillOptions: renderSkillOptions,",
+        "  applySkillToPrompt: applySkillToPrompt,",
+        "};",
+      ].join("\n"),
+    );
+    const fakeDocument = {
+      createElement: () => {
+        let text = "";
+        return {
+          set textContent(value: string) {
+            text = value;
+          },
+          get innerHTML() {
+            return text
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
+          },
+        };
+      },
+      querySelector: () => ({ value: "inline" }),
+    };
+    const api = factory(fakeDocument, class FakeEvent {}) as {
+      setSkills: (value: unknown[]) => void;
+      select: (value: unknown) => void;
+      setEnabled: (value: boolean) => void;
+      showAll: (value: boolean) => void;
+      prompt: { value: string };
+      group: { style: { display: string } };
+      detail: { textContent: string; style: { display?: string } };
+      select$: { innerHTML: string };
+      events: () => number;
+      getVisibleSkills: () => Array<{ name: string }>;
+      renderSkillOptions: () => void;
+      applySkillToPrompt: (name: string) => void;
+    };
+
+    const explicit = {
+      name: "weekly-report",
+      scope: "workspace",
+      root: ".github/skills",
+      description: "Weekly <report>",
+      argumentHint: "[team]",
+      explicit: true,
+    };
+    const open = {
+      name: "triage",
+      scope: "user",
+      root: "~/.copilot/skills",
+      description: "",
+      explicit: false,
+    };
+
+    api.setSkills([explicit, open]);
+    assert.deepStrictEqual(
+      api.getVisibleSkills().map((skill) => skill.name),
+      ["weekly-report"],
+      "only explicit skills are listed by default",
+    );
+    api.showAll(true);
+    assert.strictEqual(api.getVisibleSkills().length, 2);
+    api.showAll(false);
+
+    api.select({ name: "triage", scope: "user", root: "~/.copilot/skills" });
+    assert.deepStrictEqual(
+      api.getVisibleSkills().map((skill) => skill.name),
+      ["weekly-report", "triage"],
+      "the selected skill stays listed even when it is not explicit",
+    );
+
+    api.renderSkillOptions();
+    assert.strictEqual(api.group.style.display, "block");
+    assert.ok(api.select$.innerHTML.includes("/weekly-report (workspace)"));
+    assert.ok(api.select$.innerHTML.includes("/triage (user)"));
+    assert.strictEqual(api.detail.style.display, "none");
+
+    api.select({ name: "weekly-report", scope: "workspace", root: ".github/skills" });
+    api.renderSkillOptions();
+    assert.strictEqual(api.detail.textContent, "Weekly <report> — [team]");
+
+    api.setEnabled(false);
+    api.renderSkillOptions();
+    assert.strictEqual(api.group.style.display, "none");
+    api.setEnabled(true);
+
+    api.prompt.value = "";
+    api.applySkillToPrompt("weekly-report");
+    assert.strictEqual(api.prompt.value, "/weekly-report ");
+
+    api.prompt.value = "/weekly-report team-a\nsecond line";
+    api.applySkillToPrompt("triage");
+    assert.strictEqual(
+      api.prompt.value,
+      "/triage team-a\nsecond line",
+      "an earlier skill command is replaced and the arguments are kept",
+    );
+
+    api.prompt.value = "  /plan write the report";
+    api.applySkillToPrompt("weekly-report");
+    assert.strictEqual(
+      api.prompt.value,
+      "/weekly-report /plan write the report",
+      "a command that is not a known skill is kept as an argument",
+    );
+
+    api.prompt.value = "Summarize the week";
+    api.applySkillToPrompt("weekly-report");
+    assert.strictEqual(api.prompt.value, "/weekly-report Summarize the week");
+    assert.strictEqual(api.events(), 4, "each insertion notifies the form");
+  });
+
   test("model fallback checkbox is wired through the form, edit mode, reset and payload", () => {
     const script = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
