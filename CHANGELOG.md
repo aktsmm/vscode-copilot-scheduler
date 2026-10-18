@@ -5,7 +5,9 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.5] - 2026-10-19
+
+Marketplace Pre-release (`marketplace-preview-v1.9.5`). Skills in the task form get clearer, safer and more accessible. Runtime activation and provider-model consent are still separate requirements.
 
 ### Fixed
 
