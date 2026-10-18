@@ -724,6 +724,17 @@
   var templateRefreshBtn = document.getElementById("template-refresh-btn");
   var promptGroup = document.getElementById("prompt-group");
   var promptTextInput = document.getElementById("prompt-text");
+  var skillSelect = document.getElementById("skill-select");
+  var skillSelectGroup = document.getElementById("skill-select-group");
+  var skillShowAllInput = document.getElementById("skill-show-all");
+  var skillDetail = document.getElementById("skill-detail");
+  var skillTemplates = Array.isArray(initialData.skills)
+    ? initialData.skills
+    : [];
+  var skillsEnabled = initialData.skillsEnabled !== false;
+  // The skill this form's prompt invokes; kept only while the prompt still starts with it.
+  var selectedSkillRef = null;
+  var LEADING_SLASH_COMMAND = /^\/[A-Za-z0-9][\w.:-]*(?=\s|$)/;
   var loadLatestPromptBtn = document.getElementById("load-latest-prompt-btn");
   var openPromptFileBtn = document.getElementById("open-prompt-file-btn");
   var attachmentList = document.getElementById("attachment-list");
@@ -993,6 +1004,10 @@
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
       modelFallback: source.modelFallback === true,
+      skillRef: (function () {
+        var ref = normalizeSkillRefClient(source.skillRef);
+        return ref ? ref.scope + "|" + ref.root + "|" + ref.name : "";
+      })(),
       chatSession:
         source.chatSession === "new" || source.chatSession === "continue"
           ? source.chatSession
@@ -2277,6 +2292,7 @@
           !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
         modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
@@ -3394,6 +3410,8 @@
     updateModelOptions(null);
     updateModelSelectionStatus();
     applyPromptSource("inline");
+    selectedSkillRef = null;
+    renderSkillOptions();
     setAttachments([]);
     announceAttachmentStatus("");
     if (friendlyFrequency) friendlyFrequency.value = "";
@@ -3509,8 +3527,149 @@
     }
   }
 
+  function skillKey(skill) {
+    return skill.scope + "|" + skill.root + "|" + skill.name;
+  }
+
+  function normalizeSkillRefClient(ref) {
+    if (
+      !ref ||
+      typeof ref.name !== "string" ||
+      !ref.name ||
+      (ref.scope !== "workspace" && ref.scope !== "user") ||
+      typeof ref.root !== "string" ||
+      !ref.root
+    ) {
+      return null;
+    }
+    return { name: ref.name, scope: ref.scope, root: ref.root };
+  }
+
+  function promptInvokesSkill(text, name) {
+    var trimmed = String(text || "")
+      .replace(/^\uFEFF/, "")
+      .replace(/^\s+/, "");
+    if (trimmed.indexOf("/" + name) !== 0) return false;
+    var next = trimmed.charAt(name.length + 1);
+    return next === "" || /\s/.test(next);
+  }
+
+  function getSelectedSkillRefForSubmit(source) {
+    if (
+      source !== "inline" ||
+      !selectedSkillRef ||
+      !promptInvokesSkill(
+        promptTextInput ? promptTextInput.value : "",
+        selectedSkillRef.name,
+      )
+    ) {
+      return null;
+    }
+    return {
+      name: selectedSkillRef.name,
+      scope: selectedSkillRef.scope,
+      root: selectedSkillRef.root,
+    };
+  }
+
+  function getVisibleSkills() {
+    var showAll = !!(skillShowAllInput && skillShowAllInput.checked);
+    var selectedKey = selectedSkillRef ? skillKey(selectedSkillRef) : "";
+    return skillTemplates.filter(function (skill) {
+      return showAll || skill.explicit || skillKey(skill) === selectedKey;
+    });
+  }
+
+  function skillScopeLabel(skill) {
+    return skill.scope === "workspace"
+      ? strings.skillScopeWorkspace || "workspace"
+      : strings.skillScopeUser || "user";
+  }
+
+  function updateSkillDetail() {
+    if (!skillDetail) return;
+    var skill = null;
+    if (selectedSkillRef) {
+      var key = skillKey(selectedSkillRef);
+      skill =
+        skillTemplates.find(function (item) {
+          return skillKey(item) === key;
+        }) || null;
+    }
+    var parts = [];
+    if (skill && skill.description) parts.push(skill.description);
+    if (skill && skill.argumentHint) parts.push(skill.argumentHint);
+    skillDetail.textContent = parts.join(" — ");
+    skillDetail.style.display = parts.length > 0 ? "block" : "none";
+  }
+
+  function updateSkillGroupVisibility(source) {
+    if (!skillSelectGroup) return;
+    var currentSource = source;
+    if (!currentSource) {
+      var checked = document.querySelector(
+        'input[name="prompt-source"]:checked',
+      );
+      currentSource = checked ? checked.value : "inline";
+    }
+    var show =
+      skillsEnabled &&
+      currentSource === "inline" &&
+      (skillTemplates.length > 0 || !!selectedSkillRef);
+    if (!show && skillSelectGroup.style.display !== "none") {
+      rescueFocusFrom(skillSelectGroup, promptTextInput);
+    }
+    skillSelectGroup.style.display = show ? "block" : "none";
+  }
+
+  function renderSkillOptions() {
+    if (!skillSelect) return;
+    var currentKey = selectedSkillRef ? skillKey(selectedSkillRef) : "";
+    skillSelect.innerHTML =
+      '<option value="">' +
+      escapeHtml(strings.placeholderSelectSkill || "") +
+      "</option>" +
+      getVisibleSkills()
+        .map(function (skill) {
+          return (
+            '<option value="' +
+            escapeAttr(skillKey(skill)) +
+            '">' +
+            escapeHtml("/" + skill.name + " (" + skillScopeLabel(skill) + ")") +
+            "</option>"
+          );
+        })
+        .join("");
+    skillSelect.value = currentKey;
+    if (skillSelect.value !== currentKey) {
+      skillSelect.value = "";
+    }
+    updateSkillDetail();
+    updateSkillGroupVisibility();
+  }
+
+  // Puts /<name> at the start of the prompt, replacing an earlier skill command only.
+  function applySkillToPrompt(name) {
+    if (!promptTextInput) return;
+    var text = promptTextInput.value || "";
+    var leading = /^\s*/.exec(text)[0];
+    var rest = text.slice(leading.length);
+    var match = LEADING_SLASH_COMMAND.exec(rest);
+    var isKnownSkill =
+      !!match &&
+      skillTemplates.some(function (skill) {
+        return "/" + skill.name === match[0];
+      });
+    var tail = isKnownSkill
+      ? rest.slice(match[0].length).replace(/^[ \t]+/, "")
+      : rest;
+    promptTextInput.value = "/" + name + (tail ? " " + tail : " ");
+    promptTextInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   function applyPromptSource(source, keepSelection) {
     var effectiveSource = source || "inline";
+    updateSkillGroupVisibility(effectiveSource);
     var selectedPath =
       keepSelection && templateSelect ? templateSelect.value : "";
 
@@ -3558,6 +3717,44 @@
   if (initialPromptSource) {
     applyPromptSource(initialPromptSource.value);
   }
+  if (skillShowAllInput) {
+    skillShowAllInput.checked = initialData.skillShowAll === true;
+    skillShowAllInput.addEventListener("change", renderSkillOptions);
+  }
+  if (skillSelect) {
+    skillSelect.addEventListener("change", function () {
+      var key = skillSelect.value;
+      if (!key) {
+        selectedSkillRef = null;
+        updateSkillDetail();
+        return;
+      }
+      var skill = skillTemplates.find(function (item) {
+        return skillKey(item) === key;
+      });
+      if (!skill) return;
+      selectedSkillRef = {
+        name: skill.name,
+        scope: skill.scope,
+        root: skill.root,
+      };
+      applySkillToPrompt(skill.name);
+      updateSkillDetail();
+    });
+  }
+  if (promptTextInput) {
+    promptTextInput.addEventListener("input", function () {
+      if (
+        selectedSkillRef &&
+        !promptInvokesSkill(promptTextInput.value, selectedSkillRef.name)
+      ) {
+        selectedSkillRef = null;
+        if (skillSelect) skillSelect.value = "";
+        updateSkillDetail();
+      }
+    });
+  }
+  renderSkillOptions();
   updateChatSessionDefaultNote();
   updateFriendlyVisibility();
   updateCronPreview();
@@ -3712,6 +3909,8 @@
       // when template options are being refreshed.
       setTemplatePromptBaseline(String(promptTextEl.value || ""));
     }
+    selectedSkillRef = normalizeSkillRefClient(task.skillRef);
+    renderSkillOptions();
 
     if (jitterSecondsInput) {
       jitterSecondsInput.value = String(
@@ -3947,6 +4146,8 @@
           promptTemplates = Array.isArray(message.templates)
             ? message.templates
             : [];
+          skillTemplates = Array.isArray(message.skills) ? message.skills : [];
+          renderSkillOptions();
           {
             var sourceElement = document.querySelector(
               'input[name="prompt-source"]:checked',

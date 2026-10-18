@@ -55,6 +55,7 @@ import {
 } from "./attachmentResolver";
 import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { isPromptBlockedError } from "./promptExecutionErrors";
+import { normalizeSkillRef } from "./skillResolver";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -1067,6 +1068,14 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (task.skillRef !== undefined) {
+        const cleanSkillRef = normalizeSkillRef(task.skillRef);
+        if (JSON.stringify(cleanSkillRef) !== JSON.stringify(task.skillRef)) {
+          task.skillRef = cleanSkillRef;
+          needsSave = true;
+        }
+      }
+
       if (
         task.chatSession !== undefined &&
         task.chatSession !== "new" &&
@@ -1609,6 +1618,7 @@ export class ScheduleManager {
           ? Boolean(input.autoMode)
           : defaultAutoMode,
       modelFallback: input.modelFallback === true ? true : undefined,
+      skillRef: normalizeSkillRef(input.skillRef),
       chatSession:
         input.chatSession === "new" || input.chatSession === "continue"
           ? input.chatSession
@@ -1923,6 +1933,9 @@ export class ScheduleManager {
     if (updates.modelFallback !== undefined) {
       task.modelFallback = updates.modelFallback === true ? true : undefined;
     }
+    if (updates.skillRef !== undefined) {
+      task.skillRef = normalizeSkillRef(updates.skillRef);
+    }
     if (updates.chatSession !== undefined) {
       task.chatSession =
         updates.chatSession === "new" || updates.chatSession === "continue"
@@ -2095,6 +2108,7 @@ export class ScheduleManager {
       attachments: original.attachments,
       autoMode: original.autoMode,
       modelFallback: original.modelFallback,
+      skillRef: original.skillRef,
       chatSession: original.chatSession,
       jitterSeconds: original.jitterSeconds,
       maxExecutionsPerDay: original.maxExecutionsPerDay,

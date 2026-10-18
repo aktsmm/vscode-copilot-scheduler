@@ -229,6 +229,21 @@
           ],
           "description": "%config.chatSession%"
         },
+        "copilotScheduler.skillTemplates": {
+          "type": "string",
+          "default": "explicit",
+          "enum": [
+            "explicit",
+            "all",
+            "off"
+          ],
+          "enumDescriptions": [
+            "%config.skillTemplates.explicit%",
+            "%config.skillTemplates.all%",
+            "%config.skillTemplates.off%"
+          ],
+          "markdownDescription": "%config.skillTemplates%"
+        },
         "copilotScheduler.sessionHarness": {
           "type": "string",
           "default": "auto",

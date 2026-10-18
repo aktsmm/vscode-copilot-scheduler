@@ -2008,6 +2008,62 @@ suite("ScheduleManager Auto Mode Tests", () => {
     }
   });
 
+  test("skill reference persists through create, update, clear and duplicate, and malformed ones are dropped", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const ref = {
+        name: "my-skill",
+        scope: "user" as const,
+        root: ".copilot/skills",
+      };
+      const created = await manager.createTask({
+        name: "skill-task",
+        prompt: "/my-skill x",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        skillRef: ref,
+      });
+      assert.deepStrictEqual(created.skillRef, ref);
+
+      const bad = await manager.createTask({
+        name: "bad-skill-ref",
+        prompt: "/my-skill x",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        skillRef: { name: "x", scope: "elsewhere", root: "r" } as never,
+      });
+      assert.strictEqual(bad.skillRef, undefined);
+
+      const copy = await manager.duplicateTask(created.id);
+      assert.deepStrictEqual(copy?.skillRef, ref);
+
+      const untouched = await manager.updateTask(created.id, { name: "renamed" });
+      assert.deepStrictEqual(untouched?.skillRef, ref);
+
+      const cleared = await manager.updateTask(created.id, { skillRef: null });
+      assert.strictEqual(cleared?.skillRef, undefined);
+
+      const set = await manager.updateTask(bad.id, { skillRef: ref });
+      assert.deepStrictEqual(set?.skillRef, ref);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("updateTask can change autoMode", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

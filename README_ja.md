@@ -160,6 +160,17 @@ VS Code や提供元の仕様変更により、以前動いた環境でも詳細
 
 map は通常編集・複製・再読み込みで維持し、モデル変更時は動的な上書きを解除します。旧 Scheduler で保存すると項目を失う可能性があるため、ダウングレードして保存しないでください。選択したキーはリクエストごとに固定し、未指定キーは元モデルの設定を継承します。スキーマ URI と設定転送は VS Code の内部互換契約です。古いホストは明示設定の実行を拒否し、旧方式と継承を維持します。内部の固定モデルはタスク候補に表示しません。隔離した VS Code 1.141.1 の権限なし中継で System ロールが元モデル呼び出し前に拒否されることと、User / Assistant / tool の設定固定転送・共有設定不変を確認しました。候補取得・保存・送信・実応答・提供元での実効設定確認は別の検証結果です。合成試験は実提供元の推論や設定適用を保証しません。
 
+#### タスクフォームのスキル
+
+タスクフォームから Agent Skill を `/スキル名` としてプロンプトへ挿入できます。プロンプトの残りは、スキルへの引数として渡されます。Copilot（エージェントホスト）のセッションは `*.prompt.md` を読み込まず、代わりにスキルを使うため、この機能が役立ちます。実行されるのはプロンプトの文面そのものなので、既存のタスクも、旧版の Scheduler も、これまでどおり動きます。
+
+- スキルは、ローカルのワークスペースフォルダーの `.github/skills`・`.agents/skills`・`.claude/skills`（信頼されたワークスペースのみ）と、`~/.copilot/skills`（または `$COPILOT_HOME/skills`）・`~/.agents/skills`・`~/.claude/skills` から読み込みます。
+- 既定では、呼び出したときだけ実行されるスキル（`disable-model-invocation: true`）だけを一覧にし、モデルが自動で読み込むスキルで一覧があふれないようにします。`copilotScheduler.skillTemplates` を `all` または `off` にするか、フォームの **すべてのスキルを表示する** を選ぶと切り替えられます。`user-invocable: false` のスキルは表示しません。
+- フォルダー名、`name`、Agent Skills の命名規則が一致するスキルだけを一覧にします。同名ならワークスペースのスキルがユーザーのスキルより優先されます（確認したホストの動作）。同じ階層に同名が2つあるものは、ホストの選択が分からないため一覧から除外します。
+- 実行前に、スキルが残っていること、曖昧でないこと、ワークスペースのスキルではそのワークスペースが信頼されていることを確認します。満たさない場合、タスクは送信しません。
+- 自律実行ヒントは、スラッシュコマンドで始まるプロンプトには追加されません。スキルと Autopilot（`/autopilot`）は、1つのプロンプトで併用できません。
+- 対象は `file:` のワークスペースフォルダーだけで、リモートや仮想フォルダーは読み込みません。
+
 #### モデル指定とセッションの種類
 
 VS Code 1.142（Windows）で確認した内容です。
@@ -232,6 +243,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.missedRunPolicy`            | `runOnce`         | スケジューラ起動前に期限を迎えたタスク: `runOnce` は各タスクを1回実行、`skip` は実行せず次回へ進めます。VS Code の設定画面で選択できます。                                                                                                                               |
 | `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | このウィンドウの自動プロンプト送信処理の最大同時数（jitterを含む、1〜10）。モデル応答の完了は待ちません。「今すぐ実行」は対象外です。                                                                                                                                    |
 | `copilotScheduler.chatSession`                | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
+| `copilotScheduler.skillTemplates`             | `explicit`        | タスクフォームが `/スキル名` として挿入できる Agent Skills の範囲: `explicit`（`disable-model-invocation: true` のみ）、`all`、`off`。                                                                                                                                  |
 | `copilotScheduler.sessionHarness`             | `auto`            | 新規実行が開始するチャットセッションの種類（新しいセッションを開始するときだけ有効）。`auto` は VS Code の選択に任せます。`local`（実験的）は `workbench.action.chat.newLocalChat` で Local セッションを開始し、失敗した場合はタスクを送信しません。Scheduler は VS Code の設定を変更せず、Copilot（エージェントホスト）のセッションを強制することもできません。 |
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |

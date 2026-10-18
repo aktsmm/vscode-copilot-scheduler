@@ -3663,6 +3663,44 @@ suite("Frontmatter Resolution Tests", () => {
     );
   });
 
+  test("A task whose skill is gone is blocked before it is sent, and a stale reference is ignored", async () => {
+    const { __testOnly } = await import("../../extension");
+    const assertSkillAvailable = __testOnly.assertSkillAvailable as (
+      task: ScheduledTask,
+      promptText: string,
+    ) => Promise<void>;
+
+    const base = {
+      id: "t-skill-check",
+      name: "t",
+      cronExpression: "0 * * * *",
+      prompt: "/zz-scheduler-test-missing-skill go",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+    const skillRef = {
+      name: "zz-scheduler-test-missing-skill",
+      scope: "user" as const,
+      root: ".copilot/skills",
+    };
+
+    await assertSkillAvailable(base, base.prompt);
+    await assertSkillAvailable({ ...base, skillRef }, "no skill here");
+    await assertSkillAvailable(
+      { ...base, skillRef: { name: "Bad Name", scope: "user", root: "x" } },
+      base.prompt,
+    );
+    await assert.rejects(
+      assertSkillAvailable({ ...base, skillRef }, base.prompt),
+      (error: unknown) =>
+        (error as Record<string, unknown>).copilotSchedulerPromptBlocked ===
+        "skillUnavailable",
+    );
+  });
+
   test("Does not insert auto hint when task.autoMode is false", async () => {
     const { __testOnly } = await import("../../extension");
     const resolvePromptExecution = __testOnly.resolvePromptExecution as
