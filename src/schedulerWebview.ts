@@ -1794,6 +1794,7 @@ export class SchedulerWebview {
       // Webview notes
       webviewAutoModeNote: messages.webviewAutoModeNote(),
       webviewModelFallbackNote: messages.webviewModelFallbackNote(),
+      webviewModelHarnessNote: messages.webviewModelHarnessNote(),
       webviewChatSessionNote: defaultChatSessionNote,
       webviewJitterNote: messages.webviewJitterNote(),
       webviewMaxExecutionsPerDayNote: messages.webviewMaxExecutionsPerDayNote(),
@@ -2861,6 +2862,7 @@ export class SchedulerWebview {
               </select>
               <p class="note" id="model-experimental-note" style="display:none;"></p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
+              <p class="note">${escapeHtml(strings.webviewModelHarnessNote)}</p>
             </div>
 
             <div class="form-group col-6" id="model-variant-group" style="display:none;">

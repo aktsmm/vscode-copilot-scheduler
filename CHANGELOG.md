@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Setting `copilotScheduler.sessionHarness` (`auto` by default). `local` is experimental: runs that start a new chat session use `workbench.action.chat.newLocalChat` and are not sent if that command fails. `auto` leaves the session type to VS Code. Scheduler does not change VS Code settings and cannot force a Copilot (Agent Host) session.
+- A note under the task form's model selector, plus README sections, describing what was observed on VS Code 1.142: a specific model chosen for a task was applied in Local sessions and ignored in Copilot (Agent Host) sessions; Auto and HydraFusion are not confirmed in either.
+
+### Fixed
+
+- A saved model that no longer exists is no longer resolved to Auto when only its family is known. Auto reports the family of the model it currently routes to, so it is now matched only when requested by id or name.
+- The auto-mode hint is no longer prefixed to a prompt that starts with a slash command (for example a skill). A prefixed hint stopped the command from being recognized.
+
+### Changed
+
+- The model fallback texts now state that HydraFusion is skipped unless the model list includes it, and that the replacement may not be applied in Copilot (Agent Host) sessions.
+
 ## [1.8.9] - 2026-10-18
 
 ### Added

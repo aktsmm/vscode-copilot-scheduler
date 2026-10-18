@@ -479,8 +479,18 @@ export const messages = {
     ),
   webviewModelFallbackNote: () =>
     t(
-      "Off by default. When on, an unavailable model is replaced by the first available model in the copilotScheduler.modelFallbackChain setting (default: HydraFusion, then Auto). Explicit detailed model options are not carried over. The change is recorded in the execution history.",
-      "既定はオフです。オンにすると、利用できないモデルを copilotScheduler.modelFallbackChain 設定（既定: HydraFusion → Auto）で最初に使えるモデルへ置き換えます。モデルの詳細オプションは引き継ぎません。切り替えは実行履歴に記録されます。",
+      "Off by default. When on, an unavailable model is replaced by the first available model in the copilotScheduler.modelFallbackChain setting (default: HydraFusion, then Auto). HydraFusion is skipped unless the model list includes it. Explicit detailed model options are not carried over. The change is recorded in the execution history. Whether the replacement is applied depends on the session type; see the note under the model selector.",
+      "既定はオフです。オンにすると、利用できないモデルを copilotScheduler.modelFallbackChain 設定（既定: HydraFusion → Auto）で最初に使えるモデルへ置き換えます。モデル一覧に無い HydraFusion は飛ばされます。モデルの詳細オプションは引き継ぎません。切り替えは実行履歴に記録されます。置き換えが反映されるかはセッションの種類によります。モデル選択欄の注記を参照してください。",
+    ),
+  webviewModelHarnessNote: () =>
+    t(
+      "In Copilot (Agent Host) sessions the model chosen here may be ignored and the session can run on the default model. Choosing a specific model was observed to work in Local sessions. Auto and HydraFusion have not been confirmed to work.",
+      "Copilot（エージェントホスト）のセッションでは、ここで選んだモデルが反映されず、既定のモデルで実行されることがあります。Local のセッションでは、具体的なモデルの指定が反映されることを確認しています。Auto と HydraFusion の指定は、動作を確認できていません。",
+    ),
+  sessionHarnessLocalUnavailable: () =>
+    t(
+      "Could not start a Local chat session, so the task was not sent. This VS Code does not provide the command, or it failed. Set copilotScheduler.sessionHarness to auto to use the session type VS Code chooses.",
+      "Local のチャットセッションを開始できなかったため、タスクは送信していません。この VS Code にコマンドが無いか、実行に失敗しました。VS Code が選ぶセッションの種類を使うには、copilotScheduler.sessionHarness を auto にしてください。",
     ),
   providerModelDispatchFailed: () =>
     t(
@@ -668,8 +678,8 @@ export const messages = {
   labelAllowedTimeEnd: () => t("End (HH:mm)", "終了（HH:mm）"),
   webviewAutoModeNote: () =>
     t(
-      "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present).",
-      "有効時、実行時プロンプトの先頭（フロントマターがあればその直後）に自律実行の指示を自動挿入します。",
+      "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present). It is not added when the prompt starts with a slash command, such as a skill, because the command must come first.",
+      "有効時、実行時プロンプトの先頭（フロントマターがあればその直後）に自律実行の指示を自動挿入します。スキルなどのスラッシュコマンドで始まるプロンプトには、コマンドを先頭に置く必要があるため挿入しません。",
     ),
   webviewChatSessionNote: (modeLabel: string) =>
     t(

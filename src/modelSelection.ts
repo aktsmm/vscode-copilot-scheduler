@@ -868,7 +868,35 @@ function scoreModelMatch(
   score += countIntersection(requested.model, current.id) * 10;
   score += countIntersection(requested.name, current.name) * 10;
 
+  // A family-only request should land on the model that owns that family, not on
+  // another entry that merely reports the same family.
+  if (requested.family.size > 0 && hasIntersection(requested.family, current.id)) {
+    score += 5;
+  }
+
   return score;
+}
+
+const AUTO_ROUTING_MODEL_ID = "auto";
+
+/**
+ * Auto routes between models, so it reports the family and version of whatever it
+ * currently routes to. It must only be selected when it was asked for by id or name.
+ */
+function isAutoRoutingModel(model: ModelInfo): boolean {
+  return (
+    normalizeKey(model.id) === AUTO_ROUTING_MODEL_ID &&
+    COPILOT_VENDOR_KEYS.has(normalizeKey(model.vendor))
+  );
+}
+
+function selectionRequestsAutoRouting(
+  selection: NormalizedModelSelection,
+): boolean {
+  return (
+    normalizeKey(selection.model) === AUTO_ROUTING_MODEL_ID ||
+    normalizeKey(selection.modelName) === AUTO_ROUTING_MODEL_ID
+  );
 }
 
 export function normalizeModelSelection(
@@ -1110,7 +1138,9 @@ export function findBestMatchingModel(
       typeof model.id === "string" &&
       model.id.trim().length > 0 &&
       (!normalizedSelection.modelVendor ||
-        model.vendor === normalizedSelection.modelVendor),
+        model.vendor === normalizedSelection.modelVendor) &&
+      (!isAutoRoutingModel(model) ||
+        selectionRequestsAutoRouting(normalizedSelection)),
   );
   if (selectableModels.length === 0) {
     return undefined;

@@ -3484,6 +3484,40 @@ suite("Frontmatter Resolution Tests", () => {
     assert.ok(!("modelFallback" in buildPromptExecutionOptions(optedOut)));
   });
 
+  test("Does not prefix the auto hint to a prompt that starts with a slash command", async () => {
+    const { __testOnly } = await import("../../extension");
+    const applyAutoModeHint = __testOnly.applyAutoModeHint as (
+      promptText: string,
+      enabled: boolean,
+    ) => string;
+
+    for (const text of [
+      "/my-skill do the thing",
+      "/my-skill",
+      "  /my-skill\nsecond line",
+      "\uFEFF/skill.v2:run args",
+      "---\ndescription: x\n---\n/my-skill args",
+    ]) {
+      assert.strictEqual(applyAutoModeHint(text, true), text, text);
+    }
+
+    for (const text of [
+      "/usr/bin/tool should be checked",
+      "/ not a command",
+      "please run /my-skill later",
+    ]) {
+      assert.ok(
+        applyAutoModeHint(text, true).startsWith("[auto] Proceed autonomously"),
+        text,
+      );
+    }
+
+    assert.strictEqual(
+      applyAutoModeHint("/my-skill x", false),
+      "/my-skill x",
+    );
+  });
+
   test("Does not insert auto hint when task.autoMode is false", async () => {
     const { __testOnly } = await import("../../extension");
     const resolvePromptExecution = __testOnly.resolvePromptExecution as
