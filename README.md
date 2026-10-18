@@ -167,7 +167,8 @@ The task form can insert an Agent Skill into the prompt as `/skill-name`; the re
 Observed on VS Code 1.142 (Windows):
 
 - In a **Local** session, a specific model chosen for a task (for example Claude Haiku 5.5) was applied.
-- In a **Copilot (Agent Host)** session, the model chosen for a task was ignored and the session ran on the organization default model. This was seen with a specific model and with Auto.
+- In a **Copilot (Agent Host)** session, the model chosen for a task was ignored and the session ran on the organization default model. This was seen with a specific model and with Auto. Reasoning effort and context size set for the task were ignored as well (measured: Claude Sonnet 5.5 with effort `low` and a 200K context ran as the default model with `medium` effort and no context tier). Choose the model in the chat window instead.
+- Effort and context size have not been confirmed in a Local session.
 - **Auto** and **HydraFusion** have not been confirmed to work in either session type. HydraFusion is a routing tier of Auto in Agent Host sessions and is not listed as a separate model for extensions.
 
 Scheduler reports a dispatch as sent, not as run on the chosen model. VS Code decides the session type for new chats; Scheduler does not change it.

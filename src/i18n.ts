@@ -484,8 +484,8 @@ export const messages = {
     ),
   webviewModelHarnessNote: () =>
     t(
-      "In Copilot (Agent Host) sessions the model chosen here may be ignored and the session can run on the default model. Choosing a specific model was observed to work in Local sessions. Auto and HydraFusion have not been confirmed to work.",
-      "Copilot（エージェントホスト）のセッションでは、ここで選んだモデルが反映されず、既定のモデルで実行されることがあります。Local のセッションでは、具体的なモデルの指定が反映されることを確認しています。Auto と HydraFusion の指定は、動作を確認できていません。",
+      "In Copilot (Agent Host) sessions the model, reasoning effort and context size set here are not applied: the session runs on the model chosen in the chat window (measured on VS Code 1.142). Choose the model there. In Local sessions a specific model was observed to be applied; effort and context size are unconfirmed. Auto and HydraFusion are not confirmed in either.",
+      "Copilot（エージェントホスト）のセッションでは、ここで設定したモデル・reasoning effort・コンテキストサイズは反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。モデルはチャット画面側で選んでください。Local のセッションでは具体的なモデルの指定が反映されることを確認していますが、effort とコンテキストサイズは未確認です。Auto と HydraFusion はどちらでも動作を確認できていません。",
     ),
   skillUnavailable: (name: string, reason: "notTrusted" | "missing" | "ambiguous") =>
     reason === "notTrusted"
