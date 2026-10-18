@@ -1607,6 +1607,59 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("skill picker is wired into the form and its helpers behave", () => {
+    const script = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const html = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    for (const token of [
+      'var skillSelect = document.getElementById("skill-select");',
+      "skillRef: getSelectedSkillRefForSubmit(promptSourceValue),",
+      "skillTemplates = Array.isArray(message.skills) ? message.skills : [];",
+      "selectedSkillRef = normalizeSkillRefClient(task.skillRef);",
+      "selectedSkillRef = null;",
+      "updateSkillGroupVisibility(effectiveSource);",
+    ]) {
+      assert.ok(
+        sourceContainsToken(script, token),
+        `Expected token not found in schedulerWebview.js: ${token}`,
+      );
+    }
+    assert.ok(html.includes('id="skill-select-group"'));
+    assert.ok(html.includes('id="skill-show-all"'));
+
+    const helpers = new Function(
+      [
+        extractFunctionSource(script, "promptInvokesSkill"),
+        extractFunctionSource(script, "normalizeSkillRefClient"),
+        "return { promptInvokesSkill, normalizeSkillRefClient };",
+      ].join("\n"),
+    )() as {
+      promptInvokesSkill: (text: string, name: string) => boolean;
+      normalizeSkillRefClient: (ref: unknown) => unknown;
+    };
+    assert.strictEqual(helpers.promptInvokesSkill("/my-skill a b", "my-skill"), true);
+    assert.strictEqual(helpers.promptInvokesSkill("  /my-skill", "my-skill"), true);
+    assert.strictEqual(helpers.promptInvokesSkill("/my-skill\nx", "my-skill"), true);
+    assert.strictEqual(helpers.promptInvokesSkill("/my-skills x", "my-skill"), false);
+    assert.strictEqual(helpers.promptInvokesSkill("run /my-skill", "my-skill"), false);
+    assert.deepStrictEqual(
+      helpers.normalizeSkillRefClient({
+        name: "a",
+        scope: "user",
+        root: ".copilot/skills",
+        extra: 1,
+      }),
+      { name: "a", scope: "user", root: ".copilot/skills" },
+    );
+    assert.strictEqual(helpers.normalizeSkillRefClient({ name: "a", scope: "x", root: "r" }), null);
+    assert.strictEqual(helpers.normalizeSkillRefClient(null), null);
+  });
+
   test("model fallback checkbox is wired through the form, edit mode, reset and payload", () => {
     const script = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
@@ -1883,6 +1936,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           cronExpression: { value: original.cronExpression },
           autoModeInput: null,
           modelFallbackInput: null,
+          getSelectedSkillRefForSubmit: () => null,
           chatSessionSelect: null,
           jitterSecondsInput: null,
           maxExecutionsPerDayInput: null,
@@ -1918,6 +1972,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
             extractFunctionSource(source, "boundedNumber"),
             extractFunctionSource(source, "copyModelConfigurationForForm"),
             extractFunctionSource(source, "serializeModelConfigurationForDiff"),
+            extractFunctionSource(source, "normalizeSkillRefClient"),
             extractFunctionSource(source, "normalizeTaskForEditDiff"),
             extractFunctionSource(source, "buildTaskUpdateData"),
             `return (${callback});`,

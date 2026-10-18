@@ -183,6 +183,12 @@ export interface ScheduledTask {
   /** Opt in to the configured fallback model chain when the saved model is unavailable. */
   modelFallback?: boolean;
 
+  /**
+   * Skill this task's prompt invokes (`/<name> ...`). Advisory: the prompt text is
+   * what runs; this only lets Scheduler check the skill still exists before a run.
+   */
+  skillRef?: TaskSkillRef;
+
   /** Task-specific chat session override. Undefined means use the global setting. */
   chatSession?: ChatSessionBehavior;
 
@@ -286,6 +292,9 @@ export interface CreateTaskInput {
   /** Opt in to the configured fallback model chain when the saved model is unavailable. */
   modelFallback?: boolean;
 
+  /** Skill invoked by the prompt; `null` clears it on update. */
+  skillRef?: TaskSkillRef | null;
+
   /** Per-task chat session override. "default" uses the global setting. */
   chatSession?: TaskChatSessionMode;
 
@@ -384,6 +393,26 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Opt in to the configured fallback model chain when the model is unavailable. */
   modelFallback?: boolean;
+}
+
+/**
+ * Where a skill was found. `root` is the skills folder relative to its base
+ * (for example ".github/skills" or ".copilot/skills").
+ */
+export type SkillScope = "workspace" | "user";
+
+export interface TaskSkillRef {
+  name: string;
+  scope: SkillScope;
+  root: string;
+}
+
+/** A skill the task form can insert into a prompt as `/<name>`. */
+export interface SkillTemplate extends TaskSkillRef {
+  description: string;
+  argumentHint?: string;
+  /** True when the skill sets `disable-model-invocation: true`, i.e. runs only when invoked. */
+  explicit: boolean;
 }
 
 /**

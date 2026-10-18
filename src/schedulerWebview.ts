@@ -15,6 +15,7 @@ import type {
   ModelInfo,
   PromptPreview,
   PromptTemplate,
+  SkillTemplate,
   TaskScope,
   WebviewToExtensionMessage,
   PromptExecutionRequest,
@@ -26,7 +27,11 @@ import {
   getCronPresets,
   formatCronForDisplay,
 } from "./i18n";
-import { logError } from "./logger";
+import { logDebug, logError } from "./logger";
+import {
+  discoverWorkspaceSkills,
+  getSkillTemplateMode,
+} from "./skillResolver";
 import { validateTemplateLoadRequest } from "./templateValidation";
 import {
   getPromptTemplateDisplayName,
@@ -78,6 +83,7 @@ export class SchedulerWebview {
   private static cachedModels: ModelInfo[] = [];
   private static modelRefreshGeneration = 0;
   private static cachedPromptTemplates: PromptTemplate[] = [];
+  private static cachedSkills: SkillTemplate[] = [];
   private static hasShownPromptTemplateRefreshError = false;
   private static onTaskActionCallback:
     | ((action: TaskAction) => void)
@@ -285,6 +291,10 @@ export class SchedulerWebview {
 
   private static postMessage(message: OutgoingWebviewMessage): void {
     if (!this.panel) return;
+    // Skills ride on the template refresh so every existing refresh path carries them.
+    if (message.type === "updatePromptTemplates" && message.skills === undefined) {
+      message = { ...message, skills: this.cachedSkills };
+    }
     if (!this.webviewReady) {
       this.enqueueMessage(message);
       return;
@@ -953,6 +963,28 @@ export class SchedulerWebview {
     }
 
     this.cachedPromptTemplates = await this.getPromptTemplates();
+    await this.refreshSkills();
+  }
+
+  /** Skill discovery must never break template refresh, so failures leave an empty list. */
+  private static async refreshSkills(): Promise<void> {
+    try {
+      const discovered = await discoverWorkspaceSkills();
+      this.cachedSkills = discovered.skills;
+      if (discovered.ambiguous.length > 0) {
+        logDebug(
+          `[CopilotScheduler] Skills left out because the name exists in several places: ${discovered.ambiguous.join(", ")}`,
+        );
+      }
+    } catch (error) {
+      this.cachedSkills = [];
+      logDebug(
+        "[CopilotScheduler] Skill discovery failed:",
+        this.sanitizeErrorDetailsForUser(
+          error instanceof Error ? error.message : String(error ?? ""),
+        ),
+      );
+    }
   }
 
   private static buildPromptTemplateContextLabel(
@@ -1687,6 +1719,11 @@ export class SchedulerWebview {
       labelNever: messages.labelNever(),
       labelRunFirstInOneMinute: messages.labelRunFirstInOneMinute(),
       labelAutoMode: messages.labelAutoMode(),
+      labelSkill: messages.labelSkill(),
+      placeholderSelectSkill: messages.placeholderSelectSkill(),
+      labelSkillShowAll: messages.labelSkillShowAll(),
+      skillScopeWorkspace: messages.skillScopeWorkspace(),
+      skillScopeUser: messages.skillScopeUser(),
       labelModelFallback: messages.labelModelFallback(),
       labelChatSession: messages.labelChatSession(),
       labelChatSessionDefault: messages.labelChatSessionDefault(),
@@ -1793,6 +1830,7 @@ export class SchedulerWebview {
 
       // Webview notes
       webviewAutoModeNote: messages.webviewAutoModeNote(),
+      webviewSkillNote: messages.webviewSkillNote(),
       webviewModelFallbackNote: messages.webviewModelFallbackNote(),
       webviewModelHarnessNote: messages.webviewModelHarnessNote(),
       webviewChatSessionNote: defaultChatSessionNote,
@@ -1846,6 +1884,9 @@ export class SchedulerWebview {
       experimentalModelQualityNote:
         initialModelPickerPayload.experimentalModelQualityNote,
       promptTemplates: initialTemplates,
+      skills: this.cachedSkills,
+      skillShowAll: getSkillTemplateMode() === "all",
+      skillsEnabled: getSkillTemplateMode() !== "off",
       workspacePaths: this.getCurrentWorkspacePaths(),
       caseInsensitivePaths: process.platform === "win32",
       friendlyIntervalMinutes: FRIENDLY_INTERVAL_MINUTES,
@@ -2712,6 +2753,21 @@ export class SchedulerWebview {
                 </select>
                 <button type="button" class="btn-secondary" id="template-refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshTemplates)}">${escapeHtml(strings.actionRefresh)}</button>
               </div>
+            </div>
+
+            <div class="form-group col-12" id="skill-select-group" style="display: none;">
+              <label for="skill-select">${escapeHtml(strings.labelSkill)}</label>
+              <div class="template-row">
+                <select id="skill-select">
+                  <option value="">${escapeHtml(strings.placeholderSelectSkill)}</option>
+                </select>
+              </div>
+              <div class="checkbox-group">
+                <input type="checkbox" id="skill-show-all">
+                <label for="skill-show-all">${escapeHtml(strings.labelSkillShowAll)}</label>
+              </div>
+              <p class="note" id="skill-detail" style="display:none;"></p>
+              <p class="note">${escapeHtml(strings.webviewSkillNote)}</p>
             </div>
 
             <div class="form-group col-12" id="prompt-group">

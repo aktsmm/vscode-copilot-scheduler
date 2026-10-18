@@ -487,6 +487,32 @@ export const messages = {
       "In Copilot (Agent Host) sessions the model chosen here may be ignored and the session can run on the default model. Choosing a specific model was observed to work in Local sessions. Auto and HydraFusion have not been confirmed to work.",
       "Copilot（エージェントホスト）のセッションでは、ここで選んだモデルが反映されず、既定のモデルで実行されることがあります。Local のセッションでは、具体的なモデルの指定が反映されることを確認しています。Auto と HydraFusion の指定は、動作を確認できていません。",
     ),
+  skillUnavailable: (name: string, reason: "notTrusted" | "missing" | "ambiguous") =>
+    reason === "notTrusted"
+      ? t(
+          `The skill "/${name}" is in this workspace, which is not trusted, so the task was not sent. Trust the workspace to run it.`,
+          `スキル「/${name}」はこのワークスペースにありますが、ワークスペースが信頼されていないため、タスクは送信していません。実行するにはワークスペースを信頼してください。`,
+        )
+      : reason === "ambiguous"
+        ? t(
+            `The skill "/${name}" exists in more than one place, so it is unclear which one would run. The task was not sent. Remove or rename the duplicates.`,
+            `スキル「/${name}」が複数の場所にあり、どれが実行されるか判断できないため、タスクは送信していません。重複を削除するか名前を変更してください。`,
+          )
+        : t(
+            `The skill "/${name}" was not found, so the task was not sent. Restore the skill or edit the task.`,
+            `スキル「/${name}」が見つからないため、タスクは送信していません。スキルを戻すか、タスクを編集してください。`,
+          ),
+  labelSkill: () => t("Skill", "スキル"),
+  placeholderSelectSkill: () => t("Insert a skill...", "スキルを挿入..."),
+  labelSkillShowAll: () =>
+    t("Show all skills", "すべてのスキルを表示する"),
+  webviewSkillNote: () =>
+    t(
+      "Inserts /skill-name at the start of the prompt; the rest of the prompt is passed to the skill as its arguments. By default only skills that run when invoked (disable-model-invocation: true) are listed. Not used together with the auto-mode hint, which is skipped for slash commands.",
+      "プロンプトの先頭に /スキル名 を挿入し、プロンプトの残りをスキルへの引数として渡します。既定では、呼び出したときだけ実行されるスキル（disable-model-invocation: true）だけを一覧にします。自律実行ヒントはスラッシュコマンドには挿入されません。",
+    ),
+  skillScopeWorkspace: () => t("workspace", "ワークスペース"),
+  skillScopeUser: () => t("user", "ユーザー"),
   sessionHarnessLocalUnavailable: () =>
     t(
       "Could not start a Local chat session, so the task was not sent. This VS Code does not provide the command, or it failed. Set copilotScheduler.sessionHarness to auto to use the session type VS Code chooses.",

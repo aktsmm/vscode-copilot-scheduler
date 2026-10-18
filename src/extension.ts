@@ -36,6 +36,11 @@ import {
   type PromptBlockedReason,
 } from "./promptExecutionErrors";
 import {
+  checkSkillRef,
+  normalizeSkillRef,
+  promptInvokesSkill,
+} from "./skillResolver";
+import {
   enqueueExecutionHistoryEntry as enqueueExecutionHistory,
   getExecutionHistoryEntries,
   initExecutionHistoryStore,
@@ -1443,6 +1448,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
 
   try {
     const resolved = await resolvePromptExecution(task);
+    await assertSkillAvailable(task, resolved.prompt);
 
     // Execute the prompt
     try {
@@ -2004,7 +2010,29 @@ async function resolvePromptExecution(
   };
 }
 
+/**
+ * Stops a run whose skill is gone, ambiguous or in an untrusted workspace. The
+ * reference is advisory: if the prompt no longer invokes that skill, it is ignored.
+ */
+async function assertSkillAvailable(
+  task: ScheduledTask,
+  promptText: string,
+): Promise<void> {
+  const ref = normalizeSkillRef(task.skillRef);
+  if (!ref || !promptInvokesSkill(promptText, ref.name)) {
+    return;
+  }
+  const check = await checkSkillRef(ref);
+  if (check.ok) {
+    return;
+  }
+  const message = messages.skillUnavailable(ref.name, check.reason);
+  logError(`[CopilotScheduler] ${message}`);
+  throw createPromptBlockedError(message, "skillUnavailable");
+}
+
 export const __testOnly = {
+  assertSkillAvailable,
   normalizeNotificationMode,
   resolveNotificationMode,
   resolvePromptText,
