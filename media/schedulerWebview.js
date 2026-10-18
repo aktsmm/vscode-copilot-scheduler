@@ -3573,8 +3573,16 @@
         }) || null;
     }
     var parts = [];
+    if (skill) {
+      parts.push(
+        skill.explicit
+          ? strings.skillKindExplicit || ""
+          : strings.skillKindAuto || "",
+      );
+    }
     if (skill && skill.description) parts.push(skill.description);
     if (skill && skill.argumentHint) parts.push(skill.argumentHint);
+    parts = parts.filter(Boolean);
     skillDetail.textContent = parts.join(" — ");
     skillDetail.style.display = parts.length > 0 ? "block" : "none";
   }
@@ -3598,6 +3606,41 @@
     skillSelectGroup.style.display = show ? "block" : "none";
   }
 
+  function renderSkillOption(skill) {
+    return (
+      '<option value="' +
+      escapeAttr(skillKey(skill)) +
+      '">' +
+      escapeHtml("/" + skill.name + " (" + skillScopeLabel(skill) + ")") +
+      "</option>"
+    );
+  }
+
+  // Both kinds listed together get headings; a single kind stays a flat list.
+  function renderSkillOptionList(skills) {
+    var explicitSkills = skills.filter(function (skill) {
+      return skill.explicit;
+    });
+    var otherSkills = skills.filter(function (skill) {
+      return !skill.explicit;
+    });
+    if (explicitSkills.length === 0 || otherSkills.length === 0) {
+      return skills.map(renderSkillOption).join("");
+    }
+    return (
+      '<optgroup label="' +
+      escapeAttr(strings.skillGroupExplicit || "") +
+      '">' +
+      explicitSkills.map(renderSkillOption).join("") +
+      "</optgroup>" +
+      '<optgroup label="' +
+      escapeAttr(strings.skillGroupAuto || "") +
+      '">' +
+      otherSkills.map(renderSkillOption).join("") +
+      "</optgroup>"
+    );
+  }
+
   function renderSkillOptions() {
     if (!skillSelect) return;
     var currentKey = selectedSkillRef ? skillKey(selectedSkillRef) : "";
@@ -3605,17 +3648,7 @@
       '<option value="">' +
       escapeHtml(strings.placeholderSelectSkill || "") +
       "</option>" +
-      getVisibleSkills()
-        .map(function (skill) {
-          return (
-            '<option value="' +
-            escapeAttr(skillKey(skill)) +
-            '">' +
-            escapeHtml("/" + skill.name + " (" + skillScopeLabel(skill) + ")") +
-            "</option>"
-          );
-        })
-        .join("");
+      renderSkillOptionList(getVisibleSkills());
     skillSelect.value = currentKey;
     if (skillSelect.value !== currentKey) {
       skillSelect.value = "";

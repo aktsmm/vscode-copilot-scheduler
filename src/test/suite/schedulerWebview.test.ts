@@ -1671,6 +1671,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "skillScopeLabel",
       "updateSkillDetail",
       "updateSkillGroupVisibility",
+      "renderSkillOption",
+      "renderSkillOptionList",
       "renderSkillOptions",
       "applySkillToPrompt",
       "escapeHtml",
@@ -1680,7 +1682,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "document",
       "Event",
       [
-        'var strings = { placeholderSelectSkill: "Pick", skillScopeWorkspace: "workspace", skillScopeUser: "user" };',
+        'var strings = { placeholderSelectSkill: "Pick", skillScopeWorkspace: "workspace", skillScopeUser: "user", skillGroupExplicit: "Only when invoked", skillGroupAuto: "Also automatic", skillKindExplicit: "Only when invoked", skillKindAuto: "May also run on its own" };',
         "var LEADING_SLASH_COMMAND = /^\\/[A-Za-z0-9][\\w.:-]*(?=\\s|$)/;",
         "var skillTemplates = [];",
         "var selectedSkillRef = null;",
@@ -1778,11 +1780,37 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.strictEqual(api.group.style.display, "block");
     assert.ok(api.select$.innerHTML.includes("/weekly-report (workspace)"));
     assert.ok(api.select$.innerHTML.includes("/triage (user)"));
-    assert.strictEqual(api.detail.style.display, "none");
+    assert.strictEqual(
+      api.detail.textContent,
+      "May also run on its own",
+      "a selected skill without a description still states its kind",
+    );
+    assert.strictEqual(api.detail.style.display, "block");
+    const grouped = api.select$.innerHTML;
+    assert.ok(
+      grouped.indexOf('<optgroup label="Only when invoked">') <
+        grouped.indexOf("/weekly-report (workspace)") &&
+        grouped.indexOf("/weekly-report (workspace)") <
+          grouped.indexOf('<optgroup label="Also automatic">') &&
+        grouped.indexOf('<optgroup label="Also automatic">') <
+          grouped.indexOf("/triage (user)"),
+      "both kinds listed together are split under their own headings",
+    );
+
+    api.select(null);
+    api.renderSkillOptions();
+    assert.strictEqual(
+      api.select$.innerHTML.includes("<optgroup"),
+      false,
+      "a single kind stays a flat list",
+    );
 
     api.select({ name: "weekly-report", scope: "workspace", root: ".github/skills" });
     api.renderSkillOptions();
-    assert.strictEqual(api.detail.textContent, "Weekly <report> — [team]");
+    assert.strictEqual(
+      api.detail.textContent,
+      "Only when invoked — Weekly <report> — [team]",
+    );
 
     api.setEnabled(false);
     api.renderSkillOptions();
