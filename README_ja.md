@@ -107,7 +107,7 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 | ツール                        | 説明                                                                                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `#scheduler_query`            | 読み取り専用の問い合わせ。`kind=list` / `kind=get` / `kind=history` / `kind=preview_cron` / `kind=list_models` / `kind=list_agents`。 |
+| `#scheduler_query`            | 読み取り専用の問い合わせ。`kind=list` / `kind=get` / `kind=history` / `kind=preview_cron` / `kind=list_models` / `kind=list_agents` / `kind=list_skills`。 |
 | `#scheduler_create_task`      | モデル・エージェント・実行制御を含めてスケジュールタスクを作成します。                                                                |
 | `#scheduler_update_task`      | `model` / `agent` / `scope` / 実行制御を含めてタスクの項目を更新します。有効/無効の変更は `#scheduler_set_task_enabled` を使います。  |
 | `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                                                     |
@@ -122,7 +122,7 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 `kind=list` は prompt 本文の代わりに短い `promptPreview` と `promptLength` を返します。`local` / `global` のタスクは prompt ファイル全体のスナップショットを保持するためです。write 系ツールの成功レスポンスも同じ形で返します。全文が必要なときは `kind=get` を使い、preview をタスクに書き戻さないでください。
 
-`kind=list_models` は選択可能なモデルの `id` と `supportedReasoningEfforts` を返し、`kind=list_agents` はファイルパスを含めずに選択可能なエージェントを返します。モデル一覧は Copilot Scheduler ビューのモデル選択肢と同一なので、UI で見えない・変更できないモデルを Chat が設定することはありません。作成/更新では `model`（任意で `modelReasoningEffort`）、`agent`、実行制御の `autoMode` / `jitterSeconds` / `maxExecutionsPerDay` / `allowedTimeStart` / `allowedTimeEnd` を指定できます。この一覧にない `model` id は、無言で既定モデルにフォールバックせず有効な id 一覧付きでエラーになります。`model` に空文字を渡すと選択が解除され、既定モデルに戻ります。なお Language Model API が利用できず組込みの fallback カタログしか分からないときは、エラーにせず warning 付きで保存します。
+`kind=list_models` は選択可能なモデルの `id` と `supportedReasoningEfforts` を返し、`kind=list_agents` はファイルパスを含めずに選択可能なエージェントを返し、`kind=list_skills` はタスクのプロンプトで `/<name> <引数>` として実行できる Agent Skill（名前・scope・説明・`argumentHint`・`explicitOnly`）をフォルダパスなしで返します。モデル一覧は Copilot Scheduler ビューのモデル選択肢と同一なので、UI で見えない・変更できないモデルを Chat が設定することはありません。作成/更新では `model`（任意で `modelReasoningEffort`）、`agent`、実行制御の `autoMode` / `jitterSeconds` / `maxExecutionsPerDay` / `allowedTimeStart` / `allowedTimeEnd` を指定できます。この一覧にない `model` id は、無言で既定モデルにフォールバックせず有効な id 一覧付きでエラーになります。`model` に空文字を渡すと選択が解除され、既定モデルに戻ります。なお Language Model API が利用できず組込みの fallback カタログしか分からないときは、エラーにせず warning 付きで保存します。
 
 `Auto` および内部 utility モデルの ID は選択肢に残しますが、メタデータ上のモデル名から推論レベルの候補を引き継ぎません。
 

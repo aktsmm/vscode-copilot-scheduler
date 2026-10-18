@@ -37,6 +37,7 @@ import {
 } from "./promptExecutionErrors";
 import {
   checkSkillRef,
+  discoverWorkspaceSkills,
   normalizeSkillRef,
   promptInvokesSkill,
 } from "./skillResolver";
@@ -1249,6 +1250,7 @@ export function activate(context: vscode.ExtensionContext): void {
     catalogProvider: {
       listModels: loadPickerModelCatalog,
       listAgents: () => CopilotExecutor.getAllAgents(),
+      listSkills: discoverWorkspaceSkills,
     },
     resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
     runTask: async (task) => {

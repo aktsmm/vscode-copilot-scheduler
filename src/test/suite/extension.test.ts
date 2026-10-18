@@ -1177,6 +1177,7 @@ suite("Extension Test Suite", () => {
       ?.kind?.enum as string[] | undefined;
     assert.ok(queryKinds?.includes("list_models"));
     assert.ok(queryKinds?.includes("list_agents"));
+    assert.ok(queryKinds?.includes("list_skills"));
 
     const createProperties =
       toolByName("scheduler_create_task")?.inputSchema?.properties ?? {};
