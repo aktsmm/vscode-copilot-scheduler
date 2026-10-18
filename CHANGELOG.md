@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Skill descriptions and argument hints no longer carry control, zero-width or bidirectional-override characters, which could disguise text in the task form or in the skill list handed to Chat. Skill names are never rewritten, so a hidden character cannot make a name match.
+- `#scheduler_query` `kind=list_skills` now states that skill descriptions are data, not instructions.
+
 ### Changed
 
 - The skill note under the task form's skill list is now announced by screen readers when it changes, and the skill list is linked to it so the note is read with the list.

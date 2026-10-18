@@ -91,6 +91,22 @@ suite("Skill resolver", () => {
     assert.strictEqual(parseSkillFrontmatter(""), undefined);
   });
 
+  test("free text drops control and bidirectional characters, and a hidden character never makes a name match", () => {
+    const parsed = parseSkillFrontmatter(
+      [
+        "---",
+        "name: a\u200Bb",
+        "description: safe\u202Etxet \u0007text\u200B ok",
+        "argument-hint: [x\u2066y]",
+        "---",
+      ].join("\n"),
+    );
+    assert.strictEqual(parsed?.description, "safetxet text ok");
+    assert.strictEqual(parsed?.argumentHint, "[xy]");
+    assert.strictEqual(parsed?.name, "a\u200Bb", "the name is not rewritten");
+    assert.strictEqual(isValidSkillName(parsed?.name), false);
+  });
+
   test("only lower-case hyphenated names up to 64 characters are valid", () => {
     for (const name of ["a", "my-skill", "skill2", "a-b-c"]) {
       assert.strictEqual(isValidSkillName(name), true, name);
