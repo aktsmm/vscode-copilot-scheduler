@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `#scheduler_query` `kind=list_skills` lists the Agent Skills a task prompt can run as `/<name> <arguments>` (name, scope, description, `argumentHint`, `explicitOnly`), without folder paths, so Chat does not guess skill names.
 - Before a run, a task's saved skill is checked: a skill that is gone, exists in several places at the same level, or lives in an untrusted workspace stops the run with an explanation instead of sending `/skill-name` anyway.
 - Setting `copilotScheduler.sessionHarness` (`auto` by default). `local` is experimental: runs that start a new chat session use `workbench.action.chat.newLocalChat` and are not sent if that command fails. `auto` leaves the session type to VS Code. Scheduler does not change VS Code settings and cannot force a Copilot (Agent Host) session.
-- A note under the task form's model selector, plus README sections, describing what was observed on VS Code 1.142: a specific model chosen for a task was applied in Local sessions and ignored in Copilot (Agent Host) sessions; Auto and HydraFusion are not confirmed in either.
+- A note under the task form's model selector, plus README sections, describing what was observed on VS Code 1.142: a specific model chosen for a task was applied in Local sessions; in Copilot (Agent Host) sessions the model, reasoning effort and context size were all ignored (measured). Auto and HydraFusion are not confirmed in either.
 
 ### Fixed
 
