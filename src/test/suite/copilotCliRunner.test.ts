@@ -6,6 +6,7 @@ import {
   buildCopilotCliArgs,
   buildSkillPromptForCli,
   CopilotCliOutputParser,
+  isCopilotCliModelSupported,
   resolveCopilotCliPath,
   runCopilotCliProcess,
 } from "../../copilotCliRunner";
@@ -174,6 +175,16 @@ suite("Copilot CLI runner", () => {
     });
     assert.ok(result.spawnError);
     assert.strictEqual(result.exitCode, null);
+  });
+
+  test("only Copilot model ids are handed to the CLI", () => {
+    assert.strictEqual(isCopilotCliModelSupported("copilot", "claude-haiku-4.5"), true);
+    assert.strictEqual(isCopilotCliModelSupported("", "auto"), true);
+    assert.strictEqual(isCopilotCliModelSupported(undefined, "gpt-6.1-sol"), true);
+    assert.strictEqual(isCopilotCliModelSupported("openai-codex", "default::gpt-6-luna"), false);
+    assert.strictEqual(isCopilotCliModelSupported("copilot", "default::gpt-6-luna"), false);
+    assert.strictEqual(isCopilotCliModelSupported("copilot", "bad id"), false);
+    assert.strictEqual(isCopilotCliModelSupported("copilot", "  "), false);
   });
 
   test("skill instructions are read without front matter and respect trust and precedence", async () => {

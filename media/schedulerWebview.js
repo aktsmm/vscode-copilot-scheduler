@@ -2470,6 +2470,7 @@
           modelConfigurationState !== undefined
             ? copyModelConfigurationForForm(modelConfigurationState)
             : undefined,
+        useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
         }),

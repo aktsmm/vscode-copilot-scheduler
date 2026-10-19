@@ -267,6 +267,21 @@ suite("lmTools write wrappers", () => {
     }
   });
 
+  test("update task refuses the Copilot CLI option so Chat cannot widen what a task may run", async () => {
+    const client = new FakeClient();
+    const tool = createSchedulerUpdateTaskTool(client);
+    const payload = parseJson(
+      await invoke(tool, {
+        id: "task-1",
+        updates: { useCopilotCli: true } as never,
+      }),
+    );
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, "validation");
+    assert.ok(String(payload.message).includes("useCopilotCli"));
+    assert.strictEqual(client.updateArgs, undefined);
+  });
+
   test("run task rejects unknown fields and whitespace ids without dispatch", async () => {
     let calls = 0;
     const tool = createSchedulerRunTaskTool(

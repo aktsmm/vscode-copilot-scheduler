@@ -22,6 +22,7 @@ import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
   buildCopilotCliArgs,
   buildSkillPromptForCli,
+  isCopilotCliModelSupported,
   resolveCopilotCliPath,
   runCopilotCliProcess,
 } from "./copilotCliRunner";
@@ -875,6 +876,12 @@ export class CopilotExecutor {
     }
 
     const model = (options.model ?? "").trim();
+    if (!isCopilotCliModelSupported(options.modelVendor, model)) {
+      throw createPromptBlockedError(
+        messages.copilotCliUnsupportedModel(),
+        "copilotCliUnavailable",
+      );
+    }
     const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
       .filter((folder) => folder.uri.scheme === "file")
       .map((folder) => folder.uri.fsPath);

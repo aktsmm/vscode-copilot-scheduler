@@ -1909,6 +1909,28 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
     assert.ok(html.includes('<input type="checkbox" id="model-fallback">'));
     assert.ok(html.includes("strings.webviewModelFallbackNote"));
+    assert.ok(html.includes('id="use-copilot-cli"'));
+    assert.ok(html.includes("strings.webviewUseCopilotCliNote"));
+
+    // "Test prompt" must take the same route as the saved task, or testing would not show what a run does.
+    const testPromptStart = script.indexOf('type: "testPrompt"');
+    const testPromptEnd = script.indexOf("attachments: attachmentsState", testPromptStart);
+    assert.ok(testPromptStart > 0 && testPromptEnd > testPromptStart);
+    assert.ok(
+      script
+        .slice(testPromptStart, testPromptEnd)
+        .includes("useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,"),
+    );
+    const webviewHost = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    const hostStart = webviewHost.indexOf('case "testPrompt":');
+    assert.ok(
+      webviewHost
+        .slice(hostStart, hostStart + 900)
+        .includes("message.useCopilotCli === true"),
+    );
   });
 
   test("updateDefaults applies new defaults immediately only in create mode", () => {

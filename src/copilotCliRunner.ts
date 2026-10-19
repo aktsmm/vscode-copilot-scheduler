@@ -17,6 +17,21 @@ const MAX_JSON_LINE_CHARS = 2 * 1024 * 1024;
 const STDERR_TAIL_CHARS = 600;
 const KILL_GRACE_MS = 3000;
 
+/**
+ * The CLI only knows Copilot's own model ids. Ids of other providers (for example
+ * `default::gpt-6-luna` from the Codex bridge) would fail inside the CLI with a
+ * less helpful message, so they are refused up front.
+ */
+export function isCopilotCliModelSupported(
+  vendor: string | undefined,
+  modelId: string,
+): boolean {
+  const id = modelId.trim();
+  if (!id || id.includes("::") || /[\s"']/.test(id)) return false;
+  const provider = (vendor ?? "").trim().toLowerCase();
+  return provider === "" || provider === "copilot";
+}
+
 export interface CopilotCliArgsInput {
   model: string;
   reasoningEffort?: string;
