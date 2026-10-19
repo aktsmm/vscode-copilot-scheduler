@@ -1804,6 +1804,8 @@ export class SchedulerWebview {
       skillKindExplicit: messages.skillKindExplicit(),
       skillKindAuto: messages.skillKindAuto(),
       labelModelFallback: messages.labelModelFallback(),
+      labelUseCopilotCli: messages.labelUseCopilotCli(),
+      webviewUseCopilotCliNote: messages.webviewUseCopilotCliNote(),
       labelChatSession: messages.labelChatSession(),
       labelChatSessionDefault: messages.labelChatSessionDefault(),
       labelChatSessionNew: messages.labelChatSessionNew(),
@@ -3014,6 +3016,14 @@ export class SchedulerWebview {
                 <label for="model-fallback">${escapeHtml(strings.labelModelFallback)}</label>
               </div>
               <p class="note">${escapeHtml(strings.webviewModelFallbackNote)}</p>
+            </div>
+
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="use-copilot-cli" aria-describedby="use-copilot-cli-note">
+                <label for="use-copilot-cli">${escapeHtml(strings.labelUseCopilotCli)}</label>
+              </div>
+              <p class="note" id="use-copilot-cli-note">${escapeHtml(strings.webviewUseCopilotCliNote)}</p>
             </div>
 
             <div class="form-group col-12">

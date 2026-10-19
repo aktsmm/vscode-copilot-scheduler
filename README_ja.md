@@ -173,6 +173,17 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - 自律実行ヒントは、スラッシュコマンドで始まるプロンプトには追加されません。スキルと Autopilot（`/autopilot`）は、1つのプロンプトで併用できません。
 - 対象は `file:` のワークスペースフォルダーだけで、リモートや仮想フォルダーは読み込みません。
 
+#### Copilot CLI での実行
+
+Copilot（エージェントホスト）のチャットセッションは、タスクで選んだモデルを無視します（下記）。モデルを反映したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。チャットセッションの代わりに、バックグラウンドの `copilot` プロセス（`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`、プロンプトは標準入力）として実行します。
+
+- タスク単位のオプトインで、モデルを指定したタスクにだけ効きます。モデル未指定のタスク、またはオプションをオフにしたタスクは、これまでどおりチャットで実行します。既存のタスクやプロンプトファイル型のタスクは変わりません。VS Code がどの種類のチャットセッションを使うかを Scheduler は判別できないため、自動では切り替えません。
+- CLI はプロンプトモードで `/スキル` を実行しない（CLI 1.0.99 で確認）ため、Scheduler がスキルの `SKILL.md` の指示（front matter を除く）とスキルのフォルダーを、引数の前に付けます。スキル一覧と同じ規則で、名前の一致が必要で、ワークスペースのスキルは信頼されたワークスペースでのみ使え、ユーザーのスキルより優先されます。
+- 実行はタスクのワークスペースフォルダーで行います（グローバルのタスクは最初のローカルワークスペースフォルダー）。応答はチャットに表示せず、保存もしません。実行履歴には、指定したモデル、CLI が応答で報告したモデル、使ったプレミアムリクエストを記録します。
+- 未対応（メッセージを出して停止）: 添付ファイル、モデルの詳細オプション、カスタムエージェント。モデルが reasoning effort を受け付けないときは、CLI 自身のエラーで失敗します。
+- **ツール**: バックグラウンド実行は承認を求められないため、`copilotScheduler.cliAllowAllTools` がオンでない限りツールは拒否されます。無人のタスクがタスクのフォルダーでコマンドを実行しファイルを変更できることを許容する場合だけオンにしてください。Chat（`scheduler_create_task`）からこのオプションは設定できません。
+- 設定は `copilotScheduler.cliPath`（既定: PATH 上の `copilot`。Windows は `copilot.exe` が必要）と `copilotScheduler.cliTimeoutMinutes`（既定 60）です。3 つともユーザー／リモートの設定だけが有効で、ワークスペースからは変更できません。
+
 #### モデル指定とセッションの種類
 
 VS Code 1.142（Windows）で確認した内容です。
@@ -251,6 +262,9 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |
 | `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
+| `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.cliTimeoutMinutes`          | `60`              | CLI 実行のタスクを停止するまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.commandDelayFactor`         | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
 | `copilotScheduler.showNotifications`          | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
 | `copilotScheduler.notificationMode`           | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |

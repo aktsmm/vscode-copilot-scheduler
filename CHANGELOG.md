@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.9.0] - 2026-10-20
 
-The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. No change to how tasks are saved or run.
+The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. A task can also run through the Copilot CLI so its model is applied. Tasks without these options are saved and run as before.
 
+### Added
+
+- **Run with the Copilot CLI** (task form, opt-in). A task that has a model and this option runs as a background `copilot -s --output-format json --model <id>` process (prompt on stdin) instead of a chat session, because an Agent Host chat session ignores the task's model. Without a model or without the option the task runs in chat as before. The CLI does not run `/skill` in prompt mode, so Scheduler puts the skill's instructions and folder in front of the arguments. The execution history records the requested model, the model the CLI reported and the premium requests used. Attachments, detailed model options and a custom agent are not supported, and the option cannot be set from Chat tools.
+- Settings `copilotScheduler.cliPath`, `copilotScheduler.cliAllowAllTools` (default off: the CLI cannot ask for approval in the background, so tools are refused) and `copilotScheduler.cliTimeoutMinutes` (default 60). They are machine-scoped, so a workspace cannot change them.
 ### Changed
 
 - **Prompt Type**: "Local Template" and "Global Template" are now **Local Skill** and **Global Skill**. Local lists the skills of your workspace folders and Global lists your own skills (`~/.copilot/skills`, `$COPILOT_HOME/skills`, `~/.agents/skills`, `~/.claude/skills`); Free Input still lists both. The skill list, its **Show all skills** toggle and `copilotScheduler.skillTemplates` work as before. When no skill is found, the list says so.

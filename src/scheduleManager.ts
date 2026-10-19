@@ -1068,6 +1068,14 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (
+        task.useCopilotCli !== undefined &&
+        typeof task.useCopilotCli !== "boolean"
+      ) {
+        task.useCopilotCli = undefined;
+        needsSave = true;
+      }
+
       if (task.skillRef !== undefined) {
         const cleanSkillRef = normalizeSkillRef(task.skillRef);
         if (JSON.stringify(cleanSkillRef) !== JSON.stringify(task.skillRef)) {
@@ -1618,6 +1626,7 @@ export class ScheduleManager {
           ? Boolean(input.autoMode)
           : defaultAutoMode,
       modelFallback: input.modelFallback === true ? true : undefined,
+      useCopilotCli: input.useCopilotCli === true ? true : undefined,
       skillRef: normalizeSkillRef(input.skillRef),
       chatSession:
         input.chatSession === "new" || input.chatSession === "continue"
@@ -1933,6 +1942,9 @@ export class ScheduleManager {
     if (updates.modelFallback !== undefined) {
       task.modelFallback = updates.modelFallback === true ? true : undefined;
     }
+    if (updates.useCopilotCli !== undefined) {
+      task.useCopilotCli = updates.useCopilotCli === true ? true : undefined;
+    }
     if (updates.skillRef !== undefined) {
       task.skillRef = normalizeSkillRef(updates.skillRef);
     }
@@ -2108,6 +2120,7 @@ export class ScheduleManager {
       attachments: original.attachments,
       autoMode: original.autoMode,
       modelFallback: original.modelFallback,
+      useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,
       chatSession: original.chatSession,
       jitterSeconds: original.jitterSeconds,

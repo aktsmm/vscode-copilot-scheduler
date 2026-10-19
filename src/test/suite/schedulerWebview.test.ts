@@ -1896,6 +1896,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,",
       "if (modelFallbackInput) modelFallbackInput.checked = false;",
       "modelFallbackInput.checked = task.modelFallback === true;",
+      'var useCopilotCliInput = document.getElementById("use-copilot-cli");',
+      "useCopilotCli: source.useCopilotCli === true,",
+      "useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,",
+      "if (useCopilotCliInput) useCopilotCliInput.checked = false;",
+      "useCopilotCliInput.checked = task.useCopilotCli === true;",
     ]) {
       assert.ok(
         sourceContainsToken(script, token),
@@ -2157,6 +2162,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           cronExpression: { value: original.cronExpression },
           autoModeInput: null,
           modelFallbackInput: null,
+          useCopilotCliInput: null,
           getSelectedSkillRefForSubmit: () => null,
           getEffectivePromptSource: () => promptSource,
           chatSessionSelect: null,

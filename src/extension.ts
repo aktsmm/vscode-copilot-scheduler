@@ -81,6 +81,7 @@ import type {
   PromptSource,
   PromptExecutionRequest,
   ModelFallbackInfo,
+  CopilotCliRunInfo,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -182,6 +183,7 @@ function isEmptyPromptTemplateError(error: unknown): boolean {
 function buildPromptExecutionOptions(
   request: PromptExecutionOptions,
   localAttachmentRoots: string[] = getWorkspaceFolderPaths(),
+  workingDirectory?: string,
 ): ExecuteOptions {
   return {
     agent: request.agent,
@@ -193,6 +195,12 @@ function buildPromptExecutionOptions(
     modelVersion: request.modelVersion,
     modelReasoningEffort: request.modelReasoningEffort,
     ...(request.modelFallback === true ? { modelFallback: true } : {}),
+    ...(request.useCopilotCli === true
+      ? {
+          useCopilotCli: true,
+          ...(workingDirectory ? { workingDirectory } : {}),
+        }
+      : {}),
     ...(request.modelConfiguration !== undefined
       ? { modelConfiguration: request.modelConfiguration }
       : {}),
@@ -660,13 +668,26 @@ const manualRunInFlightTaskIds = new Set<string>();
 
 /** Fallback model used by the most recent run per task, consumed by history writers. */
 const lastModelFallbackByTaskId = new Map<string, ModelFallbackInfo>();
+const lastCopilotCliRunByTaskId = new Map<string, CopilotCliRunInfo>();
 
 function takeModelFallbackDetail(taskId: string): string | undefined {
   const fallback = lastModelFallbackByTaskId.get(taskId);
   lastModelFallbackByTaskId.delete(taskId);
-  return fallback
-    ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
-    : undefined;
+  const cliRun = lastCopilotCliRunByTaskId.get(taskId);
+  lastCopilotCliRunByTaskId.delete(taskId);
+  const details = [
+    fallback
+      ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
+      : undefined,
+    cliRun
+      ? messages.executionHistoryCopilotCli(
+          cliRun.requestedModel,
+          cliRun.appliedModel,
+          cliRun.premiumRequests,
+        )
+      : undefined,
+  ].filter((item): item is string => !!item);
+  return details.length > 0 ? details.join(" / ") : undefined;
 }
 /**
  * Attachment sets already reported as blocked, so the warning is not repeated
@@ -1521,6 +1542,7 @@ export function deactivate(): void {
   attachmentBlockNotifications.clear();
   lastPromptResolutionByTaskId.clear();
   lastModelFallbackByTaskId.clear();
+  lastCopilotCliRunByTaskId.clear();
   resetExecutionHistoryQueueForTests();
   setExecutionHistoryContextForTests(undefined);
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
@@ -1542,6 +1564,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
   // notifyInfo already checks shouldNotify() internally — no need for an outer guard.
   notifyInfo(messages.taskExecuting(task.name));
   lastModelFallbackByTaskId.delete(task.id);
+  lastCopilotCliRunByTaskId.delete(task.id);
 
   try {
     const resolved = await resolvePromptExecution(task);
@@ -1551,8 +1574,15 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     try {
       const executionResult = await copilotExecutor.executePrompt(
         resolved.prompt,
-        buildPromptExecutionOptions(resolved, getTaskAttachmentRoots(task)),
+        buildPromptExecutionOptions(
+          resolved,
+          getTaskAttachmentRoots(task),
+          task.scope === "workspace" ? task.workspacePath : undefined,
+        ),
       );
+      if (executionResult?.cliRun) {
+        lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
+      }
       if (executionResult?.modelFallback) {
         lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
         notifyInfo(
@@ -2103,6 +2133,7 @@ async function resolvePromptExecution(
     modelReasoningEffort: task.modelReasoningEffort,
     modelConfiguration: task.modelConfiguration,
     ...(task.modelFallback === true ? { modelFallback: true } : {}),
+    ...(task.useCopilotCli === true ? { useCopilotCli: true } : {}),
     attachments: task.attachments,
   };
 }

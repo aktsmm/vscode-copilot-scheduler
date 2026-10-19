@@ -164,6 +164,17 @@ The task form can insert an Agent Skill into the prompt as `/skill-name`; the re
 - The auto-mode hint is not added to a prompt that starts with a slash command, and a skill cannot be combined with Autopilot (`/autopilot`) in one prompt.
 - Only `file:` workspace folders are scanned; remote and virtual folders are not.
 
+#### Running with the Copilot CLI
+
+A Copilot (Agent Host) chat session ignores the model chosen for a task (see below). To apply the model, tick **Run with the Copilot CLI** in the task form. The task then runs as a background `copilot` process (`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`, prompt on stdin) instead of a chat session:
+
+- It is opt-in per task and only takes effect when the task has a model. A task without a model, or without the option, runs in chat exactly as before, so existing tasks and prompt-file tasks are unchanged. Scheduler cannot tell which chat session type VS Code will use, so it does not switch on its own.
+- The CLI does not run `/skill` in prompt mode (verified with CLI 1.0.99), so Scheduler puts the skill's `SKILL.md` instructions (front matter removed) and the skill folder in front of your arguments. The same rules as the skill list apply: the name must match, a workspace skill needs a trusted workspace and wins over a user skill.
+- The run happens in the task's workspace folder (the first local workspace folder for a global task). The answer is not shown in chat and not stored; the execution history records the requested model, the model the CLI reported on its answer, and the premium requests used.
+- Not supported (the run is stopped with a message): attachments, detailed model options and a custom agent. A model that rejects the reasoning effort makes the CLI fail with its own message.
+- **Tools**: a background run cannot ask for approval, so tools are refused unless `copilotScheduler.cliAllowAllTools` is on. Turn it on only if you accept that unattended tasks can run commands and change files in the task's folder. This is not available to Chat (`scheduler_create_task` cannot set the option).
+- `copilotScheduler.cliPath` (default: `copilot` on PATH; Windows needs `copilot.exe`) and `copilotScheduler.cliTimeoutMinutes` (default 60) complete the settings. All three are user/remote settings only; a workspace cannot change them.
+
 #### Model selection and session types
 
 Observed on VS Code 1.142 (Windows):
@@ -242,6 +253,9 @@ Task snapshots and revision metadata are written through same-directory temporar
 | `copilotScheduler.autoModeDefault`            | `false`           | Default value for new tasks' auto-mode hint (inserts an autonomous-execution instruction at the beginning of the runtime prompt).                                                                                                                              |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | Pre-release only: adds Scheduler to `enable-proposed-api` in `argv.json` at startup so detailed model options can be used. Takes effect after a full VS Code restart (not a window reload). Turn off to manage `argv.json` yourself.                           |
 | `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | Fallback model order for tasks that opt in to model fallback; matched by id, name or family against the live catalog (max 5 entries, `[]` disables). |
+| `copilotScheduler.cliPath`                    | `""`              | Full path of the `copilot` executable for tasks that run with the Copilot CLI; empty finds it on PATH. User/remote setting only. |
+| `copilotScheduler.cliAllowAllTools`           | `false`           | Let CLI-run tasks use every tool without asking (`--allow-all-tools`). Off: tools are refused. User/remote setting only. |
+| `copilotScheduler.cliTimeoutMinutes`          | `60`              | Minutes after which a CLI-run task is stopped (1–720). User/remote setting only. |
 | `copilotScheduler.commandDelayFactor`         | `0.8`             | Delay multiplier for Copilot command sequencing (0.1–2.0). Lower is faster, but may be less stable in some environments.                                                                                                                                       |
 | `copilotScheduler.showNotifications`          | `true`            | Show notifications when tasks are executed                                                                                                                                                                                                                     |
 | `copilotScheduler.notificationMode`           | `sound`           | Notification mode (sound/silentToast/silentStatus)                                                                                                                                                                                                             |
