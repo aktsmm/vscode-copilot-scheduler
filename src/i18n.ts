@@ -484,8 +484,66 @@ export const messages = {
     ),
   webviewModelHarnessNote: () =>
     t(
-      "In Copilot (Agent Host) sessions the model, reasoning effort and context size set here are not applied: the session runs on the model chosen in the chat window (measured on VS Code 1.142). Choose the model there. In Local sessions a specific model was observed to be applied; effort and context size are unconfirmed. Auto and HydraFusion are not confirmed in either.",
-      "Copilot（エージェントホスト）のセッションでは、ここで設定したモデル・reasoning effort・コンテキストサイズは反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。モデルはチャット画面側で選んでください。Local のセッションでは具体的なモデルの指定が反映されることを確認していますが、effort とコンテキストサイズは未確認です。Auto と HydraFusion はどちらでも動作を確認できていません。",
+      "In Copilot (Agent Host) sessions the model, reasoning effort and context size set here are not applied: the session runs on the model chosen in the chat window (measured on VS Code 1.142). Choose the model there, or tick \"Run with the Copilot CLI\" below so the model is applied. In Local sessions a specific model was observed to be applied; effort and context size are unconfirmed. Auto and HydraFusion are not confirmed in either.",
+      "Copilot（エージェントホスト）のセッションでは、ここで設定したモデル・reasoning effort・コンテキストサイズは反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。モデルはチャット画面側で選ぶか、下の「Copilot CLI で実行する」を選ぶとモデルが反映されます。Local のセッションでは具体的なモデルの指定が反映されることを確認していますが、effort とコンテキストサイズは未確認です。Auto と HydraFusion はどちらでも動作を確認できていません。",
+    ),
+  labelUseCopilotCli: () =>
+    t(
+      "Run with the Copilot CLI (applies the selected model)",
+      "Copilot CLI で実行する（選択したモデルを反映）",
+    ),
+  webviewUseCopilotCliNote: () =>
+    t(
+      "Off by default. When on, the task runs as a background `copilot` process instead of a chat session, so the model and reasoning effort above are applied and the answer is not shown in the chat window. A skill (/name) is expanded by Scheduler because the CLI does not run slash commands. Attachments, detailed model options and the custom agent are not supported. Tools run only if copilotScheduler.cliAllowAllTools is on. The execution history records the model the CLI reported.",
+      "既定はオフです。オンにすると、チャットセッションではなくバックグラウンドの `copilot` プロセスとして実行するため、上のモデルと reasoning effort が反映されます。応答はチャット画面には表示されません。CLI はスラッシュコマンドを実行しないため、スキル（/名前）は Scheduler が展開します。添付ファイル、モデルの詳細オプション、カスタムエージェントには対応していません。ツールの実行は copilotScheduler.cliAllowAllTools がオンのときだけ許可されます。実行履歴には CLI が報告したモデルを記録します。",
+    ),
+  executionHistoryCopilotCli: (
+    requested?: string,
+    applied?: string,
+    premiumRequests?: number,
+  ) => {
+    const parts = [
+      requested ? `requested ${requested}` : "model not set",
+      applied ? `applied ${applied}` : "applied model not reported",
+    ];
+    if (typeof premiumRequests === "number") {
+      parts.push(`premium requests ${premiumRequests}`);
+    }
+    return t(
+      `Copilot CLI: ${parts.join(", ")}`,
+      `Copilot CLI: ${[
+        requested ? `指定 ${requested}` : "モデル未指定",
+        applied ? `適用 ${applied}` : "適用モデルの報告なし",
+        ...(typeof premiumRequests === "number"
+          ? [`プレミアムリクエスト ${premiumRequests}`]
+          : []),
+      ].join("、")}`,
+    );
+  },
+  copilotCliNotFound: () =>
+    t(
+      "The Copilot CLI was not found, so the task was not run. Install it or set copilotScheduler.cliPath to the full path of the copilot executable.",
+      "Copilot CLI が見つからないため、タスクを実行していません。インストールするか、copilotScheduler.cliPath に copilot 実行ファイルのフルパスを設定してください。",
+    ),
+  copilotCliUnsupportedOptions: () =>
+    t(
+      "Running with the Copilot CLI does not support attachments, detailed model options or a custom agent. Remove them or turn off the CLI option.",
+      "Copilot CLI での実行は、添付ファイル、モデルの詳細オプション、カスタムエージェントに対応していません。これらを外すか、CLI の選択をオフにしてください。",
+    ),
+  copilotCliSkillMissing: (name: string) =>
+    t(
+      `The skill "/${name}" was not found, so the task was not run with the Copilot CLI.`,
+      `スキル「/${name}」が見つからないため、Copilot CLI でタスクを実行していません。`,
+    ),
+  copilotCliFailed: (exitCode: number | null, detail: string) =>
+    t(
+      `The Copilot CLI run failed (exit code ${exitCode ?? "none"}).${detail ? ` ${detail}` : ""}`,
+      `Copilot CLI の実行に失敗しました（終了コード ${exitCode ?? "なし"}）。${detail ? ` ${detail}` : ""}`,
+    ),
+  copilotCliTimedOut: (minutes: number) =>
+    t(
+      `The Copilot CLI run was stopped after ${minutes} minutes (copilotScheduler.cliTimeoutMinutes).`,
+      `Copilot CLI の実行は ${minutes} 分で停止しました（copilotScheduler.cliTimeoutMinutes）。`,
     ),
   skillUnavailable: (name: string, reason: "notTrusted" | "missing" | "ambiguous") =>
     reason === "notTrusted"

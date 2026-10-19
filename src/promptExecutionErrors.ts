@@ -18,7 +18,9 @@ export type PromptBlockedReason =
   | "modelConfigurationUnavailable"
   | "attachmentsRequireChatOpen"
   | "sessionHarnessUnavailable"
-  | "skillUnavailable";
+  | "skillUnavailable"
+  | "copilotCliUnavailable"
+  | "copilotCliFailed";
 
 export function createPromptBlockedError(
   message: string,

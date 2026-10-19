@@ -892,6 +892,7 @@
 
   var autoModeInput = document.getElementById("auto-mode");
   var modelFallbackInput = document.getElementById("model-fallback");
+  var useCopilotCliInput = document.getElementById("use-copilot-cli");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
@@ -1007,6 +1008,7 @@
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
       modelFallback: source.modelFallback === true,
+      useCopilotCli: source.useCopilotCli === true,
       skillRef: (function () {
         var ref = normalizeSkillRefClient(source.skillRef);
         return ref ? ref.scope + "|" + ref.root + "|" + ref.name : "";
@@ -2284,6 +2286,7 @@
           !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
         modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
         jitterSeconds: jitterSecondsInput
@@ -3438,6 +3441,7 @@
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     if (modelFallbackInput) modelFallbackInput.checked = false;
+    if (useCopilotCliInput) useCopilotCliInput.checked = false;
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
     }
@@ -4032,6 +4036,9 @@
     }
     if (modelFallbackInput) {
       modelFallbackInput.checked = task.modelFallback === true;
+    }
+    if (useCopilotCliInput) {
+      useCopilotCliInput.checked = task.useCopilotCli === true;
     }
     if (chatSessionSelect) {
       chatSessionSelect.value = task.chatSession || "default";

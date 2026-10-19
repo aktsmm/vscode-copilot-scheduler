@@ -184,6 +184,12 @@ export interface ScheduledTask {
   modelFallback?: boolean;
 
   /**
+   * Run through the GitHub Copilot CLI instead of a chat session, so the saved model
+   * and reasoning effort are applied. Opt-in; the chat route stays the default.
+   */
+  useCopilotCli?: boolean;
+
+  /**
    * Skill this task's prompt invokes (`/<name> ...`). Advisory: the prompt text is
    * what runs; this only lets Scheduler check the skill still exists before a run.
    */
@@ -292,6 +298,9 @@ export interface CreateTaskInput {
   /** Opt in to the configured fallback model chain when the saved model is unavailable. */
   modelFallback?: boolean;
 
+  /** Run through the GitHub Copilot CLI so the saved model is applied. */
+  useCopilotCli?: boolean;
+
   /** Skill invoked by the prompt; `null` clears it on update. */
   skillRef?: TaskSkillRef | null;
 
@@ -393,6 +402,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Opt in to the configured fallback model chain when the model is unavailable. */
   modelFallback?: boolean;
+
+  /** Run through the GitHub Copilot CLI so the model is applied. */
+  useCopilotCli?: boolean;
 }
 
 /**
@@ -488,6 +500,12 @@ export interface ExecuteOptions extends ModelSelectionFields {
 
   /** Opt in to the configured fallback model chain when the model is unavailable. */
   modelFallback?: boolean;
+
+  /** Run through the GitHub Copilot CLI so the model is applied. */
+  useCopilotCli?: boolean;
+
+  /** Folder the Copilot CLI runs in (CLI runs only). */
+  workingDirectory?: string;
 }
 
 /** Records that a fallback model replaced an unavailable requested model. */
@@ -498,8 +516,19 @@ export interface ModelFallbackInfo {
   to: string;
 }
 
+/** What a Copilot CLI run reported, for the execution history. */
+export interface CopilotCliRunInfo {
+  /** Model id passed to the CLI (`auto` for Auto). */
+  requestedModel?: string;
+  /** Model id the CLI reported on its answer, when it reported one. */
+  appliedModel?: string;
+  /** Premium requests the run used, when reported. */
+  premiumRequests?: number;
+}
+
 export interface ExecutePromptResult {
   modelFallback?: ModelFallbackInfo;
+  cliRun?: CopilotCliRunInfo;
 }
 
 /**

@@ -373,6 +373,62 @@ export type SkillRefCheck =
   | { ok: true }
   | { ok: false; reason: "notTrusted" | "missing" | "ambiguous" };
 
+const MAX_SKILL_INSTRUCTION_BYTES = 256 * 1024;
+
+export type SkillInstructions = {
+  /** Folder that contains SKILL.md; the skill's relative paths resolve against it. */
+  dir: string;
+  /** SKILL.md without its front matter. */
+  body: string;
+};
+
+/** Removes a leading `---` block. Text without a closed block is returned as is. */
+export function stripSkillFrontmatter(text: string): string {
+  const source = text.replace(/^\uFEFF/, "");
+  const match = /^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(
+    source,
+  );
+  return match ? source.slice(match[0].length) : source;
+}
+
+/**
+ * Reads a skill's instructions for a runner that cannot expand `/<name>` itself
+ * (the Copilot CLI treats it as plain text in prompt mode). The same rules as the
+ * picker apply: a valid name equal to the front matter `name`, a workspace skill
+ * inside its workspace folder and only in a trusted workspace, and a workspace
+ * skill wins over a user skill. Returns undefined when nothing usable is found.
+ */
+export async function readSkillInstructions(
+  name: string,
+  roots: readonly SkillRoot[],
+  options: { workspaceTrusted: boolean },
+): Promise<SkillInstructions | undefined> {
+  if (!isValidSkillName(name)) return undefined;
+  for (const scope of ["workspace", "user"] as const) {
+    if (scope === "workspace" && !options.workspaceTrusted) continue;
+    for (const root of roots) {
+      if (root.scope !== scope) continue;
+      const file = path.join(root.dir, name, "SKILL.md");
+      if (root.boundary && !isPathInsideBaseDir(root.boundary, file)) continue;
+      let text: string;
+      try {
+        const stat = await fs.promises.stat(file);
+        if (!stat.isFile() || stat.size > MAX_SKILL_INSTRUCTION_BYTES) continue;
+        text = await fs.promises.readFile(file, "utf8");
+      } catch {
+        continue;
+      }
+      const frontmatter = parseSkillFrontmatter(text);
+      if (!frontmatter || frontmatter.name !== name) continue;
+      return {
+        dir: path.dirname(file),
+        body: stripSkillFrontmatter(text).trim(),
+      };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Re-checks a task's skill right before it runs. A skill that is gone, ambiguous
  * or in an untrusted workspace stops the run: sending `/<name>` anyway would

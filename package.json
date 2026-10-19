@@ -254,6 +254,26 @@
           ],
           "markdownDescription": "%config.sessionHarness%"
         },
+        "copilotScheduler.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.cliPath%"
+        },
+        "copilotScheduler.cliAllowAllTools": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "%config.cliAllowAllTools%"
+        },
+        "copilotScheduler.cliTimeoutMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 720,
+          "scope": "machine",
+          "markdownDescription": "%config.cliTimeoutMinutes%"
+        },
         "copilotScheduler.autoModeDefault": {
           "type": "boolean",
           "default": false,

@@ -4,6 +4,8 @@
  */
 
 import * as vscode from "vscode";
+import * as os from "os";
+import * as fs from "fs";
 import * as path from "path";
 import { notifyInfo } from "./extension";
 import type {
@@ -17,6 +19,13 @@ import type {
 import { messages, isJapanese } from "./i18n";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import {
+  buildCopilotCliArgs,
+  buildSkillPromptForCli,
+  resolveCopilotCliPath,
+  runCopilotCliProcess,
+} from "./copilotCliRunner";
+import { getCurrentSkillRoots, readSkillInstructions } from "./skillResolver";
 import { applyExperimentalModelQualitySelection } from "./modelQualityExperiment";
 import {
   loadModelConfigurationCatalog,
@@ -29,7 +38,7 @@ import {
   supportsConfiguredModelExecution,
   supportsSystemMessageForwarding,
 } from "./configured-model-provider";
-import { resolveGlobalAgentRoots } from "./promptResolver";
+import { resolveGlobalAgentRoots, isPathInsideBaseDir } from "./promptResolver";
 import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
   createPromptBlockedError,
@@ -585,6 +594,11 @@ export class CopilotExecutor {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
 
+    // The CLI route needs a model to apply; without one the chat route is used as before.
+    if (options?.useCopilotCli === true && (options.model ?? "").trim()) {
+      return this.executePromptViaCopilotCli(processedPrompt, options);
+    }
+
     const runtimeAgent = await CopilotExecutor.resolveAgentInvocationTarget(
       options?.agent,
     );
@@ -802,6 +816,157 @@ export class CopilotExecutor {
     }
 
     return resolved.fallback ? { modelFallback: resolved.fallback } : {};
+  }
+
+  /**
+   * Runs the prompt as a background `copilot` process so the saved model and
+   * reasoning effort are applied (a chat session may ignore them). Nothing is sent
+   * to a chat window, and the answer is not kept.
+   */
+  private async executePromptViaCopilotCli(
+    prompt: string,
+    options: ExecuteOptions,
+  ): Promise<ExecutePromptResult> {
+    try {
+      return await this.runCopilotCli(prompt, options);
+    } catch (error) {
+      const action = await vscode.window.showWarningMessage(
+        isPromptBlockedError(error) && error instanceof Error
+          ? error.message
+          : messages.autoExecuteFailed(),
+        messages.actionCopyPrompt(),
+        messages.actionCancel(),
+      );
+      if (action === messages.actionCopyPrompt()) {
+        await vscode.env.clipboard.writeText(prompt);
+        notifyInfo(messages.promptCopied());
+      }
+      throw error;
+    }
+  }
+
+  private async runCopilotCli(
+    prompt: string,
+    options: ExecuteOptions,
+  ): Promise<ExecutePromptResult> {
+    const hasDynamicOptions =
+      !!options.modelConfiguration &&
+      Object.keys(options.modelConfiguration).length > 0;
+    if (
+      (options.attachFilePaths?.length ?? 0) > 0 ||
+      hasDynamicOptions ||
+      (options.agent ?? "").trim()
+    ) {
+      throw createPromptBlockedError(
+        messages.copilotCliUnsupportedOptions(),
+        "copilotCliUnavailable",
+      );
+    }
+
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    const executable = resolveCopilotCliPath(
+      config.get<string>("cliPath", ""),
+    );
+    if (!executable) {
+      throw createPromptBlockedError(
+        messages.copilotCliNotFound(),
+        "copilotCliUnavailable",
+      );
+    }
+
+    const model = (options.model ?? "").trim();
+    const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => folder.uri.fsPath);
+    const requestedCwd = (options.workingDirectory ?? "").trim();
+    const cwd =
+      [requestedCwd, workspaceFolders[0]].find(
+        (candidate) =>
+          !!candidate &&
+          fs.existsSync(candidate) &&
+          fs.statSync(candidate).isDirectory(),
+      ) ?? os.homedir();
+    const trustFolder =
+      vscode.workspace.isTrusted &&
+      workspaceFolders.some((folder) => isPathInsideBaseDir(folder, cwd));
+
+    const skillMatch = /^\s*\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)([\s\S]*)$/.exec(
+      prompt.replace(/^\uFEFF/, ""),
+    );
+    let cliPrompt = prompt;
+    if (skillMatch) {
+      const skill = await readSkillInstructions(
+        skillMatch[1],
+        getCurrentSkillRoots(),
+        { workspaceTrusted: vscode.workspace.isTrusted },
+      );
+      if (skill) {
+        cliPrompt = buildSkillPromptForCli(
+          skillMatch[1],
+          skill.dir,
+          skill.body,
+          skillMatch[2],
+        );
+      }
+    }
+
+    const timeoutMinutes = Math.min(
+      Math.max(Math.floor(config.get<number>("cliTimeoutMinutes", 60)) || 60, 1),
+      720,
+    );
+    logDebug(
+      `[CopilotScheduler] Running with the Copilot CLI: model=${model}, reasoningEffort=${options.modelReasoningEffort || "default"}, trustFolder=${trustFolder}, prompt length: ${cliPrompt.length}`,
+    );
+
+    const result = await runCopilotCliProcess({
+      executable,
+      args: buildCopilotCliArgs({
+        model,
+        reasoningEffort: options.modelReasoningEffort,
+        allowAllTools: config.get<boolean>("cliAllowAllTools", false) === true,
+        trustFolder,
+      }),
+      cwd,
+      prompt: cliPrompt,
+      timeoutMs: timeoutMinutes * 60 * 1000,
+    });
+
+    if (result.timedOut) {
+      throw createPromptBlockedError(
+        messages.copilotCliTimedOut(timeoutMinutes),
+        "copilotCliFailed",
+      );
+    }
+    if (result.spawnError) {
+      throw createPromptBlockedError(
+        messages.copilotCliNotFound(),
+        "copilotCliUnavailable",
+      );
+    }
+    if (result.exitCode !== 0) {
+      const detail = sanitizeAbsolutePathDetails(
+        result.stderrTail,
+        messages.redactedPlaceholder(),
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      throw createPromptBlockedError(
+        messages.copilotCliFailed(result.exitCode, detail),
+        "copilotCliFailed",
+      );
+    }
+
+    return {
+      cliRun: {
+        requestedModel: model,
+        ...(result.summary.appliedModel
+          ? { appliedModel: result.summary.appliedModel }
+          : {}),
+        ...(typeof result.summary.premiumRequests === "number"
+          ? { premiumRequests: result.summary.premiumRequests }
+          : {}),
+      },
+    };
   }
 
   private async tryOpenChatWithPrompt(
