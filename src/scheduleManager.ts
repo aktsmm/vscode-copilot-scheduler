@@ -325,6 +325,7 @@ export class ScheduleManager {
   private schedulerTickPending = false;
   private schedulerStartedAt: Date | undefined;
   private automaticRunsInFlight = 0;
+  private detachedRuns: Set<Promise<void>> = new Set();
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
@@ -2462,8 +2463,19 @@ export class ScheduleManager {
       // in-memory schedule back, and an unclaimed run would fire again next tick.
       if (await this.persistRunClaims(claims)) {
         needsSave = false;
+        // A Copilot CLI run lasts minutes, not milliseconds like a chat dispatch.
+        // Waiting for it here would hold up the whole tick, including recording
+        // the results of the quick runs of the same batch.
+        const awaitedClaims = claims.filter(
+          (claim) => !this.isLongRunningClaim(claim),
+        );
+        for (const claim of claims) {
+          if (this.isLongRunningClaim(claim)) {
+            this.startDetachedClaim(claim, defaultJitterSeconds);
+          }
+        }
         await Promise.allSettled(
-          claims.map((claim) =>
+          awaitedClaims.map((claim) =>
             this.executeClaimedTask(claim, defaultJitterSeconds).then(
               (executedAt) => {
                 if (executedAt) {
@@ -2511,6 +2523,55 @@ export class ScheduleManager {
           toSafeErrorDetails(error),
         );
       }
+    }
+  }
+
+  private isLongRunningClaim(claim: TaskRunClaim): boolean {
+    return this.tasks.get(claim.taskId)?.useCopilotCli === true;
+  }
+
+  /**
+   * Runs a claimed occurrence without holding up the tick, then records its result.
+   * The automatic-run slot stays taken until the run ends (executeClaimedTask frees it).
+   */
+  private startDetachedClaim(
+    claim: TaskRunClaim,
+    defaultJitterSeconds: number,
+  ): void {
+    const run: Promise<void> = this.executeClaimedTask(
+      claim,
+      defaultJitterSeconds,
+    )
+      .then(async (executedAt) => {
+        if (!executedAt) {
+          return;
+        }
+        try {
+          await this.persistDailyExecCount();
+        } catch (error) {
+          logError(
+            "[CopilotScheduler] Failed to persist daily execution count:",
+            toSafeErrorDetails(error),
+          );
+        }
+        await this.persistRunResults(new Map([[claim.taskId, executedAt]]));
+      })
+      .catch((error) => {
+        logError(
+          "[CopilotScheduler] Detached run failed:",
+          toSafeErrorDetails(error),
+        );
+      })
+      .finally(() => {
+        this.detachedRuns.delete(run);
+      });
+    this.detachedRuns.add(run);
+  }
+
+  /** Resolves when every detached (long-running) run has finished. Used by tests and shutdown. */
+  async waitForDetachedRuns(): Promise<void> {
+    while (this.detachedRuns.size > 0) {
+      await Promise.allSettled([...this.detachedRuns]);
     }
   }
 

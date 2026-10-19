@@ -206,9 +206,24 @@ export interface CopilotCliProcessOptions {
 export interface CopilotCliProcessResult {
   exitCode: number | null;
   timedOut: boolean;
+  /** True when the run was stopped by terminateActiveCopilotCliProcesses (for example on shutdown). */
+  cancelled: boolean;
   stderrTail: string;
   summary: CopilotCliRunSummary;
   spawnError?: string;
+}
+
+const activeChildren = new Set<childProcess.ChildProcess>();
+const cancelledChildren = new WeakSet<childProcess.ChildProcess>();
+
+/** Stops every CLI run that is still going, so closing VS Code leaves no orphan `copilot` process. */
+export function terminateActiveCopilotCliProcesses(): number {
+  const children = [...activeChildren];
+  for (const child of children) {
+    cancelledChildren.add(child);
+    killProcessTree(child);
+  }
+  return children.length;
 }
 
 function killProcessTree(child: childProcess.ChildProcess): void {
@@ -254,9 +269,11 @@ export function runCopilotCliProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      activeChildren.delete(child);
       resolve({
         exitCode,
         timedOut,
+        cancelled: cancelledChildren.has(child),
         stderrTail: stderrTail.trim(),
         summary: parser.finish(),
         ...(spawnError ? { spawnError } : {}),
@@ -275,12 +292,14 @@ export function runCopilotCliProcess(
       resolve({
         exitCode: null,
         timedOut: false,
+        cancelled: false,
         stderrTail: "",
         summary: {},
         spawnError: error instanceof Error ? error.message : String(error),
       });
       return;
     }
+    activeChildren.add(child);
 
     const timer = setTimeout(() => {
       timedOut = true;

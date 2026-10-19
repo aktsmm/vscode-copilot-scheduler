@@ -9,6 +9,7 @@ import {
   isCopilotCliModelSupported,
   resolveCopilotCliPath,
   runCopilotCliProcess,
+  terminateActiveCopilotCliProcesses,
 } from "../../copilotCliRunner";
 import { readSkillInstructions, stripSkillFrontmatter } from "../../skillResolver";
 import { getSkillRoots } from "../../skillResolver";
@@ -150,6 +151,24 @@ suite("Copilot CLI runner", () => {
     });
     assert.strictEqual(result.exitCode, 3);
     assert.ok(result.stderrTail.includes("model not available"));
+  });
+
+  test("terminating active runs stops them and marks the result cancelled", async () => {
+    const script = path.join(tmp, "hang-cli.js");
+    fs.writeFileSync(script, "setInterval(() => {}, 1000);");
+    const pending = runCopilotCliProcess({
+      executable: process.execPath,
+      args: [script],
+      cwd: tmp,
+      prompt: "hi",
+      timeoutMs: 60000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(terminateActiveCopilotCliProcesses(), 1);
+    const result = await pending;
+    assert.strictEqual(result.cancelled, true);
+    assert.strictEqual(result.timedOut, false);
+    assert.strictEqual(terminateActiveCopilotCliProcesses(), 0, "nothing left to stop");
   });
 
   test("a run that exceeds the timeout is stopped", async () => {

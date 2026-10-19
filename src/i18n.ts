@@ -545,6 +545,11 @@ export const messages = {
       `The Copilot CLI run failed (exit code ${exitCode ?? "none"}).${detail ? ` ${detail}` : ""}`,
       `Copilot CLI の実行に失敗しました（終了コード ${exitCode ?? "なし"}）。${detail ? ` ${detail}` : ""}`,
     ),
+  copilotCliCancelled: () =>
+    t(
+      "The Copilot CLI run was stopped because VS Code was closing or the extension was unloaded.",
+      "VS Code の終了または拡張の停止により、Copilot CLI の実行を中断しました。",
+    ),
   copilotCliTimedOut: (minutes: number) =>
     t(
       `The Copilot CLI run was stopped after ${minutes} minutes (copilotScheduler.cliTimeoutMinutes).`,
