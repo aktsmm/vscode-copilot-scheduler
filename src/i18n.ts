@@ -494,8 +494,13 @@ export const messages = {
     ),
   webviewUseCopilotCliNote: () =>
     t(
-      "Off by default. When on, the task runs as a background `copilot` process instead of a chat session, so the model and reasoning effort above are applied and the answer is not shown in the chat window. A skill (/name) is expanded by Scheduler because the CLI does not run slash commands. Attachments, detailed model options and the custom agent are not supported. Tools run only if copilotScheduler.cliAllowAllTools is on. The execution history records the model the CLI reported.",
-      "既定はオフです。オンにすると、チャットセッションではなくバックグラウンドの `copilot` プロセスとして実行するため、上のモデルと reasoning effort が反映されます。応答はチャット画面には表示されません。CLI はスラッシュコマンドを実行しないため、スキル（/名前）は Scheduler が展開します。添付ファイル、モデルの詳細オプション、カスタムエージェントには対応していません。ツールの実行は copilotScheduler.cliAllowAllTools がオンのときだけ許可されます。実行履歴には CLI が報告したモデルを記録します。",
+      "Off by default. Only a task with a model selected runs this way; without a model the task runs in chat as usual. When on, the task runs as a background `copilot` process instead of a chat session, so the model and reasoning effort above are applied (Copilot models only) and the answer is not shown in the chat window. A skill (/name) is expanded by Scheduler because the CLI does not run slash commands. Attachments, detailed model options and the custom agent are not supported. Tools run only if copilotScheduler.cliAllowAllTools is on. The execution history records the model the CLI reported.",
+      "既定はオフです。モデルを選択したタスクだけがこの方法で実行され、モデル未選択のタスクはこれまでどおりチャットで実行されます。オンにすると、チャットセッションではなくバックグラウンドの `copilot` プロセスとして実行するため、上のモデルと reasoning effort が反映されます（Copilot のモデルのみ）。応答はチャット画面には表示されません。CLI はスラッシュコマンドを実行しないため、スキル（/名前）は Scheduler が展開します。添付ファイル、モデルの詳細オプション、カスタムエージェントには対応していません。ツールの実行は copilotScheduler.cliAllowAllTools がオンのときだけ許可されます。実行履歴には CLI が報告したモデルを記録します。",
+    ),
+  copilotCliUnsupportedModel: () =>
+    t(
+      "Running with the Copilot CLI works only with Copilot models. Choose a Copilot model or turn off the CLI option.",
+      "Copilot CLI での実行は Copilot のモデルにのみ対応しています。Copilot のモデルを選ぶか、CLI の選択をオフにしてください。",
     ),
   executionHistoryCopilotCli: (
     requested?: string,

@@ -23,6 +23,8 @@ The task form's Local and Global options now list skills instead of prompt files
 ### Notes
 
 - `~/.claude/skills` is read for compatibility but is not a documented GitHub Copilot CLI path (documented: `.github/skills`, `.claude/skills`, `.agents/skills`, `~/.copilot/skills`, `~/.agents/skills`).
+- **Test prompt** now follows the "Run with the Copilot CLI" checkbox, so testing runs the same way as the saved task.
+- A task whose model is not a Copilot model (for example a Codex bridge id such as `default::gpt-6-luna`) is refused up front with a clear message instead of failing inside the CLI.
 - The model set for a task is still not applied in Copilot (Agent Host) sessions (see the README). Of the VS Code 1.142 commands inspected, the one that starts a new Copilot session in place (`openNewChatSessionInPlace.copilotcli`) accepts only a position, not a model or prompt, so it cannot carry the model either.
 
 ## [1.9.5] - 2026-10-19

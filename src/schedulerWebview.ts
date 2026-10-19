@@ -770,6 +770,7 @@ export class SchedulerWebview {
             modelVersion: message.modelVersion,
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
+            ...(message.useCopilotCli === true ? { useCopilotCli: true } : {}),
           });
         }
         break;
