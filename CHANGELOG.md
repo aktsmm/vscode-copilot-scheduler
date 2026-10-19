@@ -5,9 +5,9 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.9.0] - 2026-10-20
+## [1.9.6] - 2026-10-20
 
-The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. A task can also run through the Copilot CLI so its model is applied. Tasks without these options are saved and run as before.
+Marketplace Pre-release (`marketplace-preview-v1.9.6`). Same content as Stable 1.8.11. The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. A task can also run through the Copilot CLI so its model is applied. Tasks without these options are saved and run as before.
 
 ### Added
 
