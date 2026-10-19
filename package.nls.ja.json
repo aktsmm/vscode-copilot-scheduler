@@ -37,7 +37,7 @@
   "config.chatSession": "チャットセッションの既定動作。タスクごとに上書きできます。",
   "config.chatSession.new": "実行ごとに新しいチャットセッションを作成（分離しやすいが通常は遅め）",
   "config.chatSession.continue": "既存のチャットセッションを継続（通常は高速）",
-  "config.skillTemplates": "タスクフォームで、プロンプトへ `/スキル名` として挿入できる Agent Skills の範囲です。スキルは、ローカルのワークスペースフォルダーの `.github/skills`・`.agents/skills`・`.claude/skills`（信頼されたワークスペースのみ）と、`~/.copilot/skills`（または `$COPILOT_HOME/skills`）・`~/.agents/skills`・`~/.claude/skills` から読み込みます。フォルダー名、`name`、Agent Skills の命名規則が一致するスキルだけを一覧にします。同名ならワークスペースのスキルがユーザーのスキルより優先され、同じ階層に同名が2つあるものは一覧から除外します。`user-invocable: false` のスキルは表示しません。フォームには全スキルを表示する切り替えもあります。",
+  "config.skillTemplates": "タスクフォームで、プロンプトへ `/スキル名` として挿入できる Agent Skills の範囲です。スキルは、ローカルのワークスペースフォルダーの `.github/skills`・`.agents/skills`・`.claude/skills`（信頼されたワークスペースのみ）と、`~/.copilot/skills`（または `$COPILOT_HOME/skills`）・`~/.agents/skills`・`~/.claude/skills` から読み込みます。フォルダー名、`name`、Agent Skills の命名規則が一致するスキルだけを一覧にします。同名ならワークスペースのスキルがユーザーのスキルより優先され、同じ階層に同名が2つあるものは一覧から除外します。`user-invocable: false` のスキルは表示しません。フォームには、ワークスペースのスキルと個人のスキルをそれぞれ一覧にするローカルスキル／グローバルスキルの選択肢と、全スキルを表示する切り替えがあります。",
   "config.skillTemplates.explicit": "呼び出したときだけ実行されるスキル（`disable-model-invocation: true`）のみ（既定）",
   "config.skillTemplates.all": "呼び出し可能なすべてのスキル",
   "config.skillTemplates.off": "タスクフォームにスキルを表示しない",

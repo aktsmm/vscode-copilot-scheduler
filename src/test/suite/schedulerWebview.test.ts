@@ -1622,7 +1622,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "skillTemplates = Array.isArray(message.skills) ? message.skills : [];",
       "selectedSkillRef = normalizeSkillRefClient(task.skillRef);",
       "selectedSkillRef = null;",
-      "updateSkillGroupVisibility(effectiveSource);",
+      "getEffectivePromptSource()",
+      "updateTemplateGroupVisibility(effectiveSource);",
     ]) {
       assert.ok(
         sourceContainsToken(script, token),
@@ -1676,6 +1677,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
     const names = [
       "skillKey",
+      "getSkillScopeFilter",
       "getVisibleSkills",
       "skillScopeLabel",
       "updateSkillDetail",
@@ -1720,6 +1722,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         "};",
       ].join("\n"),
     );
+    let radioValue = "inline";
     const fakeDocument = {
       createElement: () => {
         let text = "";
@@ -1735,7 +1738,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           },
         };
       },
-      querySelector: () => ({ value: "inline" }),
+      querySelector: () => ({ value: radioValue }),
     };
     const api = factory(fakeDocument, class FakeEvent {}) as {
       setSkills: (value: unknown[]) => void;
@@ -1825,6 +1828,32 @@ suite("SchedulerWebview Script Contract Tests", () => {
     api.renderSkillOptions();
     assert.strictEqual(api.group.style.display, "none");
     api.setEnabled(true);
+
+    api.select(null);
+    api.showAll(true);
+    radioValue = "local";
+    assert.deepStrictEqual(
+      api.getVisibleSkills().map((skill) => skill.name),
+      ["weekly-report"],
+      "Local lists workspace skills only",
+    );
+    radioValue = "global";
+    assert.deepStrictEqual(
+      api.getVisibleSkills().map((skill) => skill.name),
+      ["triage"],
+      "Global lists user skills only",
+    );
+    api.setSkills([]);
+    api.renderSkillOptions();
+    assert.strictEqual(
+      api.group.style.display,
+      "block",
+      "the Local/Global list stays visible when it is empty",
+    );
+    radioValue = "inline";
+    api.setSkills([explicit, open]);
+    api.showAll(false);
+    api.select({ name: "weekly-report", scope: "workspace", root: ".github/skills" });
 
     api.prompt.value = "";
     api.applySkillToPrompt("weekly-report");
@@ -2129,6 +2158,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           autoModeInput: null,
           modelFallbackInput: null,
           getSelectedSkillRefForSubmit: () => null,
+          getEffectivePromptSource: () => promptSource,
           chatSessionSelect: null,
           jitterSecondsInput: null,
           maxExecutionsPerDayInput: null,
@@ -2450,10 +2480,12 @@ suite("SchedulerWebview Script Contract Tests", () => {
       getActivePromptFilePreview: () => null,
       buildPromptFileMeta: () => "",
       rescueFocusFrom: () => undefined,
+      editingTaskId: null,
+      pendingTemplatePath: "",
     };
     const updateNotice = new Function(
       ...Object.keys(context),
-      `${extractFunctionSource(source, "updatePromptFileNotice")}\nreturn updatePromptFileNotice;`,
+      `${extractFunctionSource(source, "getEffectivePromptSource")}\n${extractFunctionSource(source, "updatePromptFileNotice")}\nreturn updatePromptFileNotice;`,
     )(...Object.values(context)) as () => void;
     for (const promptSource of ["inline", "local", "global", "inline"]) {
       sourceInput.value = promptSource;
@@ -2468,6 +2500,44 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.strictEqual(attributes.has("aria-readonly"), fileBacked);
       assert.strictEqual(prompt.value, "snapshot");
     }
+  });
+
+  test("Local/Global radios stay inline until a prompt file is chosen", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const radio = { value: "local" };
+    const context = {
+      document: { querySelector: () => radio },
+      templateSelect: { value: "" },
+      editingTaskId: null as string | null,
+      pendingTemplatePath: "",
+    };
+    const effective = new Function(
+      ...Object.keys(context),
+      `${extractFunctionSource(source, "getEffectivePromptSource")}\nreturn function () { return getEffectivePromptSource(); };`,
+    );
+    const read = (ctx: typeof context) =>
+      (effective(...Object.values(ctx)) as () => string)();
+
+    assert.strictEqual(read(context), "inline", "a skill is saved as inline");
+    context.templateSelect.value = "a.prompt.md";
+    assert.strictEqual(read(context), "local");
+    radio.value = "global";
+    assert.strictEqual(read(context), "global");
+    context.templateSelect.value = "";
+    context.editingTaskId = "task-1";
+    context.pendingTemplatePath = "a.prompt.md";
+    assert.strictEqual(
+      read(context),
+      "global",
+      "an edited prompt-file task stays file-backed while its file is pending",
+    );
+    context.pendingTemplatePath = "";
+    radio.value = "inline";
+    context.templateSelect.value = "a.prompt.md";
+    assert.strictEqual(read(context), "inline");
   });
 
   test("editing form re-syncs the prompt field from the latest file preview", () => {
@@ -2947,7 +3017,6 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "rescueFocusFrom( templateSelectGroup,",
       "rescueFocusFrom(el, friendlyFrequency)",
       "rescueFocusFrom(modelVariantGroup, modelSelect)",
-      "rescueFocusFrom(templateSelectGroup, sourceElement)",
     ]) {
       assert.ok(
         sourceContainsToken(source, callSite),
@@ -2994,7 +3063,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
 
     const orderedTokens = [
-      "applyPromptSource(sourceValue, true);",
+      "applyPromptSource(radioValue, true);",
       'pendingTemplatePath = task.promptPath || "";',
       'if (sourceValue === "inline")',
       "setTemplatePromptBaseline(null);",

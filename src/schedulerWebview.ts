@@ -1074,7 +1074,7 @@ export class SchedulerWebview {
         }
 
         const relativeDir = path.dirname(relativePath);
-        const sourceLabel = messages.labelPromptLocal();
+        const sourceLabel = messages.labelPromptLocalFile();
         if (relativeDir && relativeDir !== ".") {
           return `${sourceLabel}: ${folder.name}/${relativeDir}`;
         }
@@ -1083,7 +1083,7 @@ export class SchedulerWebview {
           : sourceLabel;
       }
 
-      return messages.labelPromptLocal();
+      return messages.labelPromptLocalFile();
     }
 
     if (globalPath) {
@@ -1095,12 +1095,12 @@ export class SchedulerWebview {
       ) {
         const relativeDir = path.dirname(relativePath);
         if (relativeDir && relativeDir !== ".") {
-          return `${messages.labelPromptGlobal()}: ${relativeDir}`;
+          return `${messages.labelPromptGlobalFile()}: ${relativeDir}`;
         }
       }
     }
 
-    return messages.labelPromptGlobal();
+    return messages.labelPromptGlobalFile();
   }
 
   private static applyPromptTemplateDisplayNames(
@@ -1719,6 +1719,11 @@ export class SchedulerWebview {
       labelPromptInline: messages.labelPromptInline(),
       labelPromptLocal: messages.labelPromptLocal(),
       labelPromptGlobal: messages.labelPromptGlobal(),
+      labelPromptLocalFile: messages.labelPromptLocalFile(),
+      labelPromptGlobalFile: messages.labelPromptGlobalFile(),
+      labelPromptFile: messages.labelPromptFile(),
+      skillListEmpty: messages.skillListEmpty(),
+      skillOrTemplateRequired: messages.skillOrTemplateRequired(),
       labelPromptFileSource: messages.labelPromptFileSource(),
       labelPromptFileSynced: messages.labelPromptFileSynced(),
       labelPromptFileDiff: messages.labelPromptFileDiff(),
@@ -2820,7 +2825,7 @@ export class SchedulerWebview {
             </div>
 
             <div class="form-group col-12" id="template-select-group" style="display: none;">
-              <label for="template-select">${escapeHtml(strings.labelPrompt)}</label>
+              <label for="template-select">${escapeHtml(strings.labelPromptFile)}</label>
               <div class="template-row">
                 <select id="template-select">
                   <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
