@@ -238,6 +238,18 @@
     updatePromptFileNotice();
   }
 
+  // The Local/Global radios pick where skills are listed. A task is only
+  // file-backed while a prompt file is chosen; a skill is saved as an inline prompt.
+  function getEffectivePromptSource() {
+    var checked = document.querySelector('input[name="prompt-source"]:checked');
+    var radio = checked ? String(checked.value || "inline") : "inline";
+    if (radio !== "local" && radio !== "global") return "inline";
+    var hasPromptFile =
+      !!(templateSelect && templateSelect.value) ||
+      (!!editingTaskId && !!pendingTemplatePath);
+    return hasPromptFile ? radio : "inline";
+  }
+
   function getTaskById(taskId) {
     var taskItems = Array.isArray(tasks) ? tasks : [];
     for (var i = 0; i < taskItems.length; i++) {
@@ -288,10 +300,7 @@
 
   function syncEditingPromptFromPreview() {
     if (!editingTaskId || !promptTextInput) return;
-    var sourceInput = document.querySelector(
-      'input[name="prompt-source"]:checked',
-    );
-    var source = sourceInput ? String(sourceInput.value || "inline") : "inline";
+    var source = getEffectivePromptSource();
     if (source !== "local" && source !== "global") return;
     if (templateLoadingPath) return;
 
@@ -361,7 +370,7 @@
       return;
     }
 
-    var source = String(sourceInput.value || "inline");
+    var source = getEffectivePromptSource();
     // File-backed prompts stay read-only so the task keeps following the file.
     var isFileBackedSource = source === "local" || source === "global";
     promptText.readOnly = isFileBackedSource;
@@ -2125,6 +2134,10 @@
       var selectedPath = templateSelect.value;
       setTemplatePromptBaseline(null);
       if (selectedPath) {
+        if (selectedSkillRef) {
+          selectedSkillRef = null;
+          renderSkillOptions();
+        }
         var sourceEl = document.querySelector(
           'input[name="prompt-source"]:checked',
         );
@@ -2155,7 +2168,10 @@
       );
       var runFirstEl = document.getElementById("run-first");
 
-      var promptSourceValue = promptSourceEl ? promptSourceEl.value : "inline";
+      var promptSourceValue = getEffectivePromptSource();
+      var radioPromptSource = promptSourceEl
+        ? String(promptSourceEl.value || "inline")
+        : "inline";
 
       // Preserve values if dropdown options are not loaded yet
       var agentValue = agentSelect ? agentSelect.value : "";
@@ -2297,6 +2313,17 @@
       }
 
       var templateValue = (taskData.promptPath || "").trim();
+      if (
+        radioPromptSource !== "inline" &&
+        promptSourceValue === "inline" &&
+        !getSelectedSkillRefForSubmit("inline")
+      ) {
+        failValidation(
+          strings.skillOrTemplateRequired || strings.templateRequired || "",
+          skillSelect || templateSelect,
+        );
+        return;
+      }
       if (promptSourceValue !== "inline" && !templateValue) {
         failValidation(strings.templateRequired || "", templateSelect);
         return;
@@ -2611,10 +2638,16 @@
       var promptSourceValue =
         task && task.promptSource ? task.promptSource : "inline";
       if (promptSourceValue === "local") {
-        return strings.labelPromptLocal || "";
+        return strings.labelPromptLocalFile || strings.labelPromptLocal || "";
       }
       if (promptSourceValue === "global") {
-        return strings.labelPromptGlobal || "";
+        return strings.labelPromptGlobalFile || strings.labelPromptGlobal || "";
+      }
+      var skill = normalizeSkillRefClient(task && task.skillRef);
+      if (skill) {
+        return skill.scope === "workspace"
+          ? strings.labelPromptLocal || ""
+          : strings.labelPromptGlobal || "";
       }
       return strings.labelPromptInline || "";
     }
@@ -3548,11 +3581,20 @@
     };
   }
 
+  function getSkillScopeFilter() {
+    var checked = document.querySelector('input[name="prompt-source"]:checked');
+    var radio = checked ? checked.value : "inline";
+    return radio === "local" ? "workspace" : radio === "global" ? "user" : "";
+  }
+
   function getVisibleSkills() {
     var showAll = !!(skillShowAllInput && skillShowAllInput.checked);
     var selectedKey = selectedSkillRef ? skillKey(selectedSkillRef) : "";
+    var scope = getSkillScopeFilter();
     return skillTemplates.filter(function (skill) {
-      return showAll || skill.explicit || skillKey(skill) === selectedKey;
+      var isSelected = skillKey(skill) === selectedKey;
+      if (scope && skill.scope !== scope && !isSelected) return false;
+      return showAll || skill.explicit || isSelected;
     });
   }
 
@@ -3598,8 +3640,9 @@
     }
     var show =
       skillsEnabled &&
-      currentSource === "inline" &&
-      (skillTemplates.length > 0 || !!selectedSkillRef);
+      (currentSource !== "inline" ||
+        skillTemplates.length > 0 ||
+        !!selectedSkillRef);
     if (!show && skillSelectGroup.style.display !== "none") {
       rescueFocusFrom(skillSelectGroup, promptTextInput);
     }
@@ -3644,11 +3687,16 @@
   function renderSkillOptions() {
     if (!skillSelect) return;
     var currentKey = selectedSkillRef ? skillKey(selectedSkillRef) : "";
+    var visibleSkills = getVisibleSkills();
+    var placeholder =
+      visibleSkills.length === 0 && getSkillScopeFilter()
+        ? strings.skillListEmpty || ""
+        : strings.placeholderSelectSkill || "";
     skillSelect.innerHTML =
       '<option value="">' +
-      escapeHtml(strings.placeholderSelectSkill || "") +
+      escapeHtml(placeholder) +
       "</option>" +
-      renderSkillOptionList(getVisibleSkills());
+      renderSkillOptionList(visibleSkills);
     skillSelect.value = currentKey;
     if (skillSelect.value !== currentKey) {
       skillSelect.value = "";
@@ -3676,43 +3724,60 @@
     promptTextInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  // Prompt files are the older way to reuse a prompt; the list stays hidden when there are none.
+  function updateTemplateGroupVisibility(source) {
+    if (!templateSelectGroup) return;
+    var hasFiles =
+      Array.isArray(promptTemplates) &&
+      promptTemplates.some(function (t) {
+        return t.source === source;
+      });
+    var show =
+      (source === "local" || source === "global") &&
+      (hasFiles ||
+        !skillsEnabled ||
+        !!(templateSelect && templateSelect.value) ||
+        !!pendingTemplatePath);
+    if (!show && templateSelectGroup.style.display !== "none") {
+      rescueFocusFrom(
+        templateSelectGroup,
+        document.querySelector('input[name="prompt-source"]:checked'),
+      );
+    }
+    templateSelectGroup.style.display = show ? "block" : "none";
+  }
+
   function applyPromptSource(source, keepSelection) {
     var effectiveSource = source || "inline";
-    updateSkillGroupVisibility(effectiveSource);
     var selectedPath =
       keepSelection && templateSelect ? templateSelect.value : "";
 
     if (effectiveSource === "inline") {
       setTemplatePromptBaseline(null);
       clearTemplateLoading();
-      if (templateSelectGroup) {
-        rescueFocusFrom(
-          templateSelectGroup,
-          document.querySelector('input[name="prompt-source"]:checked'),
-        );
-        templateSelectGroup.style.display = "none";
-      }
+      updateTemplateGroupVisibility(effectiveSource);
       if (promptGroup) promptGroup.style.display = "block";
       if (!keepSelection && templateSelect) {
         templateSelect.value = "";
       }
+      renderSkillOptions();
       updatePromptFileNotice();
       return;
     }
 
-    if (templateSelectGroup) {
-      templateSelectGroup.style.display = "block";
-    } else {
+    if (!templateSelectGroup) {
       console.warn(
         "[CopilotScheduler] Template select group missing; template selection is disabled.",
       );
     }
     if (promptGroup) promptGroup.style.display = "block";
     updateTemplateOptions(effectiveSource, selectedPath);
+    updateTemplateGroupVisibility(effectiveSource);
     if (!selectedPath) {
       setTemplatePromptBaseline(null);
       clearTemplateLoading();
     }
+    renderSkillOptions();
     updatePromptFileNotice();
   }
 
@@ -3747,8 +3812,16 @@
         scope: skill.scope,
         root: skill.root,
       };
+      // A skill replaces a chosen prompt file: the task stops following the file.
+      if (templateSelect && (templateSelect.value || pendingTemplatePath)) {
+        templateSelect.value = "";
+        pendingTemplatePath = "";
+        clearTemplateLoading();
+        setTemplatePromptBaseline(null);
+      }
       applySkillToPrompt(skill.name);
       updateSkillDetail();
+      updatePromptFileNotice();
     });
   }
   if (promptTextInput) {
@@ -3890,14 +3963,22 @@
       scopeRadio.checked = true;
     }
     var sourceValue = task.promptSource || "inline";
+    var normalizedTaskSkill = normalizeSkillRefClient(task.skillRef);
+    // A skill is stored as an inline prompt; show it under the radio of its location.
+    var radioValue =
+      sourceValue === "inline" && normalizedTaskSkill
+        ? normalizedTaskSkill.scope === "workspace"
+          ? "local"
+          : "global"
+        : sourceValue;
     var sourceRadio = document.querySelector(
-      'input[name="prompt-source"][value="' + sourceValue + '"]',
+      'input[name="prompt-source"][value="' + radioValue + '"]',
     );
     if (sourceRadio) {
       sourceRadio.checked = true;
     }
 
-    applyPromptSource(sourceValue, true);
+    applyPromptSource(radioValue, true);
     pendingTemplatePath = task.promptPath || "";
     if (templateSelect) {
       if (
@@ -3910,6 +3991,8 @@
         templateSelect.value = "";
       }
     }
+
+    updateTemplateGroupVisibility(radioValue);
 
     if (sourceValue === "inline") {
       setTemplatePromptBaseline(null);
@@ -4173,15 +4256,7 @@
                 pendingTemplatePath = currentTemplateValue;
               }
             }
-            if (currentSource === "local" || currentSource === "global") {
-              if (templateSelectGroup)
-                templateSelectGroup.style.display = "block";
-            } else {
-              if (templateSelectGroup) {
-                rescueFocusFrom(templateSelectGroup, sourceElement);
-                templateSelectGroup.style.display = "none";
-              }
-            }
+            updateTemplateGroupVisibility(currentSource);
           }
           break;
         case "updateDefaults":

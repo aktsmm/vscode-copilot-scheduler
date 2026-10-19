@@ -5,6 +5,22 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-10-20
+
+The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. No change to how tasks are saved or run.
+
+### Changed
+
+- **Prompt Type**: "Local Template" and "Global Template" are now **Local Skill** and **Global Skill**. Local lists the skills of your workspace folders and Global lists your own skills (`~/.copilot/skills`, `$COPILOT_HOME/skills`, `~/.agents/skills`, `~/.claude/skills`); Free Input still lists both. The skill list, its **Show all skills** toggle and `copilotScheduler.skillTemplates` work as before. When no skill is found, the list says so.
+- A skill chosen under Local or Global is saved as a normal inline prompt (`/skill-name arguments`) with its skill reference, so the saved task format is unchanged. Editing a task puts it back under Local or Global by the skill's location, and the prompt stays editable so you can write the skill's arguments.
+- Prompt files remain available as "Prompt file (older format)" and appear only when a Local or Global prompt file exists. Choosing a skill clears a chosen prompt file and the other way round. Tasks saved with a prompt file are unchanged; the task list and quick pick now label them "Local Prompt File" / "Global Prompt File".
+- A Local or Global task with neither a skill nor a prompt file now asks you to select one.
+
+### Notes
+
+- `~/.claude/skills` is read for compatibility but is not a documented GitHub Copilot CLI path (documented: `.github/skills`, `.claude/skills`, `.agents/skills`, `~/.copilot/skills`, `~/.agents/skills`).
+- The model set for a task is still not applied in Copilot (Agent Host) sessions (see the README). Of the VS Code 1.142 commands inspected, the one that starts a new Copilot session in place (`openNewChatSessionInPlace.copilotcli`) accepts only a position, not a model or prompt, so it cannot carry the model either.
+
 ## [1.8.10] - 2026-10-19
 
 Skills in the task form get clearer, safer and more accessible. No change to how tasks are saved or run.

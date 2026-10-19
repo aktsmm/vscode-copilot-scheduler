@@ -2907,9 +2907,9 @@ function registerCopyPromptCommand(): vscode.Disposable {
             tasks.map((t) => {
               const templateSourceLabel =
                 t.promptSource === "local"
-                  ? messages.labelPromptLocal()
+                  ? messages.labelPromptLocalFile()
                   : t.promptSource === "global"
-                    ? messages.labelPromptGlobal()
+                    ? messages.labelPromptGlobalFile()
                     : messages.webviewUnknown();
               const description =
                 t.promptSource !== "inline"

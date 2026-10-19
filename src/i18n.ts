@@ -508,8 +508,8 @@ export const messages = {
     t("Show all skills", "すべてのスキルを表示する"),
   webviewSkillNote: () =>
     t(
-      "Inserts /skill-name at the start of the prompt; the rest of the prompt is passed to the skill as its arguments. By default only skills that run when invoked (disable-model-invocation: true) are listed. Not used together with the auto-mode hint, which is skipped for slash commands.",
-      "プロンプトの先頭に /スキル名 を挿入し、プロンプトの残りをスキルへの引数として渡します。既定では、呼び出したときだけ実行されるスキル（disable-model-invocation: true）だけを一覧にします。自律実行ヒントはスラッシュコマンドには挿入されません。",
+      "Local lists skills from the workspace (.github/skills, .agents/skills, .claude/skills); Global lists your own skills (~/.copilot/skills, ~/.agents/skills, ~/.claude/skills). Choosing one puts /skill-name at the start of the prompt; the rest of the prompt is passed to the skill as its arguments. By default only skills that run when invoked (disable-model-invocation: true) are listed. Not used together with the auto-mode hint, which is skipped for slash commands.",
+      "ローカルはワークスペースのスキル（.github/skills、.agents/skills、.claude/skills）、グローバルは個人のスキル（~/.copilot/skills、~/.agents/skills、~/.claude/skills）を一覧にします。選ぶとプロンプトの先頭に /スキル名 を挿入し、プロンプトの残りをスキルへの引数として渡します。既定では、呼び出したときだけ実行されるスキル（disable-model-invocation: true）だけを一覧にします。自律実行ヒントはスラッシュコマンドには挿入されません。",
     ),
   skillScopeWorkspace: () => t("workspace", "ワークスペース"),
   skillScopeUser: () => t("user", "ユーザー"),
@@ -583,8 +583,21 @@ export const messages = {
   labelTaskName: () => t("Task Name", "タスク名"),
   labelPromptType: () => t("Prompt Type", "プロンプト種別"),
   labelPromptInline: () => t("Free Input", "自由入力"),
-  labelPromptLocal: () => t("Local Template", "ローカルテンプレート"),
-  labelPromptGlobal: () => t("Global Template", "グローバルテンプレート"),
+  labelPromptLocal: () => t("Local Skill", "ローカルスキル"),
+  labelPromptGlobal: () => t("Global Skill", "グローバルスキル"),
+  labelPromptLocalFile: () =>
+    t("Local Prompt File", "ローカルプロンプトファイル"),
+  labelPromptGlobalFile: () =>
+    t("Global Prompt File", "グローバルプロンプトファイル"),
+  labelPromptFile: () =>
+    t("Prompt file (older format)", "プロンプトファイル（従来形式）"),
+  skillListEmpty: () =>
+    t("No skills found here", "この場所にスキルがありません"),
+  skillOrTemplateRequired: () =>
+    t(
+      "Select a skill or a prompt file",
+      "スキルまたはプロンプトファイルを選択してください",
+    ),
   labelPrompt: () => t("Prompt", "プロンプト"),
   labelSchedule: () => t("Schedule", "スケジュール"),
   labelCronExpression: () => t("Cron Expression", "Cron式"),
