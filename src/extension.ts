@@ -43,6 +43,7 @@ import {
   normalizeSkillRef,
   promptInvokesSkill,
 } from "./skillResolver";
+import { terminateActiveCopilotCliProcesses } from "./copilotCliRunner";
 import {
   enqueueExecutionHistoryEntry as enqueueExecutionHistory,
   getExecutionHistoryEntries,
@@ -1535,6 +1536,7 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 export function deactivate(): void {
   scheduleManager?.stopScheduler();
+  terminateActiveCopilotCliProcesses();
   disposePromptResourceWatchers();
   SchedulerWebview.dispose();
   extensionContextRef = undefined;

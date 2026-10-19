@@ -2289,6 +2289,80 @@ suite("ScheduleManager Task-Level Control Tests", () => {
     }
   });
 
+  test("checkAndExecuteTasks does not wait for a Copilot CLI run and still records its result", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const cliTask = await manager.createTask({
+        name: "task-cli-long",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+        useCopilotCli: true,
+      });
+      const quickTask = await manager.createTask({
+        name: "task-chat-quick",
+        prompt: "hello",
+        cronExpression: "*/1 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: true,
+        jitterSeconds: 0,
+      });
+      cliTask.nextRun = new Date(Date.now() - 60 * 1000);
+      quickTask.nextRun = new Date(Date.now() - 60 * 1000);
+
+      let releaseCli: () => void = () => undefined;
+      const cliGate = new Promise<void>((resolve) => {
+        releaseCli = resolve;
+      });
+      const executed: string[] = [];
+      const internals = manager as unknown as {
+        onExecuteCallback?: (task: { id: string }) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+        getMaxConcurrentAutomaticRuns: () => number;
+        automaticRunsInFlight: number;
+      };
+      internals.getMaxConcurrentAutomaticRuns = () => 2;
+      internals.onExecuteCallback = async (task) => {
+        executed.push(task.id);
+        if (task.id === cliTask.id) {
+          await cliGate;
+        }
+      };
+
+      const started = Date.now();
+      await internals.checkAndExecuteTasks();
+      assert.ok(Date.now() - started < 5000, "the tick returned while the CLI run was still going");
+      assert.ok(executed.includes(quickTask.id));
+      assert.ok(quickTask.lastRun instanceof Date, "the quick run is recorded without waiting");
+      assert.strictEqual(cliTask.lastRun, undefined, "the CLI run has not finished yet");
+      assert.ok(internals.automaticRunsInFlight >= 1, "the CLI run still holds its slot");
+
+      releaseCli();
+      await manager.waitForDetachedRuns();
+      assert.ok(
+        (cliTask as { lastRun?: Date }).lastRun instanceof Date,
+        "the CLI run is recorded when it ends",
+      );
+      assert.strictEqual(internals.automaticRunsInFlight, 0);
+    } finally {
+      try {
+        fs.rmSync(tmp, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test("checkAndExecuteTasks skips execution when per-task daily limit reached", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

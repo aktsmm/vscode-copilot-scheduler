@@ -938,6 +938,12 @@ export class CopilotExecutor {
       timeoutMs: timeoutMinutes * 60 * 1000,
     });
 
+    if (result.cancelled) {
+      throw createPromptBlockedError(
+        messages.copilotCliCancelled(),
+        "copilotCliFailed",
+      );
+    }
     if (result.timedOut) {
       throw createPromptBlockedError(
         messages.copilotCliTimedOut(timeoutMinutes),
