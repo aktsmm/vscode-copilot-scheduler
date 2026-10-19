@@ -171,6 +171,36 @@ suite("Copilot CLI runner", () => {
     assert.strictEqual(terminateActiveCopilotCliProcesses(), 0, "nothing left to stop");
   });
 
+  test("manifest keeps the CLI settings machine-scoped and the CLI option out of Chat tools", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
+    ) as {
+      contributes: {
+        configuration: { properties: Record<string, { scope?: string; default?: unknown }> };
+        languageModelTools?: Array<{ name: string; inputSchema?: unknown }>;
+      };
+    };
+    const properties = manifest.contributes.configuration.properties;
+    for (const key of [
+      "copilotScheduler.cliPath",
+      "copilotScheduler.cliAllowAllTools",
+      "copilotScheduler.cliTimeoutMinutes",
+    ]) {
+      assert.strictEqual(
+        properties[key]?.scope,
+        "machine",
+        `${key} must be machine-scoped so a workspace cannot change it`,
+      );
+    }
+    assert.strictEqual(properties["copilotScheduler.cliAllowAllTools"].default, false);
+    for (const tool of manifest.contributes.languageModelTools ?? []) {
+      assert.ok(
+        !JSON.stringify(tool.inputSchema ?? {}).includes("useCopilotCli"),
+        `${tool.name} must not let Chat set useCopilotCli`,
+      );
+    }
+  });
+
   test("a run that exceeds the timeout is stopped", async () => {
     const script = path.join(tmp, "slow-cli.js");
     fs.writeFileSync(script, "setInterval(() => {}, 1000);");
