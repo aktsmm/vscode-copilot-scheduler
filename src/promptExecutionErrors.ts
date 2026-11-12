@@ -20,7 +20,9 @@ export type PromptBlockedReason =
   | "sessionHarnessUnavailable"
   | "skillUnavailable"
   | "copilotCliUnavailable"
-  | "copilotCliFailed";
+  | "copilotCliFailed"
+  | "agentHostUnavailable"
+  | "agentHostFailed";
 
 export function createPromptBlockedError(
   message: string,

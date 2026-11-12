@@ -42,6 +42,14 @@ import {
 import { resolveGlobalAgentRoots, isPathInsideBaseDir } from "./promptResolver";
 import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
+  AgentHostError,
+  findAgentHostEndpoint,
+  resolveUserDataDir,
+  runAgentHostTurn,
+  toFileUri,
+  type AgentHostSessionRef,
+} from "./agentHostClient";
+import {
   createPromptBlockedError,
   isPromptBlockedError,
 } from "./promptExecutionErrors";
@@ -550,7 +558,27 @@ function resolveSessionHarness(
     : "auto";
 }
 
+type ExecutionRoute = "agentHost" | "chat";
+
+/**
+ * The Agent Host route needs a Copilot harness session in a local window: the
+ * endpoint registry it reads is local, and `sessionHarness: local` asks for the
+ * older Local harness, which the Agent Host does not run.
+ */
+function resolveExecutionRoute(
+  config: vscode.WorkspaceConfiguration,
+): ExecutionRoute {
+  if (config.get<string>("executionRoute", "agentHost") === "chat") {
+    return "chat";
+  }
+  if (resolveSessionHarness(config) === "local" || vscode.env.remoteName) {
+    return "chat";
+  }
+  return "agentHost";
+}
+
 export const __testOnly = {
+  resolveExecutionRoute,
   toSafeErrorDetails,
   resolveChatSessionBehavior,
   resolveSessionHarness,
@@ -576,9 +604,17 @@ export const __testOnly = {
  */
 export class CopilotExecutor {
   private static extensionGlobalStorageUri: vscode.Uri | undefined;
+  private static agentHostUserDataDir: string | undefined;
+  /** Last Agent Host session per working folder, reused by `continue` runs. */
+  private static readonly agentHostSessions = new Map<
+    string,
+    AgentHostSessionRef
+  >();
+  private static readonly agentHostQueues = new Map<string, Promise<void>>();
 
   static configureForExtensionContext(globalStorageUri: vscode.Uri): void {
     this.extensionGlobalStorageUri = globalStorageUri;
+    this.agentHostUserDataDir = resolveUserDataDir(globalStorageUri.fsPath);
   }
 
   private getPreferredWorkspaceName(): string {
@@ -624,6 +660,20 @@ export class CopilotExecutor {
       config,
     );
     const delayFactor = this.getCommandDelayFactor(config);
+
+    let agentHostFallbackReason: string | undefined;
+    if (resolveExecutionRoute(config) === "agentHost") {
+      const attempt = await this.tryExecuteViaAgentHost(
+        routing,
+        options,
+        config,
+        chatSession,
+      );
+      if (attempt.result) {
+        return attempt.result;
+      }
+      agentHostFallbackReason = attempt.fallbackReason;
+    }
     let requestedModel: NormalizedModelSelection;
     try {
       requestedModel = normalizeModelSelection(options);
@@ -816,7 +866,227 @@ export class CopilotExecutor {
       throw error;
     }
 
-    return resolved.fallback ? { modelFallback: resolved.fallback } : {};
+    return {
+      ...(resolved.fallback ? { modelFallback: resolved.fallback } : {}),
+      ...(agentHostFallbackReason
+        ? { agentHostRun: { fallbackReason: agentHostFallbackReason } }
+        : {}),
+    };
+  }
+
+  /**
+   * Sends the prompt to the Agent Host that VS Code runs for the Copilot harness,
+   * so the task's model and options are applied rather than left to the chat window.
+   * Returns a fallback reason when the host cannot take the task; whether that
+   * reason ends the run or sends it down the chat route is the user's setting.
+   */
+  private async tryExecuteViaAgentHost(
+    routing: PromptRouting,
+    options: ExecuteOptions | undefined,
+    config: vscode.WorkspaceConfiguration,
+    chatSession: ChatSessionBehavior,
+  ): Promise<{ result?: ExecutePromptResult; fallbackReason?: string }> {
+    const failOnFallback =
+      config.get<string>("executionFallback", "chat") === "fail";
+    const decline = async (detail: string) => {
+      logDebug(`[CopilotScheduler] Agent Host not used: ${detail}`);
+      if (failOnFallback) {
+        await this.warnAndThrow(
+          createPromptBlockedError(
+            messages.agentHostNotUsed(detail),
+            "agentHostUnavailable",
+          ),
+          routing.legacyPrompt,
+        );
+      }
+      return { fallbackReason: detail };
+    };
+
+    const userDataDir = CopilotExecutor.agentHostUserDataDir;
+    const endpoint = userDataDir
+      ? findAgentHostEndpoint(userDataDir)
+      : undefined;
+    if (!endpoint) {
+      return decline("no running Agent Host was found");
+    }
+
+    let modelId: string | undefined;
+    try {
+      const selection = normalizeModelSelection(options);
+      if (hasModelSelection(selection)) {
+        modelId = selection.model?.trim();
+        if (
+          !modelId ||
+          !isCopilotCliModelSupported(selection.modelVendor, modelId)
+        ) {
+          return decline("the task's model cannot be sent to the Agent Host");
+        }
+      }
+    } catch {
+      return decline("the task's model selection could not be read");
+    }
+
+    let agentUri: string | undefined;
+    if (routing.runtimeAgent) {
+      const mode = routing.chatOpenMode;
+      if (!mode || mode === "ask" || mode === "edit") {
+        return decline("the task's agent is not available in the Agent Host");
+      }
+      if (mode !== "agent") {
+        const filePath = await CopilotExecutor.findCustomAgentFile(
+          routing.requestedAgent,
+          routing.runtimeAgent,
+        );
+        if (!filePath) {
+          return decline("the task's custom agent file was not found");
+        }
+        agentUri = toFileUri(filePath);
+      }
+    }
+
+    const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => folder.uri.fsPath);
+    const cwd = [(options?.workingDirectory ?? "").trim(), workspaceFolders[0]]
+      .filter((candidate): candidate is string => !!candidate)
+      .find((candidate) => {
+        try {
+          return fs.statSync(candidate).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+
+    const configuration = options?.modelConfiguration ?? {};
+    const timeoutMinutes = Math.min(
+      Math.max(
+        Math.floor(config.get<number>("agentHostTimeoutMinutes", 60)) || 60,
+        1,
+      ),
+      720,
+    );
+    const sessionKey = cwd ?? "";
+    const run = () =>
+      runAgentHostTurn({
+        endpoint,
+        text: routing.chatOpenPrompt,
+        ...(cwd ? { cwdUri: toFileUri(cwd) } : {}),
+        ...(modelId ? { modelId } : {}),
+        modelOptions: {
+          ...configuration,
+          reasoningEffort:
+            configuration.reasoningEffort ?? options?.modelReasoningEffort,
+        },
+        ...(agentUri ? { agentUri } : {}),
+        attachments: (options?.attachFilePaths ?? []).map((filePath) => ({
+          label: path.basename(filePath),
+          uri: toFileUri(filePath),
+        })),
+        autoApprove: config.get<boolean>("agentHostAutoApprove", true) !== false,
+        timeoutMs: timeoutMinutes * 60 * 1000,
+        ...(chatSession === "continue" &&
+        CopilotExecutor.agentHostSessions.has(sessionKey)
+          ? { resume: CopilotExecutor.agentHostSessions.get(sessionKey) }
+          : {}),
+      });
+
+    try {
+      logDebug(
+        `[CopilotScheduler] Running through the Agent Host: model=${modelId ?? "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
+      );
+      const turn = await CopilotExecutor.runSerialized(sessionKey, run);
+      CopilotExecutor.agentHostSessions.set(sessionKey, {
+        sessionUri: turn.sessionUri,
+        chatUri: turn.chatUri,
+      });
+      const requested = turn.requestedModel;
+      const applied = turn.appliedModel;
+      if (requested && applied && requested !== "auto" && requested !== applied) {
+        void vscode.window.showWarningMessage(
+          messages.agentHostModelMismatch(requested, applied),
+        );
+      }
+      return {
+        result: {
+          agentHostRun: {
+            ...(requested ? { requestedModel: requested } : {}),
+            ...(applied ? { appliedModel: applied } : {}),
+          },
+        },
+      };
+    } catch (error) {
+      if (error instanceof AgentHostError && error.kind !== "failed") {
+        return decline(error.message);
+      }
+      const detail = sanitizeAbsolutePathDetails(
+        error instanceof Error ? error.message : "",
+        messages.redactedPlaceholder(),
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      return this.warnAndThrow(
+        createPromptBlockedError(
+          messages.agentHostFailed(detail),
+          "agentHostFailed",
+        ),
+        routing.legacyPrompt,
+      );
+    }
+  }
+
+  /** Runs one run at a time per key, so continued runs do not interleave in one chat. */
+  private static runSerialized<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = CopilotExecutor.agentHostQueues.get(key) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    const tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    CopilotExecutor.agentHostQueues.set(key, tail);
+    void tail.then(() => {
+      if (CopilotExecutor.agentHostQueues.get(key) === tail) {
+        CopilotExecutor.agentHostQueues.delete(key);
+      }
+    });
+    return next;
+  }
+
+  private static async findCustomAgentFile(
+    requested: string,
+    runtime: string,
+  ): Promise<string | undefined> {
+    const wanted = new Set(
+      [requested, runtime].filter(Boolean).map(normalizeAgentPrefix),
+    );
+    try {
+      const agents = await CopilotExecutor.getAllAgents();
+      const matched = agents.find(
+        (candidate) =>
+          wanted.has(normalizeAgentPrefix(candidate.id)) ||
+          wanted.has(normalizeAgentPrefix(candidate.name)) ||
+          (!!candidate.invocationName &&
+            wanted.has(normalizeAgentPrefix(candidate.invocationName))),
+      );
+      return matched?.filePath && fs.existsSync(matched.filePath)
+        ? matched.filePath
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Shows the failure with a copy-prompt action, then throws it (the primary user notification). */
+  private async warnAndThrow(error: Error, promptForCopy: string): Promise<never> {
+    const action = await vscode.window.showWarningMessage(
+      error.message,
+      messages.actionCopyPrompt(),
+      messages.actionCancel(),
+    );
+    if (action === messages.actionCopyPrompt()) {
+      await vscode.env.clipboard.writeText(promptForCopy);
+      notifyInfo(messages.promptCopied());
+    }
+    throw error;
   }
 
   /**

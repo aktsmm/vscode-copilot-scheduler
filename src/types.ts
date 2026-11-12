@@ -526,9 +526,20 @@ export interface CopilotCliRunInfo {
   premiumRequests?: number;
 }
 
+/** What an Agent Host run reported, for the execution history. */
+export interface AgentHostRunInfo {
+  /** Model id sent to the Agent Host. */
+  requestedModel?: string;
+  /** Model id the Agent Host reported using, when it reported one. */
+  appliedModel?: string;
+  /** Why the task ran through the chat route instead of the Agent Host. */
+  fallbackReason?: string;
+}
+
 export interface ExecutePromptResult {
   modelFallback?: ModelFallbackInfo;
   cliRun?: CopilotCliRunInfo;
+  agentHostRun?: AgentHostRunInfo;
 }
 
 /**

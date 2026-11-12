@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.8.11",
+  "version": "1.10.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -253,6 +253,46 @@
             "%config.sessionHarness.local%"
           ],
           "markdownDescription": "%config.sessionHarness%"
+        },
+        "copilotScheduler.executionRoute": {
+          "type": "string",
+          "default": "agentHost",
+          "enum": [
+            "agentHost",
+            "chat"
+          ],
+          "enumDescriptions": [
+            "%config.executionRoute.agentHost%",
+            "%config.executionRoute.chat%"
+          ],
+          "markdownDescription": "%config.executionRoute%"
+        },
+        "copilotScheduler.executionFallback": {
+          "type": "string",
+          "default": "chat",
+          "enum": [
+            "chat",
+            "fail"
+          ],
+          "enumDescriptions": [
+            "%config.executionFallback.chat%",
+            "%config.executionFallback.fail%"
+          ],
+          "markdownDescription": "%config.executionFallback%"
+        },
+        "copilotScheduler.agentHostAutoApprove": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "%config.agentHostAutoApprove%"
+        },
+        "copilotScheduler.agentHostTimeoutMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 720,
+          "scope": "machine",
+          "markdownDescription": "%config.agentHostTimeoutMinutes%"
         },
         "copilotScheduler.cliPath": {
           "type": "string",
@@ -1041,6 +1081,7 @@
     "@types/node": "^20.0.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.2",
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",
     "@vscode/test-electron": "^2.3.0",
@@ -1050,6 +1091,7 @@
     "glob": "^10.0.0",
     "mocha": "^11.7.5",
     "typescript": "^5.0.0",
+    "ws": "^8.22.1",
     "yauzl": "3.4.0",
     "yazl": "2.5.1"
   },
