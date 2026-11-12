@@ -158,6 +158,7 @@ export class AgentHostConnection {
   private readonly listeners = new Set<
     (channel: string, action: AgentHostAction) => void
   >();
+  private readonly closeListeners = new Set<() => void>();
 
   private constructor(private readonly socket: PipeWebSocket) {
     socket.onMessage((text) => this.handleMessage(text));
@@ -233,12 +234,27 @@ export class AgentHostConnection {
   }
 
   private failAll(message: string): void {
+    const wasClosed = this.closed;
     this.closed = true;
     for (const [id, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new AgentHostError("failed", message));
       this.pending.delete(id);
     }
+    if (!wasClosed) {
+      for (const listener of [...this.closeListeners]) {
+        listener();
+      }
+    }
+  }
+
+  onClose(listener: () => void): () => void {
+    if (this.closed) {
+      queueMicrotask(listener);
+      return () => undefined;
+    }
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   private handleMessage(raw: string): void {
@@ -514,6 +530,7 @@ function runTurn(
       settled = true;
       clearTimeout(timer);
       stopListening();
+      stopWatchingClose();
       outcome();
     };
 
@@ -542,6 +559,10 @@ function runTurn(
       if (channel !== ref.chatUri) {
         return;
       }
+      // A continued chat can carry events of other turns; only this turn counts.
+      if (typeof action.turnId === "string" && action.turnId !== turnId) {
+        return;
+      }
       if (action.type === "chat/usage") {
         const usage = action.usage as { model?: unknown } | undefined;
         if (typeof usage?.model === "string") {
@@ -568,6 +589,14 @@ function runTurn(
         );
       }
     });
+
+    const stopWatchingClose = connection.onClose(() =>
+      finish(() =>
+        reject(
+          new AgentHostError("failed", "The Agent Host connection closed during the run."),
+        ),
+      ),
+    );
 
     connection
       .dispatch(ref.chatUri, {

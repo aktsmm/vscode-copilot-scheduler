@@ -197,12 +197,8 @@ function buildPromptExecutionOptions(
     modelVersion: request.modelVersion,
     modelReasoningEffort: request.modelReasoningEffort,
     ...(request.modelFallback === true ? { modelFallback: true } : {}),
-    ...(request.useCopilotCli === true
-      ? {
-          useCopilotCli: true,
-          ...(workingDirectory ? { workingDirectory } : {}),
-        }
-      : {}),
+    ...(request.useCopilotCli === true ? { useCopilotCli: true } : {}),
+    ...(workingDirectory ? { workingDirectory } : {}),
     ...(request.modelConfiguration !== undefined
       ? { modelConfiguration: request.modelConfiguration }
       : {}),

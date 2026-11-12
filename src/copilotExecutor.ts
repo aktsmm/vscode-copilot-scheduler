@@ -888,7 +888,11 @@ export class CopilotExecutor {
   ): Promise<{ result?: ExecutePromptResult; fallbackReason?: string }> {
     const failOnFallback =
       config.get<string>("executionFallback", "chat") === "fail";
-    const decline = async (detail: string) => {
+    const decline = async (rawDetail: string) => {
+      const detail = sanitizeAbsolutePathDetails(
+        rawDetail,
+        messages.redactedPlaceholder(),
+      );
       logDebug(`[CopilotScheduler] Agent Host not used: ${detail}`);
       if (failOnFallback) {
         await this.warnAndThrow(
@@ -947,15 +951,20 @@ export class CopilotExecutor {
     const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
       .filter((folder) => folder.uri.scheme === "file")
       .map((folder) => folder.uri.fsPath);
-    const cwd = [(options?.workingDirectory ?? "").trim(), workspaceFolders[0]]
-      .filter((candidate): candidate is string => !!candidate)
-      .find((candidate) => {
-        try {
-          return fs.statSync(candidate).isDirectory();
-        } catch {
-          return false;
-        }
-      });
+    const requestedCwd = (options?.workingDirectory ?? "").trim();
+    const isDirectory = (candidate: string): boolean => {
+      try {
+        return fs.statSync(candidate).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    if (requestedCwd && !isDirectory(requestedCwd)) {
+      return decline("the task's folder does not exist");
+    }
+    const cwd = requestedCwd
+      ? requestedCwd
+      : workspaceFolders.find((candidate) => isDirectory(candidate));
 
     const configuration = options?.modelConfiguration ?? {};
     const timeoutMinutes = Math.min(
@@ -965,7 +974,11 @@ export class CopilotExecutor {
       ),
       720,
     );
-    const sessionKey = cwd ?? "";
+    const autoApprove =
+      config.get<boolean>("agentHostAutoApprove", true) !== false;
+    // The approval policy is fixed when a session is created, so sessions with a
+    // different policy are never shared.
+    const sessionKey = `${cwd ?? ""}|${autoApprove ? "auto" : "ask"}`;
     const run = () =>
       runAgentHostTurn({
         endpoint,
@@ -982,7 +995,7 @@ export class CopilotExecutor {
           label: path.basename(filePath),
           uri: toFileUri(filePath),
         })),
-        autoApprove: config.get<boolean>("agentHostAutoApprove", true) !== false,
+        autoApprove,
         timeoutMs: timeoutMinutes * 60 * 1000,
         onSessionStarted: (ref) => {
           const sessionId = ref.sessionUri.split("/").pop();
