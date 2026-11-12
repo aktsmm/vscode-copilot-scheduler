@@ -376,6 +376,23 @@ suite("Agent Host client", () => {
       assert.ok(cancelled);
     });
 
+    test("tells the caller once the host has accepted the turn", async () => {
+      host = await startFakeHost(tmp);
+      const started: string[] = [];
+      await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        onSessionStarted: (ref) => started.push(ref.chatUri),
+      });
+      assert.deepStrictEqual(started, ["ahp-chat:/chat-1"]);
+
+      await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        onSessionStarted: () => {
+          throw new Error("opening the session failed");
+        },
+      });
+    });
+
     test("continues an existing session instead of creating one", async () => {
       host = await startFakeHost(tmp);
       const result = await runAgentHostTurn({

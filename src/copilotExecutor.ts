@@ -984,6 +984,29 @@ export class CopilotExecutor {
         })),
         autoApprove: config.get<boolean>("agentHostAutoApprove", true) !== false,
         timeoutMs: timeoutMinutes * 60 * 1000,
+        onSessionStarted: (ref) => {
+          const sessionId = ref.sessionUri.split("/").pop();
+          if (!sessionId) {
+            return;
+          }
+          // Opens the session as an editor tab (verified on VS Code 1.146); if
+          // the command changes, the run is unaffected and only the tab is missing.
+          void Promise.resolve(
+            vscode.commands.executeCommand(
+              "workbench.action.chat.openSessionInEditorGroup",
+              {
+                resource: vscode.Uri.from({
+                  scheme: "agent-host-copilotcli",
+                  path: `/${sessionId}`,
+                }),
+              },
+            ),
+          ).then(undefined, (error: unknown) =>
+            logDebug(
+              `[CopilotScheduler] Could not open the Agent Host session: ${toSafeErrorDetails(error)}`,
+            ),
+          );
+        },
         ...(chatSession === "continue" &&
         CopilotExecutor.agentHostSessions.has(sessionKey)
           ? { resume: CopilotExecutor.agentHostSessions.get(sessionKey) }

@@ -370,6 +370,8 @@ export interface AgentHostTurnRequest {
   timeoutMs: number;
   /** Reuse this session (a "continue" run) when the host still has it. */
   resume?: AgentHostSessionRef;
+  /** Called once the host has accepted the turn, so the session can be shown. */
+  onSessionStarted?: (ref: AgentHostSessionRef) => void;
 }
 
 export interface AgentHostTurnResult extends AgentHostSessionRef {
@@ -587,6 +589,13 @@ function runTurn(
               }
             : {}),
         },
+      })
+      .then(() => {
+        try {
+          request.onSessionStarted?.(ref);
+        } catch {
+          // Revealing the session is best effort and must not fail the run.
+        }
       })
       .catch((error: unknown) =>
         finish(() =>

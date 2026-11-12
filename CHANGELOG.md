@@ -25,9 +25,9 @@ Tasks now run through the Agent Host by default, so the model, reasoning effort,
 ### Notes
 
 - Scheduler finds the Agent Host through VS Code's local endpoint registry, an internal VS Code format. It checks the entry's schema and protocol version, and treats anything unexpected as "no host".
-- Scheduler does not open or focus a chat window for an Agent Host run. The session appears in the session list of the task's folder like any other Copilot session.
+- Scheduler opens the Agent Host session as an editor tab once the run has started (`workbench.action.chat.openSessionInEditorGroup` with the session as `agent-host-copilotcli:/<id>`, verified on VS Code 1.146). If VS Code changes the command, the run is unaffected and only the tab is missing. The session also appears in the session list of the task's folder.
 - The WebSocket connection is made directly over the host's named pipe: the extension host replaces `http.request`, which made a WebSocket library ignore the pipe and connect to `localhost:80`.
-- Reasoning effort and context size are sent when the model offers them; their effect on a run has not been measured.
+- Reasoning effort and context size are applied by the Agent Host (measured on VS Code 1.146 with Claude Sonnet 5.5: effort `low` produced no reasoning and 50 output tokens, `max` produced reasoning and 119; a prompt over 200K tokens was rejected with context size 200K and completed with 1M). Without a task setting the host's default applies (1M for Claude Sonnet 5.5).
 
 ## [1.8.11] - 2026-10-20
 
