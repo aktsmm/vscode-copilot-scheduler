@@ -998,6 +998,9 @@ export class CopilotExecutor {
         autoApprove,
         timeoutMs: timeoutMinutes * 60 * 1000,
         onSessionStarted: (ref) => {
+          if (config.get<boolean>("agentHostOpenSession", true) === false) {
+            return;
+          }
           const sessionId = ref.sessionUri.split("/").pop();
           if (!sessionId) {
             return;

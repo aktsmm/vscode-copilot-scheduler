@@ -277,6 +277,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.executionRoute`             | `agentHost`       | タスクの実行方法。`agentHost`（既定）は VS Code の Agent Host へ送り、モデル・effort・コンテキストサイズ・カスタムエージェント・添付を反映して実際のモデルを記録します。`chat` は従来の Copilot Chat 経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
 | `copilotScheduler.executionFallback`          | `chat`            | Agent Host で実行できないとき。`chat` はチャット経路で実行して理由を記録、`fail` は実行せず警告します。実行を開始して失敗した場合は二重に実行しません。 |
 | `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.agentHostOpenSession`       | `true`            | Agent Host の実行を開始したら、そのセッションをエディタのタブとして開きます。頻繁に動く無人タスクではオフにできます。 |
 | `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行をキャンセルして失敗とするまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |
