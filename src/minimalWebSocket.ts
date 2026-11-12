@@ -243,7 +243,9 @@ export class PipeWebSocket {
     this.socket.on("error", () => this.markClosed());
     this.socket.on("close", () => this.markClosed());
     if (initial.length > 0) {
-      this.handleData(initial);
+      // Frames that arrived with the upgrade response are delivered after the
+      // caller has installed its handlers, so none of them is lost.
+      setImmediate(() => this.handleData(initial));
     }
   }
 

@@ -34,6 +34,7 @@ type Recorded = { method: string; params: Record<string, unknown> };
 interface FakeHost {
   endpoint: AgentHostEndpoint;
   calls: Recorded[];
+  sockets: () => Iterable<WebSocket>;
   close: () => Promise<void>;
 }
 
@@ -135,6 +136,7 @@ async function startFakeHost(
   return {
     endpoint: { socketPath, token: "secret", protocolVersion: "1.1.0" },
     calls,
+    sockets: () => wss.clients,
     close: () =>
       new Promise<void>((resolve) => {
         wss.close(() => server.close(() => resolve()));
@@ -391,6 +393,37 @@ suite("Agent Host client", () => {
           throw new Error("opening the session failed");
         },
       });
+    });
+
+    test("ignores events of other turns and fails when the connection drops mid-run", async () => {
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({ type: "chat/turnComplete", turnId: "some-other-turn" });
+          send({ type: "chat/error", turnId: "some-other-turn", part: {} });
+        },
+      });
+      await assert.rejects(
+        runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 400 }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.message === "The Agent Host run timed out.",
+      );
+
+      await host.close();
+      host = await startFakeHost(tmp, {
+        finish: () => {
+          for (const client of host?.sockets() ?? []) {
+            client.terminate();
+          }
+        },
+      });
+      await assert.rejects(
+        runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 20000 }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          /closed/.test(error.message),
+      );
     });
 
     test("continues an existing session instead of creating one", async () => {
