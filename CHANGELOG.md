@@ -13,7 +13,7 @@ Tasks now run through the Agent Host by default, so the model, reasoning effort,
 
 - **Agent Host route** (default). A task is sent to the Agent Host that VS Code runs for the Copilot harness, over the [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/), instead of being typed into a chat window. Verified on VS Code 1.146: the requested model is the model that ran (Claude Sonnet 5.5 and GPT-5.6 Luna), a continued run can use another model, and a custom agent and an attachment take effect. The execution history records the requested and the reported model, and a warning appears when they differ (Auto is not compared).
 - **Continue** keeps using the last Scheduler session of the task's folder while VS Code stays open; a new session starts after a restart. Runs that share a session never overlap.
-- Settings `copilotScheduler.executionRoute` (`agentHost` by default, or `chat`), `copilotScheduler.executionFallback` (`chat` by default, or `fail`), `copilotScheduler.agentHostAutoApprove` (default on, so unattended tasks can use tools) and `copilotScheduler.agentHostTimeoutMinutes` (default 60). The last two are machine-scoped, so a workspace cannot change them.
+- Settings `copilotScheduler.executionRoute` (`agentHost` by default, or `chat`), `copilotScheduler.executionFallback` (`chat` by default, or `fail`), `copilotScheduler.agentHostAutoApprove` (default on, so unattended tasks can use tools), `copilotScheduler.agentHostOpenSession` (default on: open the session as an editor tab) and `copilotScheduler.agentHostTimeoutMinutes` (default 60). The last two are machine-scoped, so a workspace cannot change them.
 
 ### Changed
 
