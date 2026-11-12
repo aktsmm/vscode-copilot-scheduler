@@ -2527,7 +2527,13 @@ export class ScheduleManager {
   }
 
   private isLongRunningClaim(claim: TaskRunClaim): boolean {
-    return this.tasks.get(claim.taskId)?.useCopilotCli === true;
+    // Agent Host runs wait for the whole turn, like a CLI run, so they must not hold up the tick.
+    return (
+      this.tasks.get(claim.taskId)?.useCopilotCli === true ||
+      vscode.workspace
+        .getConfiguration("copilotScheduler")
+        .get<string>("executionRoute", "agentHost") !== "chat"
+    );
   }
 
   /**

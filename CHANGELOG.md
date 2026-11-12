@@ -5,6 +5,32 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-11-12
+
+Tasks now run through the Agent Host by default, so the model, reasoning effort, context size, custom agent and attachments set on a task are applied, and the model that really ran is recorded. The older chat route remains available.
+
+### Added
+
+- **Agent Host route** (default). A task is sent to the Agent Host that VS Code runs for the Copilot harness, over the [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/), instead of being typed into a chat window. Verified on VS Code 1.146: the requested model is the model that ran (Claude Sonnet 5.5 and GPT-5.6 Luna), a continued run can use another model, and a custom agent and an attachment take effect. The execution history records the requested and the reported model, and a warning appears when they differ (Auto is not compared).
+- **Continue** keeps using the last Scheduler session of the task's folder while VS Code stays open; a new session starts after a restart. Runs that share a session never overlap.
+- Settings `copilotScheduler.executionRoute` (`agentHost` by default, or `chat`), `copilotScheduler.executionFallback` (`chat` by default, or `fail`), `copilotScheduler.agentHostAutoApprove` (default on, so unattended tasks can use tools) and `copilotScheduler.agentHostTimeoutMinutes` (default 60). The last two are machine-scoped, so a workspace cannot change them.
+
+### Changed
+
+- **Fallback**: when the Agent Host cannot take a task (no running host, or a model, custom agent such as an `@workspace`-style agent or `/ask`, option or attachment it cannot apply, or a Codex-bridge model), the task runs through the chat route and the execution history records why. Set `executionFallback` to `fail` to run nothing and show a warning instead. A run that already started in the Agent Host and failed is never run a second time.
+- The chat route is used regardless when `sessionHarness` is `local`, in a remote window, and for tasks that run with the Copilot CLI (the task's own option takes priority).
+- A scheduled Agent Host run does not hold up the scheduler tick, like a Copilot CLI run: it keeps one automatic-run slot until it ends (see `copilotScheduler.maxConcurrentAutomaticRuns`).
+- The note under the task form's model selector now explains the Agent Host route and the fallback.
+
+### Notes
+
+- Scheduler finds the Agent Host through VS Code's local endpoint registry, an internal VS Code format. It checks the entry's schema and protocol version, and treats anything unexpected as "no host".
+- Scheduler does not open or focus a chat window for an Agent Host run. The session appears in the session list of the task's folder like any other Copilot session.
+- The WebSocket connection is made directly over the host's named pipe: the extension host replaces `http.request`, which made a WebSocket library ignore the pipe and connect to `localhost:80`.
+- Reasoning effort and context size are sent when the model offers them; their effect on a run has not been measured.
+
+## [1.8.11] - 2026-10-20
+
 ## [1.9.6] - 2026-10-20
 
 Marketplace Pre-release (`marketplace-preview-v1.9.6`). Same content as Stable 1.8.11. The task form's Local and Global options now list skills instead of prompt files, in line with Copilot (Agent Host) sessions, which use skills and not `*.prompt.md`. A task can also run through the Copilot CLI so its model is applied. Tasks without these options are saved and run as before.

@@ -173,9 +173,20 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - 自律実行ヒントは、スラッシュコマンドで始まるプロンプトには追加されません。スキルと Autopilot（`/autopilot`）は、1つのプロンプトで併用できません。
 - 対象は `file:` のワークスペースフォルダーだけで、リモートや仮想フォルダーは読み込みません。
 
+#### Agent Host 経由での実行（既定）
+
+1.10.0 から、タスクはチャット画面に入力するのではなく、VS Code が Copilot harness 用にすでに動かしている **Agent Host** へ送って実行します。これにより、タスクに設定した内容が反映されます。
+
+- **反映されるもの**: モデル、reasoning effort とコンテキストサイズ（モデルが対応している場合）、カスタムエージェント、添付ファイル。実行履歴には、指定したモデルと Agent Host が報告した実際のモデルを記録し、異なる場合は警告を表示します（Auto は比較しません）。
+- **実行場所**: タスクのワークスペースフォルダー（グローバルのタスクは最初のローカルワークスペースフォルダー）です。通常の Copilot セッションとして、自分で始めたチャットと同じようにそのフォルダーのセッション一覧に表示されます。Scheduler がチャット画面を開いたり前面に出したりはしません。**継続**（`copilotScheduler.chatSession` またはタスクごとの指定）は、VS Code を開いている間、そのフォルダーで最後に Scheduler が使ったセッションに続けて送ります。再起動後は新しいセッションから始まります。
+- **ツール**: 無人の実行は承認の確認に答えられないため、`copilotScheduler.agentHostAutoApprove`（既定オン）で承認なしにツールを使えるようにしています。ファイル編集やコマンド実行が必要なタスクが拒否されることを受け入れる場合だけオフにしてください。ユーザー／リモート設定のみ有効です。
+- **Agent Host で実行できないとき**（実行中のホストがない、または適用できないモデル・カスタムエージェント・オプション・添付がある。例: `@workspace` 系のエージェント、`/ask`、`/edit`、Codex ブリッジのモデル）: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を実行履歴に記録します。`fail` は実行せず警告を表示するため、指定外のモデルでタスクが動くことがありません。Agent Host で実行を開始した後に失敗した場合は、二重に実行しません。
+- **経路の選択**: `copilotScheduler.executionRoute` の既定は `agentHost` です。Copilot Chat セッションを開く従来の経路を使うには `chat` にします。タスク個別の Copilot CLI 指定は、どちらよりも優先されます。`sessionHarness` が `local` の場合とリモートのウィンドウでは、Agent Host の登録情報がローカルのものなので、常にチャット経路を使います。
+- 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、`executionFallback` に従います。`copilotScheduler.agentHostTimeoutMinutes`（既定 60）で、時間がかかりすぎる実行をキャンセルします。
+
 #### Copilot CLI での実行
 
-Copilot（エージェントホスト）のチャットセッションは、タスクで選んだモデルを無視します（下記）。モデルを反映したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。チャットセッションの代わりに、バックグラウンドの `copilot` プロセス（`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`、プロンプトは標準入力）として実行します。
+上記の Agent Host 経路でもモデルは反映されます。Copilot セッションではなくバックグラウンドの `copilot` プロセスで実行したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`（プロンプトは標準入力）として実行します。
 
 - タスク単位のオプトインで、モデルを指定したタスクにだけ効きます。モデル未指定のタスク、またはオプションをオフにしたタスクは、これまでどおりチャットで実行します。既存のタスクやプロンプトファイル型のタスクは変わりません。VS Code がどの種類のチャットセッションを使うかを Scheduler は判別できないため、自動では切り替えません。
 - CLI はプロンプトモードで `/スキル` を実行しない（CLI 1.0.99 で確認）ため、Scheduler がスキルの `SKILL.md` の指示（front matter を除く）とスキルのフォルダーを、引数の前に付けます。スキル一覧と同じ規則で、名前の一致が必要で、ワークスペースのスキルは信頼されたワークスペースでのみ使え、ユーザーのスキルより優先されます。
@@ -190,11 +201,12 @@ Copilot（エージェントホスト）のチャットセッションは、タ�
 VS Code 1.142（Windows）で確認した内容です。
 
 - **Local** のセッションでは、タスクで選んだ具体的なモデル（例: Claude Haiku 5.5）が反映されました。
-- **Copilot（エージェントホスト）** のセッションでは、タスクで選んだモデルが反映されず、組織の既定モデルで実行されました。具体的なモデルでも Auto でも同じでした。タスクに設定した reasoning effort とコンテキストサイズも反映されませんでした（実測: effort `low`・200K コンテキストの Claude Sonnet 5.5 を指定しても、既定モデルが effort `medium`・コンテキスト階層なしで動きました）。モデルはチャット画面側で選ぶか、タスクを Copilot CLI で実行してください（上記）。2026-10-20 に Pre-release 1.9.5 の拡張で再確認しました。Claude Haiku 4.5 を指定して新規チャットで送ったタスクは、GPT-6.1 Sol で動きました（`session.model_change` の source は `startup`、`selectedModel` なし）。
+- **Copilot（エージェントホスト）** のチャットセッション（従来のチャット経路）では、タスクで選んだモデルが反映されず、組織の既定モデルで実行されました。具体的なモデルでも Auto でも同じでした。タスクに設定した reasoning effort とコンテキストサイズも反映されませんでした（実測: effort `low`・200K コンテキストの Claude Sonnet 5.5 を指定しても、既定モデルが effort `medium`・コンテキスト階層なしで動きました）。2026-10-20 に Pre-release 1.9.5 の拡張で再確認しました。Claude Haiku 4.5 を指定して新規チャットで送ったタスクは、GPT-6.1 Sol で動きました（`session.model_change` の source は `startup`、`selectedModel` なし）。既定の **Agent Host 経路** は、リクエスト自体にモデルを載せて送るため、この問題を避けられます。
+- VS Code 1.146 の Agent Host 経路で確認した内容: Claude Sonnet 5.5 と GPT-5.6 Luna のそれぞれが、実際に実行されたモデルとして報告されました。同じセッションの次の実行では別のモデルも使え、カスタムエージェントと添付ファイルも反映されました。reasoning effort とコンテキストサイズは、モデルが対応していれば送信しますが、実行への効果は測定していません。
 - effort とコンテキストサイズは、Local のセッションでも未確認です。
 - **Auto** と **HydraFusion** は、どちらのセッションでも動作を確認できていません。HydraFusion はエージェントホストでの Auto の振り分け階層で、拡張向けには独立したモデルとして一覧に出ません。
 
-Scheduler が報告するのは「送信した」ことで、選んだモデルで実行されたことではありません。新規チャットのセッションの種類は VS Code が決め、Scheduler は変更しません。
+チャット経路では、Scheduler が報告するのは「送信した」ことで、選んだモデルで実行されたことではありません。Agent Host 経路では、実際に実行されたモデルを記録します。チャット経路での新規チャットのセッションの種類は VS Code が決め、Scheduler は変更しません。
 
 #### モデルのフォールバック（オプトイン）
 
@@ -263,6 +275,10 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |
 | `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
+| `copilotScheduler.executionRoute`             | `agentHost`       | タスクの実行方法。`agentHost`（既定）は VS Code の Agent Host へ送り、モデル・effort・コンテキストサイズ・カスタムエージェント・添付を反映して実際のモデルを記録します。`chat` は従来の Copilot Chat 経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
+| `copilotScheduler.executionFallback`          | `chat`            | Agent Host で実行できないとき。`chat` はチャット経路で実行して理由を記録、`fail` は実行せず警告します。実行を開始して失敗した場合は二重に実行しません。 |
+| `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行をキャンセルして失敗とするまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliTimeoutMinutes`          | `60`              | CLI 実行のタスクを停止するまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |

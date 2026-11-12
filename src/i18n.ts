@@ -484,8 +484,8 @@ export const messages = {
     ),
   webviewModelHarnessNote: () =>
     t(
-      "In Copilot (Agent Host) sessions the model, reasoning effort and context size set here are not applied: the session runs on the model chosen in the chat window (measured on VS Code 1.142). Choose the model there, or tick \"Run with the Copilot CLI\" below so the model is applied. In Local sessions a specific model was observed to be applied; effort and context size are unconfirmed. Auto and HydraFusion are not confirmed in either.",
-      "Copilot（エージェントホスト）のセッションでは、ここで設定したモデル・reasoning effort・コンテキストサイズは反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。モデルはチャット画面側で選ぶか、下の「Copilot CLI で実行する」を選ぶとモデルが反映されます。Local のセッションでは具体的なモデルの指定が反映されることを確認していますが、effort とコンテキストサイズは未確認です。Auto と HydraFusion はどちらでも動作を確認できていません。",
+      "Tasks run through the Agent Host by default, which applies the model, reasoning effort and context size set here and records the model that ran (copilotScheduler.executionRoute). If the Agent Host cannot take the task, the fallback setting decides: the older chat route ignores the model in Copilot (Agent Host) sessions (measured on VS Code 1.142) and runs on the model chosen in the chat window. Tick \"Run with the Copilot CLI\" below to use a background copilot process instead. Auto and HydraFusion are not confirmed to apply.",
+      "タスクは既定で Agent Host 経由で実行され、ここで設定したモデル・reasoning effort・コンテキストサイズが反映され、実際に使われたモデルが記録されます（copilotScheduler.executionRoute）。Agent Host で実行できない場合は、フォールバック設定に従います。従来のチャット経路では、Copilot（エージェントホスト）のセッションでモデルが反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。バックグラウンドの copilot プロセスで実行するには、下の「Copilot CLI で実行する」を選びます。Auto と HydraFusion は反映を確認できていません。",
     ),
   labelUseCopilotCli: () =>
     t(
@@ -523,6 +523,37 @@ export const messages = {
           ? [`プレミアムリクエスト ${premiumRequests}`]
           : []),
       ].join("、")}`,
+    );
+  },
+  agentHostNotUsed: (detail: string) =>
+    t(
+      `The task was not run because it cannot run through the Agent Host (${detail}). Set copilotScheduler.executionFallback to "chat" to run it through the chat route instead.`,
+      `Agent Host で実行できないため、タスクを実行していません（${detail}）。代わりにチャット経路で実行するには、copilotScheduler.executionFallback を "chat" にしてください。`,
+    ),
+  agentHostFailed: (detail: string) =>
+    t(
+      `The Agent Host run failed.${detail ? ` ${detail}` : ""}`,
+      `Agent Host での実行に失敗しました。${detail ? ` ${detail}` : ""}`,
+    ),
+  agentHostModelMismatch: (requested: string, applied: string) =>
+    t(
+      `The Agent Host ran the task on ${applied} instead of the requested ${requested}.`,
+      `Agent Host は指定された ${requested} ではなく ${applied} でタスクを実行しました。`,
+    ),
+  executionHistoryAgentHost: (
+    requested?: string,
+    applied?: string,
+    fallbackReason?: string,
+  ) => {
+    if (fallbackReason) {
+      return t(
+        `Chat route (Agent Host not used): ${fallbackReason}`,
+        `チャット経路で実行（Agent Host 未使用）: ${fallbackReason}`,
+      );
+    }
+    return t(
+      `Agent Host: ${requested ? `requested ${requested}` : "model not set"}, ${applied ? `applied ${applied}` : "applied model not reported"}`,
+      `Agent Host: ${requested ? `指定 ${requested}` : "モデル未指定"}、${applied ? `適用 ${applied}` : "適用モデルの報告なし"}`,
     );
   },
   copilotCliNotFound: () =>

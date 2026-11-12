@@ -83,6 +83,7 @@ import type {
   PromptExecutionRequest,
   ModelFallbackInfo,
   CopilotCliRunInfo,
+  AgentHostRunInfo,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -670,12 +671,15 @@ const manualRunInFlightTaskIds = new Set<string>();
 /** Fallback model used by the most recent run per task, consumed by history writers. */
 const lastModelFallbackByTaskId = new Map<string, ModelFallbackInfo>();
 const lastCopilotCliRunByTaskId = new Map<string, CopilotCliRunInfo>();
+const lastAgentHostRunByTaskId = new Map<string, AgentHostRunInfo>();
 
 function takeModelFallbackDetail(taskId: string): string | undefined {
   const fallback = lastModelFallbackByTaskId.get(taskId);
   lastModelFallbackByTaskId.delete(taskId);
   const cliRun = lastCopilotCliRunByTaskId.get(taskId);
   lastCopilotCliRunByTaskId.delete(taskId);
+  const agentHostRun = lastAgentHostRunByTaskId.get(taskId);
+  lastAgentHostRunByTaskId.delete(taskId);
   const details = [
     fallback
       ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
@@ -685,6 +689,13 @@ function takeModelFallbackDetail(taskId: string): string | undefined {
           cliRun.requestedModel,
           cliRun.appliedModel,
           cliRun.premiumRequests,
+        )
+      : undefined,
+    agentHostRun
+      ? messages.executionHistoryAgentHost(
+          agentHostRun.requestedModel,
+          agentHostRun.appliedModel,
+          agentHostRun.fallbackReason,
         )
       : undefined,
   ].filter((item): item is string => !!item);
@@ -1545,6 +1556,7 @@ export function deactivate(): void {
   lastPromptResolutionByTaskId.clear();
   lastModelFallbackByTaskId.clear();
   lastCopilotCliRunByTaskId.clear();
+  lastAgentHostRunByTaskId.clear();
   resetExecutionHistoryQueueForTests();
   setExecutionHistoryContextForTests(undefined);
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
@@ -1567,6 +1579,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
   notifyInfo(messages.taskExecuting(task.name));
   lastModelFallbackByTaskId.delete(task.id);
   lastCopilotCliRunByTaskId.delete(task.id);
+  lastAgentHostRunByTaskId.delete(task.id);
 
   try {
     const resolved = await resolvePromptExecution(task);
@@ -1584,6 +1597,9 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       );
       if (executionResult?.cliRun) {
         lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
+      }
+      if (executionResult?.agentHostRun) {
+        lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
       }
       if (executionResult?.modelFallback) {
         lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
