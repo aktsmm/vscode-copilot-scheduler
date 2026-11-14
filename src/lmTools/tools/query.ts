@@ -197,7 +197,11 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
     retentionScope: "task",
     statusSemantics: {
       success: "prompt_dispatched",
-      note: "success confirms prompt dispatch, not model response completion",
+      note: "status alone confirms prompt dispatch, not model response completion",
+    },
+    turnOutcomeSemantics: {
+      note: "When present, turnOutcome is an Agent Host turn observation; it does not confirm that the requested work succeeded. responseText describes observed assistant text, not the contents of the response.",
+      absent: "completion_not_observed",
     },
     entries: filtered.slice(0, limit),
   });

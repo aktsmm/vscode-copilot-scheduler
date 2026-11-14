@@ -1,4 +1,7 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import {
@@ -118,6 +121,162 @@ suite("executionHistoryStore", () => {
     );
   });
 
+  test("separate windows append to the shared history without losing entries", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-history-"));
+    let release!: () => void;
+    let firstWrite: Promise<void> | undefined;
+    let secondWrite: Promise<void> | undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const stateA = new MockMemento();
+      const stateB = new MockMemento();
+      await stateA.update("executionHistory", [entry({ taskId: "legacy" })]);
+      await stateB.update("executionHistory", [entry({ taskId: "legacy" })]);
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const updateA = stateA.update.bind(stateA);
+      stateA.update = async (key, value) => {
+        if (key === "executionHistoryFileInitialized") {
+          entered();
+          await hold;
+        }
+        await updateA(key, value);
+      };
+      const contextA = {
+        globalState: stateA as unknown as vscode.ExtensionContext["globalState"],
+        globalStorageUri: vscode.Uri.file(tmp),
+      };
+      const contextB = {
+        globalState: stateB as unknown as vscode.ExtensionContext["globalState"],
+        globalStorageUri: vscode.Uri.file(tmp),
+      };
+
+      setExecutionHistoryContextForTests(contextA);
+      firstWrite = enqueueExecutionHistoryEntry(entry({ taskId: "window-a" }));
+      await started;
+      resetExecutionHistoryQueueForTests();
+      setExecutionHistoryContextForTests(contextB);
+      secondWrite = enqueueExecutionHistoryEntry(entry({ taskId: "window-b" }));
+      release();
+      await Promise.all([firstWrite, secondWrite]);
+      assert.deepStrictEqual(
+        getExecutionHistoryEntries().map((item) => item.taskId),
+        ["window-b", "window-a", "legacy"],
+      );
+      setExecutionHistoryContextForTests(contextA);
+      assert.deepStrictEqual(
+        getExecutionHistoryEntries().map((item) => item.taskId),
+        ["window-b", "window-a", "legacy"],
+      );
+    } finally {
+      release();
+      await Promise.allSettled([firstWrite, secondWrite]);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("history remains available when its global-state mirror fails", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-history-"));
+    try {
+      const state = new MockMemento();
+      state.update = async () => { throw new Error("mirror unavailable"); };
+      setExecutionHistoryContextForTests({
+        globalState: state as unknown as vscode.ExtensionContext["globalState"],
+        globalStorageUri: vscode.Uri.file(tmp),
+      });
+      await enqueueExecutionHistoryEntry(entry({ taskId: "file-saved" }));
+      assert.deepStrictEqual(
+        getExecutionHistoryEntries().map((item) => item.taskId),
+        ["file-saved"],
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing shared history cannot be replaced by a stale window after a mirror failure", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-history-"));
+    try {
+      const state = new MockMemento();
+      state.update = async () => { throw new Error("mirror unavailable"); };
+      setExecutionHistoryContextForTests({
+        globalState: state as unknown as vscode.ExtensionContext["globalState"],
+        globalStorageUri: vscode.Uri.file(tmp),
+      });
+      await enqueueExecutionHistoryEntry(entry({ taskId: "file-saved" }));
+      fs.unlinkSync(path.join(tmp, "executionHistory.json"));
+      assert.throws(() => getExecutionHistoryEntries(), /Cannot safely read/);
+      await assert.rejects(
+        () => enqueueExecutionHistoryEntry(entry({ taskId: "new" })),
+        /Cannot safely read/,
+      );
+      assert.strictEqual(fs.existsSync(path.join(tmp, "executionHistory.json")), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("failed initial history migration can retry without losing legacy entries", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-history-"));
+    const rename = fs.promises.rename;
+    try {
+      const state = new MockMemento();
+      await state.update("executionHistory", [entry({ taskId: "legacy" })]);
+      setExecutionHistoryContextForTests({
+        globalState: state as unknown as vscode.ExtensionContext["globalState"],
+        globalStorageUri: vscode.Uri.file(tmp),
+      });
+      let fail = true;
+      fs.promises.rename = async (source, target) => {
+        if (
+          fail &&
+          String(target).toLowerCase() ===
+            path.join(tmp, "executionHistory.json").toLowerCase()
+        ) {
+          fail = false;
+          throw new Error("history write unavailable");
+        }
+        await rename(source, target);
+      };
+      await assert.rejects(
+        () => enqueueExecutionHistoryEntry(entry({ taskId: "failed" })),
+        /history write unavailable/,
+      );
+      assert.deepStrictEqual(
+        getExecutionHistoryEntries().map((item) => item.taskId),
+        ["legacy"],
+      );
+      await enqueueExecutionHistoryEntry(entry({ taskId: "retried" }));
+      assert.deepStrictEqual(
+        getExecutionHistoryEntries().map((item) => item.taskId),
+        ["retried", "legacy"],
+      );
+    } finally {
+      fs.promises.rename = rename;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalid history file is preserved rather than replaced by stale global state", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-history-"));
+    try {
+      const filePath = path.join(tmp, "executionHistory.json");
+      fs.writeFileSync(filePath, "{broken");
+      setExecutionHistoryContextForTests({
+        ...stubContext(),
+        globalStorageUri: vscode.Uri.file(tmp),
+      });
+      assert.throws(() => getExecutionHistoryEntries(), /Cannot safely read/);
+      await assert.rejects(
+        () => enqueueExecutionHistoryEntry(entry({ taskId: "new" })),
+        /Cannot safely read/,
+      );
+      assert.strictEqual(fs.readFileSync(filePath, "utf8"), "{broken");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("best-effort history failure resolves and later records still persist", async () => {
     const ctx = stubContext();
     const update = ctx.globalState.update.bind(ctx.globalState);
@@ -173,6 +332,38 @@ suite("executionHistoryStore", () => {
     const entries = getExecutionHistoryEntries();
     assert.strictEqual(entries.length, 1);
     assert.strictEqual(entries[0].taskId, "good");
+  });
+
+  test("preserves observed Agent Host outcomes and tolerates old or invalid metadata", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    await ctx.globalState.update("executionHistory", [
+      entry({ taskId: "legacy" }),
+      entry({
+        taskId: "complete",
+        turnOutcome: "completed",
+        responseText: "observed",
+      }),
+      entry({ taskId: "unknown", status: "failed", turnOutcome: "unknown" }),
+      { ...entry({ taskId: "invalid" }), turnOutcome: 7, responseText: "observed" },
+      {
+        ...entry({ taskId: "inconsistent", status: "failed" }),
+        turnOutcome: "cancelled",
+        responseText: "observed",
+      },
+    ]);
+
+    const [legacy, complete, unknown, invalid, inconsistent] =
+      getExecutionHistoryEntries();
+    assert.strictEqual(legacy.turnOutcome, undefined);
+    assert.strictEqual(legacy.responseText, undefined);
+    assert.strictEqual(complete.turnOutcome, "completed");
+    assert.strictEqual(complete.responseText, "observed");
+    assert.strictEqual(unknown.turnOutcome, "unknown");
+    assert.strictEqual(invalid.turnOutcome, undefined);
+    assert.strictEqual(invalid.responseText, undefined);
+    assert.strictEqual(inconsistent.turnOutcome, "cancelled");
+    assert.strictEqual(inconsistent.responseText, undefined);
   });
 
   test("isExecutionHistoryEntry validates required fields", () => {

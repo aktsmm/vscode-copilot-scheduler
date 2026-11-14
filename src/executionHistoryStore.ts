@@ -1,9 +1,20 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
+import { cleanupOrphanedAtomicWriteTemps, writeFileAtomically } from "./atomic-file-write";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { logError } from "./logger";
+import { withTaskStoreLock } from "./task-store-lock";
+import type {
+  AgentHostResponseTextObservation,
+  AgentHostTurnOutcome,
+} from "./types";
 
 export const EXECUTION_HISTORY_KEY = "executionHistory";
+const EXECUTION_HISTORY_FILE_NAME = "executionHistory.json";
+const EXECUTION_HISTORY_MARKER_NAME = "executionHistory.initialized";
+const EXECUTION_HISTORY_FILE_INITIALIZED_KEY = "executionHistoryFileInitialized";
 export const EXECUTION_HISTORY_DEFAULT_LIMIT = 50;
 const EXECUTION_HISTORY_MIN_LIMIT = 10;
 const EXECUTION_HISTORY_MAX_LIMIT = 500;
@@ -48,15 +59,29 @@ export type ExecutionHistoryEntry = {
   promptFallbackReason?: string;
   /** Number of files attached to the executed request. */
   attachmentCount?: number;
+  /** Observed Agent Host turn outcome; absent for routes without this signal. */
+  turnOutcome?: AgentHostTurnOutcome;
+  /** Whether non-whitespace assistant text was observed during a completed turn. */
+  responseText?: AgentHostResponseTextObservation;
 };
 
-type StoreContext = Pick<vscode.ExtensionContext, "globalState">;
+type StoreContext = Pick<vscode.ExtensionContext, "globalState"> &
+  Partial<Pick<vscode.ExtensionContext, "globalStorageUri">>;
 
 let contextRef: StoreContext | undefined;
 let saveQueue: Promise<void> = Promise.resolve();
 
-export function initExecutionHistoryStore(context: StoreContext): void {
+export function initExecutionHistoryStore(
+  context: Pick<vscode.ExtensionContext, "globalState" | "globalStorageUri">,
+): void {
   contextRef = context;
+  const filePath = path.join(context.globalStorageUri.fsPath, EXECUTION_HISTORY_FILE_NAME);
+  void cleanupOrphanedAtomicWriteTemps(filePath).catch((error: unknown) =>
+    logError(
+      "[CopilotScheduler] Failed to clean history temporary files:",
+      sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error)),
+    ),
+  );
 }
 
 export function setExecutionHistoryContextForTests(
@@ -212,6 +237,20 @@ function normalizeExecutionHistoryEntry(
     entry.attachmentCount > 0
       ? entry.attachmentCount
       : undefined;
+  const turnOutcome =
+    entry.turnOutcome === "completed" ||
+    entry.turnOutcome === "failed" ||
+    entry.turnOutcome === "cancelled" ||
+    entry.turnOutcome === "unknown"
+      ? entry.turnOutcome
+      : undefined;
+  const responseText =
+    turnOutcome === "completed" &&
+    (entry.responseText === "observed" ||
+      entry.responseText === "not_observed" ||
+      entry.responseText === "unknown")
+      ? entry.responseText
+      : undefined;
 
   return {
     taskId: entry.taskId,
@@ -233,6 +272,8 @@ function normalizeExecutionHistoryEntry(
     promptResolvedAt,
     promptFallbackReason,
     attachmentCount,
+    turnOutcome,
+    responseText,
   };
 }
 
@@ -251,11 +292,47 @@ export function getExecutionHistoryLimit(): number {
   );
 }
 
-export function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
-  if (!contextRef) {
-    return [];
+function historyFilePath(context: StoreContext): string | undefined {
+  return context.globalStorageUri
+    ? path.join(context.globalStorageUri.fsPath, EXECUTION_HISTORY_FILE_NAME)
+    : undefined;
+}
+
+function historyFileWasInitialized(filePath: string): boolean {
+  const markerPath = path.join(path.dirname(filePath), EXECUTION_HISTORY_MARKER_NAME);
+  try {
+    if (fs.readFileSync(markerPath, "utf8") !== "1") {
+      throw new Error("Invalid execution history marker");
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error("Cannot safely read execution history marker");
   }
-  const raw = contextRef.globalState.get<unknown[]>(EXECUTION_HISTORY_KEY, []);
+}
+
+function readExecutionHistoryEntries(context: StoreContext): ExecutionHistoryEntry[] {
+  const filePath = historyFilePath(context);
+  let raw: unknown;
+  if (filePath) {
+    try {
+      raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+      if (!Array.isArray(raw)) {
+        throw new Error("Invalid execution history file");
+      }
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code !== "ENOENT" ||
+        historyFileWasInitialized(filePath) ||
+        context.globalState.get<boolean>(EXECUTION_HISTORY_FILE_INITIALIZED_KEY, false)
+      ) {
+        throw new Error("Cannot safely read execution history");
+      }
+    }
+  }
+  if (raw === undefined) {
+    raw = context.globalState.get<unknown>(EXECUTION_HISTORY_KEY, []);
+  }
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -264,29 +341,74 @@ export function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
     .map(normalizeExecutionHistoryEntry);
 }
 
+export function getExecutionHistoryEntries(): ExecutionHistoryEntry[] {
+  if (!contextRef) return [];
+  try {
+    return readExecutionHistoryEntries(contextRef);
+  } catch (error) {
+    logError(
+      "[CopilotScheduler] Failed to read execution history:",
+      sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error)),
+    );
+    throw error;
+  }
+}
+
 async function appendExecutionHistoryEntry(
+  context: StoreContext,
   entry: ExecutionHistoryEntry,
 ): Promise<void> {
-  if (!contextRef) {
-    return;
+  const append = async (): Promise<void> => {
+    const existing = readExecutionHistoryEntries(context);
+    const normalizedEntry = normalizeExecutionHistoryEntry(entry);
+    const limit = getExecutionHistoryLimit();
+    let retainedForTask = 0;
+    const retained = existing.filter((existingEntry) => {
+      if (existingEntry.taskId !== normalizedEntry.taskId) return true;
+      retainedForTask += 1;
+      return retainedForTask < limit;
+    });
+    const next = [normalizedEntry, ...retained];
+    const filePath = historyFilePath(context);
+    if (!filePath) {
+      await context.globalState.update(EXECUTION_HISTORY_KEY, next);
+      return;
+    }
+    if (!historyFileWasInitialized(filePath)) {
+      if (!fs.existsSync(filePath)) {
+        await writeFileAtomically(filePath, JSON.stringify(existing));
+      }
+      await writeFileAtomically(
+        path.join(path.dirname(filePath), EXECUTION_HISTORY_MARKER_NAME),
+        "1",
+      );
+    }
+    await writeFileAtomically(filePath, JSON.stringify(next));
+    try {
+      await context.globalState.update(EXECUTION_HISTORY_FILE_INITIALIZED_KEY, true);
+      await context.globalState.update(EXECUTION_HISTORY_KEY, next);
+    } catch (error) {
+      logError(
+        "[CopilotScheduler] Failed to mirror execution history (file saved):",
+        sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error)),
+      );
+    }
+  };
+  const filePath = historyFilePath(context);
+  if (filePath) {
+    await withTaskStoreLock(`${filePath}.lock`, append);
+  } else {
+    await append();
   }
-  const existing = getExecutionHistoryEntries();
-  const normalizedEntry = normalizeExecutionHistoryEntry(entry);
-  const limit = getExecutionHistoryLimit();
-  let retainedForTask = 0;
-  const retained = existing.filter((existingEntry) => {
-    if (existingEntry.taskId !== normalizedEntry.taskId) return true;
-    retainedForTask += 1;
-    return retainedForTask < limit;
-  });
-  const next = [normalizedEntry, ...retained];
-  await contextRef.globalState.update(EXECUTION_HISTORY_KEY, next);
 }
 
 export function enqueueExecutionHistoryEntry(
   entry: ExecutionHistoryEntry,
 ): Promise<void> {
-  const op = saveQueue.then(() => appendExecutionHistoryEntry(entry));
+  const context = contextRef;
+  const op = saveQueue.then(() =>
+    context ? appendExecutionHistoryEntry(context, entry) : undefined,
+  );
   saveQueue = op.catch((error) => {
     const errorMessage =
       error instanceof Error ? error.message : String(error ?? "");

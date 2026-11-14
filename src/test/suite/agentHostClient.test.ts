@@ -42,7 +42,11 @@ interface FakeHost {
 async function startFakeHost(
   tmp: string,
   behaviour: {
-    finish?: (send: (action: Record<string, unknown>) => void) => void;
+    finish?: (
+      send: (action: Record<string, unknown>, rejectionReason?: string) => void,
+    ) => void;
+    cancel?: (send: (action: Record<string, unknown>) => void) => void;
+    acceptStart?: boolean;
     missingSessions?: boolean;
   } = {},
 ): Promise<FakeHost> {
@@ -56,12 +60,20 @@ async function startFakeHost(
 
   wss.on("connection", (socket: WebSocket, request) => {
     assert.ok(request.url?.includes("tkn=secret"));
-    const notify = (channel: string, action: Record<string, unknown>) =>
+    const notify = (
+      channel: string,
+      action: Record<string, unknown>,
+      rejectionReason?: string,
+    ) =>
       socket.send(
         JSON.stringify({
           jsonrpc: "2.0",
           method: "action",
-          params: { channel, action },
+          params: {
+            channel,
+            action,
+            ...(rejectionReason === undefined ? {} : { rejectionReason }),
+          },
         }),
       );
 
@@ -110,10 +122,13 @@ async function startFakeHost(
         case "dispatchAction": {
           reply(null);
           const channel = message.params.channel as string;
-          const action = message.params.action as { type: string };
+          const action = message.params.action as { type: string; turnId?: string };
           if (action.type === "chat/turnStarted") {
-            const send = (next: Record<string, unknown>) =>
-              notify(channel, next);
+            const send = (next: Record<string, unknown>, rejectionReason?: string) =>
+              notify(channel, { turnId: action.turnId, ...next }, rejectionReason);
+            if (behaviour.acceptStart !== false) {
+              send({ type: "chat/turnStarted" });
+            }
             if (behaviour.finish) {
               behaviour.finish(send);
             } else {
@@ -123,6 +138,10 @@ async function startFakeHost(
               });
               send({ type: "chat/turnComplete" });
             }
+          } else if (action.type === "chat/turnCancelled" && behaviour.cancel) {
+            behaviour.cancel((next) =>
+              notify(channel, { turnId: action.turnId, ...next }),
+            );
           }
           break;
         }
@@ -165,6 +184,124 @@ suite("Agent Host client", () => {
 
   teardown(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("a dispatch guard can allow or block the Agent Host turn", async () => {
+    const host = await startFakeHost(tmp);
+    try {
+      let guards = 0;
+      const result = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        dispatchGuard: async (dispatch) => { guards++; dispatch(); },
+      });
+      assert.strictEqual(result.responseText, "not_observed");
+      assert.strictEqual(guards, 1);
+      const starts = () => host.calls.filter(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnStarted",
+      ).length;
+      assert.strictEqual(starts(), 1);
+      const blocked = new Error("reservation changed");
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          dispatchGuard: async () => { throw blocked; },
+        }),
+        (error: unknown) => error === blocked,
+      );
+      assert.strictEqual(starts(), 1);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a guard failure after dispatch is reported as an unknown outcome", async () => {
+    const host = await startFakeHost(tmp);
+    try {
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          dispatchGuard: async (dispatch) => {
+            dispatch();
+            throw new Error("lock release failed");
+          },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a completed turn waits for the dispatch guard and reports release failure", async () => {
+    let responseSent!: () => void;
+    const sent = new Promise<void>((resolve) => { responseSent = resolve; });
+    const host = await startFakeHost(tmp, {
+      finish: (send) => {
+        send({ type: "chat/turnComplete" });
+        responseSent();
+      },
+    });
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      let settled = false;
+      const run = runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        dispatchGuard: async (dispatch) => {
+          dispatch();
+          await hold;
+          throw new Error("lock release failed");
+        },
+      });
+      void run.then(() => { settled = true; }, () => { settled = true; });
+      await sent;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      const settledBeforeRelease = settled;
+      release();
+      await assert.rejects(
+        run,
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+      assert.strictEqual(settledBeforeRelease, false);
+    } finally {
+      release();
+      await host.close();
+    }
+  });
+
+  test("a timed-out dispatch guard cannot send when it later resumes", async () => {
+    const host = await startFakeHost(tmp);
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          timeoutMs: 100,
+          dispatchGuard: async (dispatch) => { await hold; dispatch(); },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError && error.turnOutcome === "unknown",
+      );
+      release();
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      assert.ok(!host.calls.some(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnStarted",
+      ));
+    } finally {
+      release();
+      await host.close();
+    }
   });
 
   suite("endpoint registry", () => {
@@ -281,6 +418,7 @@ suite("Agent Host client", () => {
         chatUri: "ahp-chat:/chat-1",
         requestedModel: "claude-sonnet-5.5",
         appliedModel: "claude-sonnet-5.5",
+        responseText: "not_observed",
       });
       const create = host.calls.find((c) => c.method === "createSession");
       assert.deepStrictEqual(create?.params.workingDirectories, [
@@ -359,8 +497,100 @@ suite("Agent Host client", () => {
         (error: unknown) =>
           error instanceof AgentHostError &&
           error.kind === "failed" &&
+          error.turnOutcome === "failed" &&
           error.message === "context budget exceeded",
       );
+    });
+
+    test("distinguishes response text from reasoning and tool-only turns", async () => {
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({ type: "chat/responsePart", part: { id: "p1", kind: "markdown", content: "" } });
+          send({ type: "chat/delta", partId: "p1", content: "answer" });
+          send({ type: "chat/turnComplete" });
+        },
+      });
+      assert.strictEqual(
+        (await runAgentHostTurn(baseRequest(host.endpoint))).responseText,
+        "observed",
+      );
+      await host.close();
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({ type: "chat/responsePart", part: { id: "r1", kind: "reasoning", content: "thinking" } });
+          send({ type: "chat/responsePart", part: { id: "t1", kind: "toolCall" } });
+          send({ type: "chat/responsePart", part: { id: "p1", kind: "markdown", content: " \n" } });
+          send({ type: "chat/turnComplete" });
+        },
+      });
+      assert.strictEqual(
+        (await runAgentHostTurn(baseRequest(host.endpoint))).responseText,
+        "not_observed",
+      );
+    });
+
+    test("reports text as unknown when response parts or deltas cannot be interpreted", async () => {
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({ type: "chat/delta", partId: "missing", content: "answer" });
+          send({ type: "chat/turnComplete" });
+        },
+      });
+      assert.strictEqual(
+        (await runAgentHostTurn(baseRequest(host.endpoint))).responseText,
+        "unknown",
+      );
+    });
+
+    test("does not count another turn's text as the scheduled response", async () => {
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({
+            type: "chat/responsePart",
+            turnId: "other-turn",
+            part: { id: "p1", kind: "markdown", content: "unrelated" },
+          });
+          send({ type: "chat/turnComplete" });
+        },
+      });
+      assert.strictEqual(
+        (await runAgentHostTurn(baseRequest(host.endpoint))).responseText,
+        "not_observed",
+      );
+    });
+
+    test("records a cancelled turn without treating a rejected cancellation as accepted", async () => {
+      host = await startFakeHost(tmp, {
+        finish: (send) => {
+          send({ type: "chat/turnCancelled" }, "no active turn");
+          send({ type: "chat/turnCancelled" });
+        },
+      });
+      await assert.rejects(
+        runAgentHostTurn(baseRequest(host.endpoint)),
+        (error: unknown) =>
+          error instanceof AgentHostError && error.turnOutcome === "cancelled",
+      );
+    });
+
+    test("reports a rejected start without retrying another route", async () => {
+      host = await startFakeHost(tmp, {
+        acceptStart: false,
+        finish: (send) =>
+          send({ type: "chat/turnStarted" }, ""),
+      });
+      let revealed = false;
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          onSessionStarted: () => { revealed = true; },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+      assert.strictEqual(revealed, false);
     });
 
     test("cancels and fails a turn that outlives the timeout", async () => {
@@ -368,7 +598,9 @@ suite("Agent Host client", () => {
       await assert.rejects(
         runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 150 }),
         (error: unknown) =>
-          error instanceof AgentHostError && error.kind === "failed",
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
       );
       const cancelled = host.calls.some(
         (c) =>
@@ -376,6 +608,20 @@ suite("Agent Host client", () => {
           (c.params.action as { type: string }).type === "chat/turnCancelled",
       );
       assert.ok(cancelled);
+    });
+
+    test("waits for a cancellation action rather than treating the RPC reply as confirmation", async () => {
+      host = await startFakeHost(tmp, {
+        finish: () => undefined,
+        cancel: (send) =>
+          setTimeout(() => send({ type: "chat/turnCancelled" }), 30),
+      });
+      await assert.rejects(
+        runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 100 }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.turnOutcome === "cancelled",
+      );
     });
 
     test("tells the caller once the host has accepted the turn", async () => {
@@ -399,6 +645,7 @@ suite("Agent Host client", () => {
       host = await startFakeHost(tmp, {
         finish: (send) => {
           send({ type: "chat/turnComplete", turnId: "some-other-turn" });
+          send({ type: "chat/turnComplete", turnId: undefined });
           send({ type: "chat/error", turnId: "some-other-turn", part: {} });
         },
       });
@@ -406,7 +653,8 @@ suite("Agent Host client", () => {
         runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 400 }),
         (error: unknown) =>
           error instanceof AgentHostError &&
-          error.message === "The Agent Host run timed out.",
+          error.message === "The Agent Host run timed out." &&
+          error.turnOutcome === "unknown",
       );
 
       await host.close();
@@ -422,6 +670,7 @@ suite("Agent Host client", () => {
         (error: unknown) =>
           error instanceof AgentHostError &&
           error.kind === "failed" &&
+          error.turnOutcome === "unknown" &&
           /closed/.test(error.message),
       );
     });

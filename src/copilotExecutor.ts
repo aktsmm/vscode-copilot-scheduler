@@ -633,6 +633,12 @@ export class CopilotExecutor {
 
     // The CLI route needs a model to apply; without one the chat route is used as before.
     if (options?.useCopilotCli === true && (options.model ?? "").trim()) {
+      if (options.dispatchGuard && !options.allowUnguardedFallback) {
+        return this.warnAndThrow(
+          createPromptBlockedError(messages.oneTimeDispatchRequiresAgentHost(), "agentHostUnavailable"),
+          processedPrompt,
+        );
+      }
       return this.executePromptViaCopilotCli(processedPrompt, options);
     }
 
@@ -673,6 +679,12 @@ export class CopilotExecutor {
         return attempt.result;
       }
       agentHostFallbackReason = attempt.fallbackReason;
+    }
+    if (options?.dispatchGuard && !options.allowUnguardedFallback) {
+      return this.warnAndThrow(
+        createPromptBlockedError(messages.oneTimeDispatchRequiresAgentHost(), "agentHostUnavailable"),
+        routing.legacyPrompt,
+      );
     }
     let requestedModel: NormalizedModelSelection;
     try {
@@ -847,23 +859,13 @@ export class CopilotExecutor {
         );
       }
     } catch (error) {
-      // Show error and offer to copy to clipboard (this is the primary
-      // user-facing notification for execution failures — callers should
-      // avoid showing a second notification for the same error).
-      const action = await vscode.window.showWarningMessage(
+      return this.warnAndThrow(
+        error,
+        routing.legacyPrompt,
         isPromptBlockedError(error) && error instanceof Error
           ? error.message
           : messages.autoExecuteFailed(),
-        messages.actionCopyPrompt(),
-        messages.actionCancel(),
       );
-
-      if (action === messages.actionCopyPrompt()) {
-        await vscode.env.clipboard.writeText(routing.legacyPrompt);
-        notifyInfo(messages.promptCopied());
-      }
-
-      throw error;
     }
 
     return {
@@ -917,7 +919,13 @@ export class CopilotExecutor {
     let modelId: string | undefined;
     try {
       const selection = normalizeModelSelection(options);
-      if (hasModelSelection(selection)) {
+      const hasSelector = hasModelSelection({
+        ...selection,
+        modelConfiguration: undefined,
+      });
+      const hasConfiguration =
+        Object.keys(selection.modelConfiguration ?? {}).length > 0;
+      if (hasSelector || hasConfiguration) {
         modelId = selection.model?.trim();
         if (
           !modelId ||
@@ -997,6 +1005,7 @@ export class CopilotExecutor {
         })),
         autoApprove,
         timeoutMs: timeoutMinutes * 60 * 1000,
+        ...(options?.dispatchGuard ? { dispatchGuard: options.dispatchGuard } : {}),
         onSessionStarted: (ref) => {
           if (config.get<boolean>("agentHostOpenSession", true) === false) {
             return;
@@ -1050,10 +1059,15 @@ export class CopilotExecutor {
           agentHostRun: {
             ...(requested ? { requestedModel: requested } : {}),
             ...(applied ? { appliedModel: applied } : {}),
+            turnOutcome: "completed",
+            responseText: turn.responseText,
           },
         },
       };
     } catch (error) {
+      if (isPromptBlockedError(error)) {
+        return this.warnAndThrow(error, routing.legacyPrompt);
+      }
       if (error instanceof AgentHostError && error.kind !== "failed") {
         return decline(error.message);
       }
@@ -1063,10 +1077,19 @@ export class CopilotExecutor {
       )
         .replace(/\s+/g, " ")
         .trim();
+      const turnOutcome =
+        error instanceof AgentHostError
+          ? (error.turnOutcome ?? "unknown")
+          : "unknown";
       return this.warnAndThrow(
         createPromptBlockedError(
-          messages.agentHostFailed(detail),
+          turnOutcome === "unknown"
+            ? messages.agentHostOutcomeUnknown(detail)
+            : turnOutcome === "cancelled"
+              ? messages.agentHostCancelled(detail)
+              : messages.agentHostFailed(detail),
           "agentHostFailed",
+          turnOutcome,
         ),
         routing.legacyPrompt,
       );
@@ -1114,16 +1137,36 @@ export class CopilotExecutor {
     }
   }
 
-  /** Shows the failure with a copy-prompt action, then throws it (the primary user notification). */
-  private async warnAndThrow(error: Error, promptForCopy: string): Promise<never> {
-    const action = await vscode.window.showWarningMessage(
-      error.message,
-      messages.actionCopyPrompt(),
-      messages.actionCancel(),
-    );
-    if (action === messages.actionCopyPrompt()) {
-      await vscode.env.clipboard.writeText(promptForCopy);
-      notifyInfo(messages.promptCopied());
+  private warnAndThrow(
+    error: unknown,
+    promptForCopy: string,
+    warning?: string,
+  ): never {
+    try {
+      void Promise.resolve(
+        vscode.window.showWarningMessage(
+          warning ?? (error instanceof Error ? error.message : messages.autoExecuteFailed()),
+          messages.actionCopyPrompt(),
+          messages.actionCancel(),
+        ),
+      )
+        .then(async (action) => {
+          if (action === messages.actionCopyPrompt()) {
+            await vscode.env.clipboard.writeText(promptForCopy);
+            notifyInfo(messages.promptCopied());
+          }
+        })
+        .catch((notificationError: unknown) =>
+          logError(
+            "[CopilotScheduler] Execution warning failed:",
+            toSafeErrorDetails(notificationError),
+          ),
+        );
+    } catch (notificationError) {
+      logError(
+        "[CopilotScheduler] Execution warning failed:",
+        toSafeErrorDetails(notificationError),
+      );
     }
     throw error;
   }
@@ -1140,18 +1183,13 @@ export class CopilotExecutor {
     try {
       return await this.runCopilotCli(prompt, options);
     } catch (error) {
-      const action = await vscode.window.showWarningMessage(
+      return this.warnAndThrow(
+        error,
+        prompt,
         isPromptBlockedError(error) && error instanceof Error
           ? error.message
           : messages.autoExecuteFailed(),
-        messages.actionCopyPrompt(),
-        messages.actionCancel(),
       );
-      if (action === messages.actionCopyPrompt()) {
-        await vscode.env.clipboard.writeText(prompt);
-        notifyInfo(messages.promptCopied());
-      }
-      throw error;
     }
   }
 

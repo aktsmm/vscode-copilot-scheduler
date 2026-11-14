@@ -292,6 +292,8 @@ suite("lmTools scheduler_query", () => {
       promptPathDisplay: "daily.prompt.md",
       promptHash: "abc123def456",
       promptResolvedAt: "2026-07-30T08:59:59.000Z",
+      turnOutcome: "completed",
+      responseText: "not_observed",
     });
 
     const tool = createSchedulerQueryTool(
@@ -306,6 +308,8 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(history[0]?.promptSource, "file");
     assert.strictEqual(history[0]?.promptPathDisplay, "daily.prompt.md");
     assert.strictEqual(history[0]?.promptHash, "abc123def456");
+    assert.strictEqual(history[0]?.turnOutcome, "completed");
+    assert.strictEqual(history[0]?.responseText, "not_observed");
   });
 
   test("kind=history reports truncation and preserves newest-first order", async () => {
@@ -349,7 +353,7 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.retentionScope, "task");
     assert.deepStrictEqual(payload.statusSemantics, {
       success: "prompt_dispatched",
-      note: "success confirms prompt dispatch, not model response completion",
+      note: "status alone confirms prompt dispatch, not model response completion",
     });
     assert.deepStrictEqual(
       history.map((item) => item.taskId),

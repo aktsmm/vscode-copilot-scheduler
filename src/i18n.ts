@@ -64,15 +64,20 @@ export const messages = {
   taskExecuting: (name: string) =>
     t(`Executing task "${name}"...`, `タスク「${name}」を実行中...`),
   lmToolRunTitle: () => t("Run scheduler task now", "タスクを今すぐ実行"),
+  oneTimeDispatchRequiresAgentHost: () =>
+    t(
+      "The one-time task cannot be safely dispatched through the chat or CLI fallback. Check the Agent Host and reschedule the task before retrying.",
+      "単発タスクはチャットや CLI の代替経路では安全に送信できません。Agent Host を確認し、日時を再設定してから再実行してください。",
+    ),
   lmToolRunConfirmation: (name: string, afterRun?: "disable" | "delete") =>
     afterRun
       ? t(
-          `Copilot Chat wants to run task "${name}" once now. After dispatch, it will be ${afterRun === "delete" ? "deleted (history retained)" : "disabled"}. Success confirms prompt dispatch, not response completion.`,
-          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。送信後に${afterRun === "delete" ? "削除します（履歴は保持）" : "無効化します"}。成功はプロンプト送信を示し、応答完了を意味しません。`,
+          `Copilot Chat wants to run task "${name}" once now. After a successful run, it will be ${afterRun === "delete" ? "deleted (history retained)" : "disabled"}. A completed turn does not prove the requested work succeeded.`,
+          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。実行成功後に${afterRun === "delete" ? "削除します（履歴は保持）" : "無効化します"}。ターンの完了は依頼した作業の成功を保証しません。`,
         )
       : t(
-          `Copilot Chat wants to run task "${name}" once now. Its enabled state will not change. Success confirms prompt dispatch, not response completion.`,
-          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。有効/無効の状態は変更しません。成功はプロンプト送信を示し、応答完了を意味しません。`,
+          `Copilot Chat wants to run task "${name}" once now. Its enabled state will not change. A completed turn does not prove the requested work succeeded.`,
+          `Copilot Chat がタスク「${name}」を今すぐ1回実行します。有効/無効の状態は変更しません。ターンの完了は依頼した作業の成功を保証しません。`,
         ),
   taskExecutionSummary: (name: string, result: string, nextRun: string) =>
     t(
@@ -80,6 +85,7 @@ export const messages = {
       `タスク「${name}」: ${result}（次回実行: ${nextRun}）`,
     ),
   executionResultDispatched: () => t("Dispatched", "送信済み"),
+  executionResultTurnCompleted: () => t("Turn completed", "ターン完了"),
   executionResultFailed: () => t("Failed", "失敗"),
   executionResultBlocked: () => t("Blocked", "実行前に中止"),
   promptFileBlocked: (name: string, reason: string) =>
@@ -136,6 +142,16 @@ export const messages = {
     t("Execution history is empty", "実行履歴はまだありません"),
   executionHistoryPickPlaceholder: () =>
     t("Recent execution history (latest first)", "実行履歴（新しい順）"),
+  executionHistoryTurnOutcome: () => t("Agent Host turn", "Agent Host ターン"),
+  executionHistoryTurnCompleted: () => t("Completed", "完了"),
+  executionHistoryTurnFailed: () => t("Failed", "失敗"),
+  executionHistoryTurnCancelled: () => t("Cancelled", "キャンセル"),
+  executionHistoryTurnUnknown: () => t("Unknown", "結果不明"),
+  executionHistoryResponseText: () => t("Response text", "応答テキスト"),
+  executionHistoryResponseTextObserved: () => t("Observed", "確認済み"),
+  executionHistoryResponseTextNotObserved: () =>
+    t("Not observed", "確認できず"),
+  executionHistoryResponseTextUnknown: () => t("Unknown", "判定不能"),
   executionHistoryPromptSource: () => t("Prompt", "プロンプト"),
   executionHistoryPromptPath: () => t("Path", "パス"),
   executionHistoryPromptHash: () => t("Hash", "ハッシュ"),
@@ -179,6 +195,21 @@ export const messages = {
       "Task execution is currently unavailable",
       "現在タスク実行を利用できません",
     ),
+  manualRunClaimFailed: () =>
+    t(
+      "The task could not be verified or reserved safely. No prompt was sent; check the saved state before trying again.",
+      "タスクを安全に確認または確保できなかったため、プロンプトは送信されていません。再実行する前に保存状態を確認してください。",
+    ),
+  manualRunChangedAfterClaim: () =>
+    t(
+      "The one-time task changed after it was reserved. No prompt was sent. The reservation remains disabled; review and reschedule it before running again.",
+      "単発タスクを確保した後に設定が変更されたため、プロンプトは送信されていません。確保済みタスクは無効のままです。内容を確認し、日時を再設定してから実行してください。",
+    ),
+  taskStoreReservationFailed: () =>
+    t(
+      "Some scheduled tasks cannot be verified or reserved safely and may not run. Check task storage; eligible tasks will be retried.",
+      "一部のスケジュールタスクを安全に確認または確保できず、実行できない可能性があります。タスクの保存状態を確認してください。実行可能なタスクは再試行されます。",
+    ),
   taskAlreadyRunning: (name: string) =>
     t(
       `Task "${name}" is already running`,
@@ -186,8 +217,8 @@ export const messages = {
     ),
   oneTimeTaskCompleted: (name: string) =>
     t(
-      `Task "${name}" has already run. Set a new run time before enabling it.`,
-      `タスク「${name}」は実行済みです。新しい実行日時を設定してから有効化してください。`,
+      `Task "${name}" was already claimed or attempted. Set a new run time before enabling it.`,
+      `タスク「${name}」は確保済みまたは実行済みです。新しい実行日時を設定してから有効化してください。`,
     ),
   taskStoreBusy: () =>
     t(
@@ -534,6 +565,16 @@ export const messages = {
     t(
       `The Agent Host run failed.${detail ? ` ${detail}` : ""}`,
       `Agent Host での実行に失敗しました。${detail ? ` ${detail}` : ""}`,
+    ),
+  agentHostCancelled: (detail: string) =>
+    t(
+      `The Agent Host turn was cancelled.${detail ? ` ${detail}` : ""}`,
+      `Agent Host のターンはキャンセルされました。${detail ? ` ${detail}` : ""}`,
+    ),
+  agentHostOutcomeUnknown: (detail: string) =>
+    t(
+      `The Agent Host turn outcome is unknown and it may still be running. Check Chat and history before retrying.${detail ? ` ${detail}` : ""}`,
+      `Agent Host のターン結果は不明で、実行が続いている可能性があります。再実行する前に Chat と履歴を確認してください。${detail ? ` ${detail}` : ""}`,
     ),
   agentHostModelMismatch: (requested: string, applied: string) =>
     t(
