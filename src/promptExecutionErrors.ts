@@ -5,6 +5,8 @@
  * `scheduleManager.ts` (which classifies manual-run failures) cannot drift apart.
  */
 
+import type { AgentHostTurnOutcome } from "./types";
+
 export const PROMPT_BLOCKED_EXECUTION_ERROR_FLAG =
   "copilotSchedulerPromptBlocked";
 
@@ -22,21 +24,18 @@ export type PromptBlockedReason =
   | "copilotCliUnavailable"
   | "copilotCliFailed"
   | "agentHostUnavailable"
+  | "taskClaimChanged"
   | "agentHostFailed";
 
 export function createPromptBlockedError(
   message: string,
   reason: PromptBlockedReason,
+  agentHostTurnOutcome?: Exclude<AgentHostTurnOutcome, "completed">,
 ): Error {
-  const error = new Error(message);
-  try {
-    (error as unknown as Record<string, unknown>)[
-      PROMPT_BLOCKED_EXECUTION_ERROR_FLAG
-    ] = reason;
-  } catch {
-    // best-effort marker only
-  }
-  return error;
+  return Object.assign(new Error(message), {
+    [PROMPT_BLOCKED_EXECUTION_ERROR_FLAG]: reason,
+    ...(agentHostTurnOutcome ? { agentHostTurnOutcome } : {}),
+  });
 }
 
 export function isPromptBlockedError(error: unknown): boolean {
@@ -59,4 +58,16 @@ export function getPromptBlockedReason(
   return (error as Record<string, unknown>)[
     PROMPT_BLOCKED_EXECUTION_ERROR_FLAG
   ] as PromptBlockedReason;
+}
+
+export function getAgentHostTurnFailure(
+  error: unknown,
+): Exclude<AgentHostTurnOutcome, "completed"> | undefined {
+  if (getPromptBlockedReason(error) !== "agentHostFailed") {
+    return undefined;
+  }
+  const outcome = (error as Record<string, unknown>).agentHostTurnOutcome;
+  return outcome === "failed" || outcome === "cancelled" || outcome === "unknown"
+    ? outcome
+    : undefined;
 }

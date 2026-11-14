@@ -5,7 +5,11 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import { ScheduleManager } from "./scheduleManager";
+import {
+  ScheduleManager,
+  type ManualRunExecutionInfo,
+  type TaskExecutionCallbackResult,
+} from "./scheduleManager";
 import { CopilotExecutor } from "./copilotExecutor";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
@@ -31,6 +35,7 @@ import {
 } from "./promptResolver";
 import {
   createPromptBlockedError,
+  getAgentHostTurnFailure,
   getPromptBlockedReason,
   isPromptBlockedError,
   type PromptBlockedReason,
@@ -75,6 +80,8 @@ import type {
   ModelFallbackInfo,
   CopilotCliRunInfo,
   AgentHostRunInfo,
+  AgentHostResponseTextObservation,
+  AgentHostTurnOutcome,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -468,10 +475,13 @@ function buildExecutionSummary(
   taskName: string,
   status: ExecutionHistoryStatus,
   nextRunDate?: Date,
+  turnOutcome?: AgentHostTurnOutcome,
 ): string {
   const resultLabel =
     status === "success"
-      ? messages.executionResultDispatched()
+      ? turnOutcome === "completed"
+        ? messages.executionResultTurnCompleted()
+        : messages.executionResultDispatched()
       : status === "blocked"
         ? messages.executionResultBlocked()
         : messages.executionResultFailed();
@@ -531,6 +541,28 @@ function buildExecutionHistoryDetail(entry: ExecutionHistoryEntry): string {
   const lines: string[] = [];
   if (entry.detail?.trim()) {
     lines.push(entry.detail.trim());
+  }
+
+  if (entry.turnOutcome) {
+    const outcomeLabels = {
+      completed: messages.executionHistoryTurnCompleted,
+      failed: messages.executionHistoryTurnFailed,
+      cancelled: messages.executionHistoryTurnCancelled,
+      unknown: messages.executionHistoryTurnUnknown,
+    };
+    lines.push(
+      `${messages.executionHistoryTurnOutcome()}: ${outcomeLabels[entry.turnOutcome]()}`,
+    );
+  }
+  if (entry.responseText) {
+    const responseLabels = {
+      observed: messages.executionHistoryResponseTextObserved,
+      not_observed: messages.executionHistoryResponseTextNotObserved,
+      unknown: messages.executionHistoryResponseTextUnknown,
+    };
+    lines.push(
+      `${messages.executionHistoryResponseText()}: ${responseLabels[entry.responseText]()}`,
+    );
   }
 
   if (entry.runAt) {
@@ -595,7 +627,9 @@ function buildExecutionHistoryQuickPickItems(
           : "❌";
     const statusLabel =
       entry.status === "success"
-        ? messages.executionResultDispatched()
+        ? entry.turnOutcome === "completed"
+          ? messages.executionResultTurnCompleted()
+          : messages.executionResultDispatched()
         : entry.status === "blocked"
           ? messages.executionResultBlocked()
           : messages.executionResultFailed();
@@ -740,12 +774,25 @@ type ManualRunFailureResult = {
     | "taskNotFound"
     | "executorUnavailable"
     | "alreadyRunning"
+    | "taskChanged"
     | "oneTimeCompleted"
+    | "claimFailed"
     | "promptBlocked"
     | "executionFailed"
     | "saveFailed";
   errorMessage?: string;
   userNotified?: boolean;
+  turnOutcome?: AgentHostTurnOutcome;
+  responseText?: AgentHostResponseTextObservation;
+  executionInfo?: ManualRunExecutionInfo;
+};
+
+type ManualRunSuccessResult = {
+  ok: true;
+  claimId?: string;
+  turnOutcome?: "completed";
+  responseText?: AgentHostResponseTextObservation;
+  executionInfo?: ManualRunExecutionInfo;
 };
 
 const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
@@ -782,6 +829,24 @@ function handleManualRunFailure(
   if (runResult.reason === "oneTimeCompleted") {
     const msg = messages.oneTimeTaskCompleted(taskName);
     notifyInfo(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "claimFailed") {
+    const msg = messages.manualRunClaimFailed();
+    notifyError(msg);
+    if (showWebviewError) {
+      SchedulerWebview.showError(msg);
+    }
+    return;
+  }
+
+  if (runResult.reason === "taskChanged") {
+    const msg = runResult.errorMessage || messages.taskStoreChangedExternally();
+    notifyError(msg);
     if (showWebviewError) {
       SchedulerWebview.showError(msg);
     }
@@ -1114,11 +1179,12 @@ async function handleOpenPromptFile(taskId: string): Promise<void> {
 
 async function appendManualRunHistory(
   task: ScheduledTask,
-  runResult: { ok: true } | ManualRunFailureResult,
+  runResult: ManualRunSuccessResult | ManualRunFailureResult,
 ): Promise<void> {
   const promptMetadata = buildPromptHistoryMetadata(
     takePromptResolution(task.id),
   );
+  const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
 
   if (runResult.ok) {
     const latestTask = scheduleManager.getTask(task.id) ?? task;
@@ -1127,7 +1193,14 @@ async function appendManualRunHistory(
       !Number.isNaN(latestTask.nextRun.getTime())
         ? latestTask.nextRun
         : undefined;
-    notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
+    notifyInfo(
+      buildExecutionSummary(
+        task.name,
+        "success",
+        nextRunDate,
+        agentHostRun?.turnOutcome,
+      ),
+    );
     const nextRunAt =
       latestTask.nextRun instanceof Date &&
       !Number.isNaN(latestTask.nextRun.getTime())
@@ -1141,14 +1214,23 @@ async function appendManualRunHistory(
       executedAt: new Date().toISOString(),
       runAt: task.runAt,
       nextRunAt,
-      attachmentCount: latestTask.attachments?.length,
+      attachmentCount:
+        runResult.executionInfo?.attachmentCount ?? latestTask.attachments?.length,
       detail: takeModelFallbackDetail(task.id),
+      turnOutcome: agentHostRun?.turnOutcome,
+      responseText: agentHostRun?.responseText,
       ...promptMetadata,
     };
     if (task.runAt && task.afterRun === "delete") {
       try {
         await enqueueExecutionHistory(entry);
-        await scheduleManager.deleteTask(task.id);
+        if (runResult.claimId) {
+          await scheduleManager.deleteCompletedOneTimeTask(
+            task.id,
+            task.runAt,
+            runResult.claimId,
+          );
+        }
       } catch (error) {
         logError(
           "[CopilotScheduler] One-time task history or cleanup failed:",
@@ -1171,14 +1253,23 @@ async function appendManualRunHistory(
       : runResult.reason === "executorUnavailable"
         ? messages.manualRunUnavailable()
         : messages.taskNotFound();
+  const executionDetail = takeModelFallbackDetail(task.id);
   await recordExecutionHistoryBestEffort({
     taskId: task.id,
     taskName: task.name,
     trigger: "manual",
-    status: runResult.reason === "promptBlocked" ? "blocked" : "failed",
+    status:
+      runResult.reason === "promptBlocked" && !runResult.turnOutcome
+        ? "blocked"
+        : "failed",
     executedAt: new Date().toISOString(),
+    runAt: task.runAt,
     nextRunAt: undefined,
-    detail: resolveDisplayErrorMessage(detail),
+    detail: [resolveDisplayErrorMessage(detail), executionDetail]
+      .filter((item): item is string => !!item)
+      .join(" / "),
+    turnOutcome: runResult.turnOutcome ?? agentHostRun?.turnOutcome,
+    responseText: agentHostRun?.responseText,
     ...promptMetadata,
   });
 }
@@ -1265,8 +1356,8 @@ export function activate(context: vscode.ExtensionContext): void {
       listSkills: discoverWorkspaceSkills,
     },
     resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
-    runTask: async (task) => {
-      const result = await runTaskManually(task);
+    runTask: async (task, confirmedSnapshot) => {
+      const result = await runTaskManually(task, undefined, confirmedSnapshot);
       if (result.ok) {
         return result;
       }
@@ -1274,6 +1365,8 @@ export function activate(context: vscode.ExtensionContext): void {
         ok: false,
         reason: result.reason,
         message: result.errorMessage,
+        ...(result.turnOutcome ? { turnOutcome: result.turnOutcome } : {}),
+        ...(result.responseText ? { responseText: result.responseText } : {}),
       };
     },
   });
@@ -1328,9 +1421,7 @@ export function activate(context: vscode.ExtensionContext): void {
   ];
 
   // Start scheduler
-  scheduleManager.startScheduler(async (task) => {
-    await executeTask(task);
-  });
+  scheduleManager.startScheduler(executeTask);
 
   // If disabled in settings, stop the timer immediately (callback stays set for manual runs)
   {
@@ -1429,9 +1520,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const cfg = vscode.workspace.getConfiguration("copilotScheduler");
       const enabled = cfg.get<boolean>("enabled", true);
       if (enabled) {
-        scheduleManager.startScheduler(async (task) => {
-          await executeTask(task);
-        });
+        scheduleManager.startScheduler(executeTask);
         needsRecalculate = true;
       } else {
         scheduleManager.stopScheduler();
@@ -1510,10 +1599,12 @@ export function deactivate(): void {
 /**
  * Execute a scheduled task
  */
-async function executeTask(task: ScheduledTask): Promise<void> {
-  const trigger: ExecutionTrigger = manualRunInFlightTaskIds.has(task.id)
-    ? "manual"
-    : "auto";
+async function executeTask(
+  task: ScheduledTask,
+  trigger: ExecutionTrigger,
+  dispatchGuard?: (dispatch: () => void) => Promise<void>,
+): Promise<void | TaskExecutionCallbackResult> {
+  const taskSnapshot = JSON.stringify(task);
   const dueAt =
     trigger === "auto" &&
     task.lastFiredDueAt instanceof Date &&
@@ -1534,11 +1625,16 @@ async function executeTask(task: ScheduledTask): Promise<void> {
     try {
       const executionResult = await copilotExecutor.executePrompt(
         resolved.prompt,
-        buildPromptExecutionOptions(
-          resolved,
-          getTaskAttachmentRoots(task),
-          task.scope === "workspace" ? task.workspacePath : undefined,
-        ),
+        {
+          ...buildPromptExecutionOptions(
+            resolved,
+            getTaskAttachmentRoots(task),
+            task.scope === "workspace" ? task.workspacePath : undefined,
+          ),
+          ...(dispatchGuard
+            ? { dispatchGuard, allowUnguardedFallback: !task.runAt }
+            : {}),
+        },
       );
       if (executionResult?.cliRun) {
         lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
@@ -1561,12 +1657,20 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       throw error;
     }
 
-    await syncPromptSnapshotAfterRun(task);
+    await syncPromptSnapshotAfterRun(task, taskSnapshot);
     attachmentBlockNotifications.delete(task.id);
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
-      notifyInfo(buildExecutionSummary(task.name, "success", nextRunDate));
+      const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
+      notifyInfo(
+        buildExecutionSummary(
+          task.name,
+          "success",
+          nextRunDate,
+          agentHostRun?.turnOutcome,
+        ),
+      );
       const entry: ExecutionHistoryEntry = {
         taskId: task.id,
         taskName: task.name,
@@ -1578,6 +1682,8 @@ async function executeTask(task: ScheduledTask): Promise<void> {
         nextRunAt: nextRunDate?.toISOString(),
         attachmentCount: task.attachments?.length,
         detail: takeModelFallbackDetail(task.id),
+        turnOutcome: agentHostRun?.turnOutcome,
+        responseText: agentHostRun?.responseText,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
@@ -1585,8 +1691,14 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       if (task.runAt && task.afterRun === "delete") {
         try {
           await enqueueExecutionHistory(entry);
-        } catch {
-          task.afterRun = "disable";
+        } catch (error) {
+          logError(
+            "[CopilotScheduler] One-time task history failed; task retained:",
+            sanitizeErrorDetailsForLog(
+              error instanceof Error ? error.message : String(error),
+            ),
+          );
+          return { retainOneTimeTask: true };
         }
       } else {
         void recordExecutionHistoryBestEffort(entry);
@@ -1609,9 +1721,11 @@ async function executeTask(task: ScheduledTask): Promise<void> {
       // Manual runs record their own history entry via appendManualRunHistory.
       if (trigger === "auto") {
         const nextRunDate = getNotificationNextRun(task, new Date());
+        const turnOutcome = getAgentHostTurnFailure(error);
+        const status = turnOutcome ? "failed" : "blocked";
         const summary = buildExecutionSummary(
           task.name,
-          "blocked",
+          status,
           nextRunDate,
         );
         vscode.window.setStatusBarMessage(`⛔ ${summary}`, 6000);
@@ -1619,7 +1733,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
           taskId: task.id,
           taskName: task.name,
           trigger,
-          status: "blocked",
+          status,
           executedAt: new Date().toISOString(),
           dueAt,
           runAt: task.runAt,
@@ -1627,6 +1741,7 @@ async function executeTask(task: ScheduledTask): Promise<void> {
           detail: resolveDisplayErrorMessage(
             error instanceof Error ? error.message : String(error),
           ),
+          turnOutcome,
           ...buildPromptHistoryMetadata(
             lastPromptResolutionByTaskId.get(task.id),
           ),
@@ -1677,7 +1792,10 @@ async function executeTask(task: ScheduledTask): Promise<void> {
  * Keep the stored snapshot aligned with the file that was just executed.
  * Only disk content is persisted; unsaved editor text is never written back.
  */
-async function syncPromptSnapshotAfterRun(task: ScheduledTask): Promise<void> {
+async function syncPromptSnapshotAfterRun(
+  task: ScheduledTask,
+  expectedSnapshot: string,
+): Promise<void> {
   const resolution = lastPromptResolutionByTaskId.get(task.id);
   if (!resolution || resolution.source !== "file") return;
   if (!resolution.text.trim()) return;
@@ -1685,7 +1803,7 @@ async function syncPromptSnapshotAfterRun(task: ScheduledTask): Promise<void> {
 
   try {
     await scheduleManager.updateTaskPrompts([
-      { id: task.id, prompt: resolution.text },
+      { id: task.id, prompt: resolution.text, expectedSnapshot },
     ]);
   } catch (error) {
     const errorMessage =
@@ -2152,6 +2270,7 @@ export const __testOnly = {
   attachmentBlockNotifications,
   schedulePromptPreviewRefresh,
   disposePromptResourceWatchers,
+  lastAgentHostRunByTaskId,
   getPromptPreviewRefreshState: () => ({
     pendingPathCount: pendingPromptPreviewPaths.size,
     timerScheduled: promptPreviewTimer !== undefined,
@@ -2187,31 +2306,60 @@ function handleTaskAction(action: TaskAction): void {
 async function runTaskManually(
   task: ScheduledTask,
   deps = {
-    run: (id: string) => scheduleManager.runTaskNowDetailed(id),
+    run: (id: string, snapshot: string) =>
+      scheduleManager.runTaskNowDetailed(id, snapshot),
     recordHistory: appendManualRunHistory,
     refresh: () => SchedulerWebview.updateTasks(scheduleManager.getAllTasks()),
   },
-): Promise<{ ok: true } | ManualRunFailureResult> {
+  confirmedTaskSnapshot?: string,
+): Promise<ManualRunSuccessResult | ManualRunFailureResult> {
   if (manualRunInFlightTaskIds.has(task.id)) {
     return { ok: false, reason: "alreadyRunning" };
   }
   manualRunInFlightTaskIds.add(task.id);
   try {
-    const runResult = await deps.run(task.id);
+    const historyTask = { ...task };
+    const runResult = await deps.run(
+      task.id,
+      confirmedTaskSnapshot ?? JSON.stringify(historyTask),
+    );
     if (
       !runResult.ok &&
       (runResult.reason === "alreadyRunning" ||
         runResult.reason === "oneTimeCompleted" ||
+        runResult.reason === "taskChanged" ||
+        runResult.reason === "claimFailed" ||
         runResult.reason === "taskNotFound" ||
         runResult.reason === "executorUnavailable")
     ) {
       return runResult;
     }
-    await deps.recordHistory(task, runResult);
-    if (!runResult.ok) {
-      deps.refresh();
+    if (runResult.executionInfo) {
+      historyTask.name = runResult.executionInfo.name;
+      historyTask.runAt = runResult.executionInfo.runAt;
+      historyTask.afterRun = runResult.executionInfo.afterRun;
     }
-    return runResult;
+    const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
+    await deps.recordHistory(historyTask, runResult);
+    const { executionInfo: _executionInfo, ...publicResult } = runResult;
+    if (!publicResult.ok) {
+      deps.refresh();
+      return publicResult.reason === "saveFailed" &&
+        agentHostRun?.turnOutcome === "completed"
+        ? {
+            ...publicResult,
+            turnOutcome: "completed",
+            responseText: agentHostRun.responseText,
+          }
+        : publicResult;
+    }
+    return agentHostRun?.turnOutcome === "completed"
+      ? {
+          ...publicResult,
+          turnOutcome: "completed",
+          responseText: agentHostRun.responseText,
+        }
+      : publicResult;
   } finally {
     manualRunInFlightTaskIds.delete(task.id);
   }
@@ -2261,6 +2409,7 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           break;
         }
 
+        const confirmedTaskSnapshot = JSON.stringify(runTask);
         const confirmed = await confirmManualRunIfWorkspaceMismatch(runTask);
         if (!confirmed) {
           break;
@@ -2268,7 +2417,7 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
         // On execution failure, executePrompt already shows a warning with copy option.
-        const runResult = await runTaskManually(runTask);
+        const runResult = await runTaskManually(runTask, undefined, confirmedTaskSnapshot);
         if (!runResult.ok) {
           handleManualRunFailure(runTask.name, runResult, {
             showWebviewError: true,
@@ -2908,13 +3057,14 @@ function registerRunNowCommand(): vscode.Disposable {
           task = selected.task;
         }
 
+        const confirmedTaskSnapshot = JSON.stringify(task);
         const confirmed = await confirmManualRunIfWorkspaceMismatch(task);
         if (!confirmed) {
           return;
         }
 
         // Manual run: no jitter / no daily limit. Persist lastRun when possible.
-        const runResult = await runTaskManually(task);
+        const runResult = await runTaskManually(task, undefined, confirmedTaskSnapshot);
         if (!runResult.ok) {
           handleManualRunFailure(task.name, runResult);
           return;

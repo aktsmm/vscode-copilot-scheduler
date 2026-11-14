@@ -222,6 +222,9 @@ export interface ScheduledTask {
    */
   lastFiredDueAt?: Date;
 
+  /** Unique reservation of the most recently claimed one-time occurrence. */
+  lastFiredClaimId?: string;
+
   /** Creation timestamp */
   createdAt: Date;
 
@@ -506,6 +509,11 @@ export interface ExecuteOptions extends ModelSelectionFields {
 
   /** Folder the Copilot CLI runs in (CLI runs only). */
   workingDirectory?: string;
+
+  /** Verify a reservation while starting the Agent Host dispatch. */
+  dispatchGuard?: (dispatch: () => void) => Promise<void>;
+  /** Preserve legacy fallback for recurring tasks whose guard only applies to Agent Host. */
+  allowUnguardedFallback?: boolean;
 }
 
 /** Records that a fallback model replaced an unavailable requested model. */
@@ -526,6 +534,17 @@ export interface CopilotCliRunInfo {
   premiumRequests?: number;
 }
 
+export type AgentHostTurnOutcome =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export type AgentHostResponseTextObservation =
+  | "observed"
+  | "not_observed"
+  | "unknown";
+
 /** What an Agent Host run reported, for the execution history. */
 export interface AgentHostRunInfo {
   /** Model id sent to the Agent Host. */
@@ -534,6 +553,8 @@ export interface AgentHostRunInfo {
   appliedModel?: string;
   /** Why the task ran through the chat route instead of the Agent Host. */
   fallbackReason?: string;
+  turnOutcome?: AgentHostTurnOutcome;
+  responseText?: AgentHostResponseTextObservation;
 }
 
 export interface ExecutePromptResult {

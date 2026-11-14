@@ -57,7 +57,7 @@ Stableの変更ツールは、新しい詳細設定の明示指定をモデル�
 3. タスク名、プロンプト、Cron スケジュールを入力
 4. スケジュールされた時刻に自動で Copilot にプロンプトが送信されます
 
-一度だけ実行したい場合は、フォームの「一度だけ実行する日時」を選び、日時と実行後の処理を指定します。既定では送信後にタスクを無効化し、「タスクを削除（履歴は保持）」を選ぶと履歴保存後に削除します。取りこぼした日時は既存の catch-up / skip 設定に従います。実行済みの無効タスクは、新しい `runAt` を設定するまで再有効化できません。
+一度だけ実行したい場合は、フォームの「一度だけ実行する日時」を選び、日時と実行後の処理を指定します。別ウィンドウからの重複送信を防ぐため、実行前にタスクを確保して無効化します。確保を保存できなければ送信しません。「タスクを削除（履歴は保持）」を選んだ場合は実行成功と履歴保存の後に削除し、失敗・結果不明・スキップ時は無効で残します。取りこぼした日時は既存の catch-up / skip 設定に従います。確保済みタスクは、新しい `runAt` を設定するまで再有効化できません。
 
 タスク画面では、Tabキーで選択中のタブへ移動できます。左右キーでタブを切り替え、Home/Endで先頭・末尾のタブを選択し、Tabキーで選択中のパネル内へ移動します。Enter/Spaceは通常のボタン操作として使えます。
 
@@ -99,7 +99,7 @@ Stableの変更ツールは、新しい詳細設定の明示指定をモデル�
 | `Copilot Scheduler: Show Execution History`         | 実行履歴を表示（記録済みの場合はプロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由も表示） |
 | `Copilot Scheduler: Dump Model Catalog Diagnostics` | モデルカタログ診断を表示                                                                               |
 
-実行履歴には、記録済みの場合、予定時刻・遅延・添付数・プロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由を表示します。成功エントリは、モデルの応答完了ではなくChatへのプロンプト送信成功を示すため、**送信済み**と表示します。
+実行履歴には、記録済みの場合、予定時刻・遅延・添付数・プロンプト取得元・パス・ハッシュ・解決時刻・フォールバック理由を表示します。チャット経路は **送信済み**、Agent Host の完了信号を確認できた実行は **ターン完了** と表示します。Agent Host では失敗・キャンセル・結果不明も区別し、応答テキストを確認できたかを記録します。応答本文は保存しません。ターンの完了は依頼した作業の成功を保証しません。
 
 ## 🛠️ Copilot Chat ツール
 
@@ -116,7 +116,7 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 単発タスクの手動実行後、ツールは `enabledStateChanged` と `taskDeleted` を返します。実行済みの単発タスクは `oneTimeCompleted` と再設定の案内を返し、再送信しません。
 
-`kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、`statusSemantics`、新しい順の `entries` が含まれます。`status: "success"` はモデルの応答完了ではなくプロンプト送信成功を示します。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
+`kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、`statusSemantics`、新しい順の `entries` が含まれます。`status: "success"` 単独ではプロンプト送信成功を示します。Agent Host で観測できた場合は `turnOutcome`（`completed` / `failed` / `cancelled` / `unknown`）と、完了時の `responseText`（`observed` / `not_observed` / `unknown`）も返します。項目がない場合は未記録で、古い履歴も含まれます。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
 
 単発タスクの作成では `cronExpression` の代わりにタイムゾーンオフセット付き ISO 8601 日時の `runAt`（例: `2030-09-26T21:00:00+09:00`）を指定し、必要なら `afterRun: "disable" | "delete"` を渡します。更新でも同じ項目を使えます。Cron に戻す場合は `runAt: ""` と `cronExpression` を同時に指定します。`kind=list` / `kind=get` に設定が含まれ、`kind=history` は自動削除後もタスク名と `runAt` を保持します。Webview の日時選択はマシンのローカルタイムゾーンです。
 
@@ -180,13 +180,15 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - **反映されるもの**: モデル、reasoning effort とコンテキストサイズ（モデルが対応している場合）、カスタムエージェント、添付ファイル。実行履歴には、指定したモデルと Agent Host が報告した実際のモデルを記録し、異なる場合は警告を表示します（Auto は比較しません）。
 - **実行場所**: タスクのワークスペースフォルダー（グローバルのタスクは最初のローカルワークスペースフォルダー）です。通常の Copilot セッションとして、自分で始めたチャットと同じようにそのフォルダーのセッション一覧に表示されます。Scheduler は、実行を開始した後に、そのセッションをエディタのタブとして開くため、実行の様子を見られます（VS Code のコマンド `workbench.action.chat.openSessionInEditorGroup` を使います。VS Code 側で変わっても、実行には影響せず、タブが開かないだけです）。**継続**（`copilotScheduler.chatSession` またはタスクごとの指定）は、VS Code を開いている間、そのフォルダーで最後に Scheduler が使ったセッションに続けて送ります。再起動後は新しいセッションから始まります。
 - **ツール**: 無人の実行は承認の確認に答えられないため、`copilotScheduler.agentHostAutoApprove`（既定オン）で承認なしにツールを使えるようにしています。ファイル編集やコマンド実行が必要なタスクが拒否されることを受け入れる場合だけオフにしてください。ユーザー／リモート設定のみ有効です。
-- **Agent Host で実行できないとき**（実行中のホストがない、または適用できないモデル・カスタムエージェント・オプション・添付がある。例: `@workspace` 系のエージェント、`/ask`、`/edit`、Codex ブリッジのモデル）: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を実行履歴に記録します。`fail` は実行せず警告を表示するため、指定外のモデルでタスクが動くことがありません。Agent Host で実行を開始した後に失敗した場合は、二重に実行しません。
-- **経路の選択**: `copilotScheduler.executionRoute` の既定は `agentHost` です。Copilot Chat セッションを開く従来の経路を使うには `chat` にします。タスク個別の Copilot CLI 指定は、どちらよりも優先されます。`sessionHarness` が `local` の場合とリモートのウィンドウでは、Agent Host の登録情報がローカルのものなので、常にチャット経路を使います。
-- 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、`executionFallback` に従います。`copilotScheduler.agentHostTimeoutMinutes`（既定 60）で、時間がかかりすぎる実行をキャンセルします。
+- **定期タスクを Agent Host で実行できないとき**（実行中のホストがない、または適用できないモデル・カスタムエージェント・オプション・添付がある。例: `@workspace` 系のエージェント、`/ask`、`/edit`、Codex ブリッジのモデル）: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を実行履歴に記録します。`fail` は実行せず警告を表示するため、指定外のモデルでタスクが動くことがありません。Agent Host で実行を開始した後に失敗した場合は、二重に実行しません。
+- **経路の選択**: `copilotScheduler.executionRoute` の既定は `agentHost` です。Copilot Chat セッションを開く従来の経路を使うには `chat` にします。定期タスク個別の Copilot CLI 指定は、どちらよりも優先されます。`sessionHarness` が `local` の場合とリモートのウィンドウでは、Agent Host の登録情報がローカルのものなので、定期タスクはチャット経路を使います。
+- 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、定期タスクでは `executionFallback` に従います。`copilotScheduler.agentHostTimeoutMinutes`（既定 60）を超えるとキャンセルを要求します。確認できなければ結果は不明で、実行が続く可能性があります。
+- **単発タスク**は、送信直前に共有ロック内で予約を確認するため Agent Host が必要です。Chat・CLI 経路へのフォールバック、リモートウィンドウ、local session harness では実行しません。予約後に送信が中止された場合は、タスクを確認して日時を再設定してから再実行してください。
+- **自動実行の定期タスク**も Agent Host への送信直前に確認します。従来の Chat・CLI 経路では、この最後の共有ロック内確認は行いません。
 
 #### Copilot CLI での実行
 
-上記の Agent Host 経路でもモデルは反映されます。Copilot セッションではなくバックグラウンドの `copilot` プロセスで実行したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`（プロンプトは標準入力）として実行します。
+上記の Agent Host 経路でもモデルは反映されます。定期タスクを Copilot セッションではなくバックグラウンドの `copilot` プロセスで実行したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`（プロンプトは標準入力）として実行します。
 
 - タスク単位のオプトインで、モデルを指定したタスクにだけ効きます。モデル未指定のタスク、またはオプションをオフにしたタスクは、これまでどおりチャットで実行します。既存のタスクやプロンプトファイル型のタスクは変わりません。VS Code がどの種類のチャットセッションを使うかを Scheduler は判別できないため、自動では切り替えません。
 - CLI はプロンプトモードで `/スキル` を実行しない（CLI 1.0.99 で確認）ため、Scheduler がスキルの `SKILL.md` の指示（front matter を除く）とスキルのフォルダーを、引数の前に付けます。スキル一覧と同じ規則で、名前の一致が必要で、ワークスペースのスキルは信頼されたワークスペースでのみ使え、ユーザーのスキルより優先されます。
@@ -247,15 +249,15 @@ VS Code 1.142（Windows）で確認した内容です。
 
 同じ名前のタスクが scope をまたいで複数あり得る場合は、更新・無効化・削除の前に登録済みタスクを表示するよう Copilot に依頼すると、対象タスクを確認してから進められます。
 
-`scheduler_run_task` の入力は `{ "id": "..." }` だけで、プロンプト・添付の解決と履歴記録は既存の「今すぐ実行」と共通です。無効タスクは無効のまま、有効タスクの `nextRun` は `manualRunNextRunPolicy` に従って進みます。手動実行なので jitter・実行可能時間帯・日次上限は適用しません。workspace タスクは現在のワークスペースに属する必要があります。
+`scheduler_run_task` の入力は `{ "id": "..." }` だけで、プロンプト・添付の解決と履歴記録は既存の「今すぐ実行」と共通です。無効タスクは無効のまま、有効タスクの `nextRun` は `manualRunNextRunPolicy` に従って進みます。手動実行なので jitter・実行可能時間帯・日次上限は適用しません。workspace タスクは現在のワークスペースに属する必要があります。確認したタスクが実行開始前に変更された場合は実行を拒否します。`confirmationMode=always` では呼び出し時点の内容を確認し、確認画面を開いている間の変更も拒否します。
 
-`ok: true` と `executionSemantics: "prompt_dispatched"` は送信成功を示し、モデル応答完了ではありません。`saveFailed` でも送信自体は済んでおり、`prompt_dispatched` と `retrySafe: false` を返すので自動再試行しないでください。予期しない例外は `executionSemantics: "unknown"` と `retrySafe: false` を返すため、先に Chat と履歴を確認してください。キャンセル確認は実行開始前だけで、開始後の処理中断や送信取消はできません。呼び出しごとに新しい手動要求として扱い、同じウィンドウで送信・履歴記録中の重複要求は拒否します。処理終了後の再呼び出しは再実行になるため、冪等な操作ではありません。
+`ok: true` と `executionSemantics: "prompt_dispatched"` は送信成功を示します。Agent Host の完了を確認できた場合は `turnOutcome` と `responseText` も返しますが、依頼した作業の成功を保証するものではありません。`saveFailed` は送信済みで、`retrySafe: false` を返します。Agent Host の失敗・キャンセル・結果不明も自動再試行せず、Chat と履歴を確認してください。`claimFailed` または `taskChanged` は、その呼び出しではプロンプトを送信していないことを示します。再実行前にタスクの保存状態を確認してください。ツール呼び出しのキャンセル確認は実行開始前だけで、送信済みのプロンプトは取り消せません。呼び出しごとに新しい手動要求として扱い、同じウィンドウで送信・履歴記録中の重複要求は拒否します。処理終了後の再呼び出しは再実行になるため、冪等な操作ではありません。
 
 write 系ツールは既定で有効ですが、信頼済みワークスペースが必要です。`copilotScheduler.lmTools.enableWriteTools` を `false` にすると、作成・更新・削除・有効/無効切替・1回実行の呼び出しを拒否します。ツール自体は表示されたまま、読み取り系だけが利用できます。
 
 `copilotScheduler.lmTools.confirmationMode` が制御するのは、この拡張が write 系ツールで返すカスタム確認メッセージだけです。VS Code または Copilot Chat 側の汎用承認ダイアログは引き続き表示される場合があり、利用可能な場合は VS Code 側の Always Allow フローを使えます。
 
-タスクスナップショットと revision metadata は同一ディレクトリの一時ファイルへ書き込み、atomic replace で更新します。空/破損ファイルと metadata のない revision 0 の `[]` は有効な legacy globalState を上書きせず、revision 付きの空配列は正当な全削除として維持します。foreground save と mirror は保存先ごとに同じ queue を使います。MIT ライセンスの `proper-lockfile` による atomic directory lock、heartbeat/stale recovery、revision 再確認により、古い VS Code ウィンドウが新しいタスクを上書きするのを防ぎ、競合時は最新snapshotを再読み込みして再試行を案内します。payload/mirrorの完了後にだけmetadataを進め、lockを解放します。
+タスクスナップショットと revision metadata は、heartbeat/stale recovery に対応したウィンドウ間ロック（MIT ライセンスの `proper-lockfile`）内で atomic replace します。通常の保存先へ書けない場合は共有の代替スナップショットに定期タスクの変更を保存できますが、単発タスクの実行確保には通常のファイル保存が必要です。健全なコピーが最新版と確認できる場合は自動復旧します。競合や最新版を確認できないデータは保持し、影響するタスクの送信を見送って警告します。保存状態を確認できる無関係な定期タスクは可能な限り継続します。metadata・代替ファイル・globalState にもタスク内容が含まれるため、タスク本体と同様に保護してください。実行履歴も共有ファイルへロック付きで保存し、globalState に複製するため、別ウィンドウの記録を保持します。旧形式の空/破損 payload は有効な legacy タスクを上書きせず、revision 付きの空配列は正当な全削除として維持します。旧バージョンは同じ実行確保・履歴・snapshot 方式に対応していないため、同じ保存先で同時に起動しないでください。
 
 ## ⚙️ 設定
 
@@ -268,17 +270,17 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.jitterSeconds`              | `600`             | タスク実行前に入れるランダム遅延の最大秒数 (0〜1800、0=無効、タスクごとに上書き可)                                                                                                                                                                                       |
 | `copilotScheduler.manualRunNextRunPolicy`     | `fromNow`         | `Run Now` 後の次回実行計算: `fromNow`（現在時刻より後の次のcron予定）/ `advance`（既存の未来の次回予定を消化し、なければ現在時刻から再計算）。明示的な選択は維持します。                                                                                                 |
 | `copilotScheduler.missedRunPolicy`            | `runOnce`         | スケジューラ起動前に期限を迎えたタスク: `runOnce` は各タスクを1回実行、`skip` は実行せず次回へ進めます。VS Code の設定画面で選択できます。                                                                                                                               |
-| `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | このウィンドウの自動プロンプト送信処理の最大同時数（jitterを含む、1〜10）。モデル応答の完了は待ちません。「今すぐ実行」は対象外です。                                                                                                                                    |
+| `copilotScheduler.maxConcurrentAutomaticRuns` | `1`               | このウィンドウの自動実行の最大同時数（jitterを含む、1〜10）。Agent Host と CLI は終了まで枠を使い、チャット経路は送信後に枠を空けます。「今すぐ実行」は対象外です。 |
 | `copilotScheduler.chatSession`                | `new`             | チャットセッションの既定動作 (new/continue)。Webview フォームでタスクごとに上書きできます。`continue` は通常より高速です。                                                                                                                                               |
 | `copilotScheduler.skillTemplates`             | `explicit`        | タスクフォームが `/スキル名` として挿入できる Agent Skills の範囲: `explicit`（`disable-model-invocation: true` のみ）、`all`、`off`。                                                                                                                                  |
 | `copilotScheduler.sessionHarness`             | `auto`            | 新規実行が開始するチャットセッションの種類（新しいセッションを開始するときだけ有効）。`auto` は VS Code の選択に任せます。`local`（実験的）は `workbench.action.chat.newLocalChat` で Local セッションを開始し、失敗した場合はタスクを送信しません。Scheduler は VS Code の設定を変更せず、Copilot（エージェントホスト）のセッションを強制することもできません。 |
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
 | `copilotScheduler.executionRoute`             | `agentHost`       | タスクの実行方法。`agentHost`（既定）は VS Code の Agent Host へ送り、モデル・effort・コンテキストサイズ・カスタムエージェント・添付を反映して実際のモデルを記録します。`chat` は従来の Copilot Chat 経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
-| `copilotScheduler.executionFallback`          | `chat`            | Agent Host で実行できないとき。`chat` はチャット経路で実行して理由を記録、`fail` は実行せず警告します。実行を開始して失敗した場合は二重に実行しません。 |
+| `copilotScheduler.executionFallback`          | `chat`            | 定期タスクを Agent Host で実行できないとき。`chat` はチャット経路で実行して理由を記録、`fail` は実行せず警告します。単発タスクは代替経路を使いません。実行を開始して失敗した場合は二重に実行しません。 |
 | `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.agentHostOpenSession`       | `true`            | Agent Host の実行を開始したら、そのセッションをエディタのタブとして開きます。頻繁に動く無人タスクではオフにできます。 |
-| `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行をキャンセルして失敗とするまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行にキャンセルを要求するまでの分数（1〜720）。確認できなければ結果は不明です。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliTimeoutMinutes`          | `60`              | CLI 実行のタスクを停止するまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
@@ -297,7 +299,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 
 AI が適用した編集を遅延後に自動で保持するには、VS Code 設定 `chat.editing.autoAcceptDelay` を設定してください（`0` = 無効、`1-100` = 秒、推奨: `5`）。
 
-未実行判定はスケジューラの起動・再開時刻より前の `nextRun` だけが対象です。`skip` は実行履歴・日次件数を増やさず次回へ進め、後から設定を戻しても破棄した予定は復元しません。起動後のスリープによる遅延は起動前の未実行とは区別します。設定変更は次回チェックから反映し、処理中の送信は中断しません。待機タスクは後続 tick で古い予定から選び、許可時間帯と日次上限も適用します。処理中の送信が予約した日次枠は、成功・失敗が確定するまで他のタスクに割り当てません。同時数の既定値は従来の無制限から1に変わりますが、モデル応答は並行する可能性があり、別の VS Code ウィンドウの送信上限とは独立しています。
+未実行判定はスケジューラの起動・再開時刻より前の `nextRun` だけが対象です。`skip` は実行履歴・日次件数を増やさず次回へ進め、後から設定を戻しても破棄した予定は復元しません。起動後のスリープによる遅延は起動前の未実行とは区別します。設定変更は次回チェックから反映し、処理中の実行は中断しません。待機タスクは後続 tick で古い予定から選び、許可時間帯と日次上限も適用します。処理中の実行が予約した日次枠は、実行終了まで他のタスクに割り当てません。同時数の既定値は1ですが、チャット経路のモデル応答は並行する可能性があり、別の VS Code ウィンドウの上限とは独立しています。
 
 タスク単位の運用制御（「チャットセッション」「上限/日」「実行許可時間帯」）は Webview の作成/編集フォームで設定できます。「上限/日」と「実行許可時間帯」はスケジュールと同じ時計で判定します。`copilotScheduler.timezone` を設定していればそのタイムゾーン、未設定ならマシンのローカル時刻です。
 

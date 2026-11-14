@@ -2,7 +2,11 @@ import * as vscode from "vscode";
 
 import { messages } from "../../i18n";
 import type { ScheduleManager } from "../../scheduleManager";
-import type { ScheduledTask } from "../../types";
+import type {
+  AgentHostResponseTextObservation,
+  AgentHostTurnOutcome,
+  ScheduledTask,
+} from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
@@ -15,23 +19,32 @@ interface RunTaskToolInput {
 }
 
 export type ManualTaskRunResult =
-  | { ok: true }
+  | {
+      ok: true;
+      turnOutcome?: "completed";
+      responseText?: AgentHostResponseTextObservation;
+    }
   | {
       ok: false;
       reason:
         | "taskNotFound"
         | "executorUnavailable"
         | "alreadyRunning"
+        | "taskChanged"
         | "oneTimeCompleted"
+        | "claimFailed"
         | "promptBlocked"
         | "executionFailed"
         | "saveFailed"
         | "workspaceMismatch";
       message?: string;
+      turnOutcome?: AgentHostTurnOutcome;
+      responseText?: AgentHostResponseTextObservation;
     };
 
 export type ManualTaskRunner = (
   task: ScheduledTask,
+  confirmedSnapshot?: string,
 ) => Promise<ManualTaskRunResult>;
 
 export function createSchedulerRunTaskTool(
@@ -49,17 +62,6 @@ export function createSchedulerRunTaskTool(
       const prepared: vscode.PreparedToolInvocation = {
         invocationMessage: messages.taskExecuting(taskLabel),
       };
-      if (shouldUseCustomConfirmation("run")) {
-        prepared.confirmationMessages = {
-          title: messages.lmToolRunTitle(),
-          message: new vscode.MarkdownString().appendText(
-            messages.lmToolRunConfirmation(
-              taskLabel,
-              task?.runAt ? (task.afterRun ?? "disable") : undefined,
-            ),
-          ),
-        };
-      }
       return prepared;
     },
     async invoke(
@@ -92,7 +94,20 @@ export function createSchedulerRunTaskTool(
           message: "Missing required field: id.",
         });
       }
-      const task = scheduleManager.getTask(id);
+      let task: ScheduledTask | undefined;
+      try {
+        task = await scheduleManager.getTaskForRun(id);
+      } catch {
+        return buildJsonTextResult({
+          ok: false,
+          reason: "claimFailed",
+          executionSemantics: "not_dispatched",
+          retrySafe: false,
+          message: messages.manualRunClaimFailed(),
+        });
+      }
+      const gateAfterRefresh = assertWriteToolGates(token);
+      if (gateAfterRefresh) return gateAfterRefresh;
       if (!task) {
         return buildJsonTextResult({
           ok: false,
@@ -101,6 +116,8 @@ export function createSchedulerRunTaskTool(
         });
       }
       const wasEnabled = task.enabled;
+      const wasOneTime = !!task.runAt;
+      const confirmedSnapshot = JSON.stringify(task);
 
       if (
         task.scope === "workspace" &&
@@ -114,9 +131,49 @@ export function createSchedulerRunTaskTool(
         });
       }
 
+      if (shouldUseCustomConfirmation("run")) {
+        const action = messages.actionRun();
+        const choice = await vscode.window.showWarningMessage(
+          messages.lmToolRunConfirmation(
+            task.name,
+            task.runAt ? (task.afterRun ?? "disable") : undefined,
+          ),
+          { modal: true },
+          action,
+        );
+        if (choice !== action) {
+          return buildJsonTextResult({ ok: false, reason: "cancelled" });
+        }
+        const gateAfterConfirmation = assertWriteToolGates(token);
+        if (gateAfterConfirmation) return gateAfterConfirmation;
+        let taskAfterConfirmation: ScheduledTask | undefined;
+        try {
+          taskAfterConfirmation = await scheduleManager.getTaskForRun(id);
+        } catch {
+          return buildJsonTextResult({
+            ok: false,
+            reason: "claimFailed",
+            executionSemantics: "not_dispatched",
+            retrySafe: false,
+            message: messages.manualRunClaimFailed(),
+          });
+        }
+        const gateAfterRefresh = assertWriteToolGates(token);
+        if (gateAfterRefresh) return gateAfterRefresh;
+        if (JSON.stringify(taskAfterConfirmation) !== confirmedSnapshot) {
+          return buildJsonTextResult({
+            ok: false,
+            reason: "taskChanged",
+            executionSemantics: "not_dispatched",
+            retrySafe: false,
+            message: messages.taskStoreChangedExternally(),
+          });
+        }
+      }
+
       let result: ManualTaskRunResult;
       try {
-        result = await runTask(task);
+        result = await runTask(task, confirmedSnapshot);
       } catch {
         return buildJsonTextResult({
           ok: false,
@@ -128,11 +185,20 @@ export function createSchedulerRunTaskTool(
         });
       }
       if (!result.ok) {
-        if (result.reason === "oneTimeCompleted") {
+        if (result.reason === "taskChanged") {
           return buildJsonTextResult({
             ...result,
+            executionSemantics: "not_dispatched",
             retrySafe: false,
-            message: messages.oneTimeTaskCompleted(task.name),
+            message: result.message ?? messages.taskStoreChangedExternally(),
+          });
+        }
+        if (result.reason === "claimFailed") {
+          return buildJsonTextResult({
+            ...result,
+            executionSemantics: "not_dispatched",
+            retrySafe: false,
+            message: messages.manualRunClaimFailed(),
           });
         }
         if (result.reason === "saveFailed") {
@@ -144,6 +210,32 @@ export function createSchedulerRunTaskTool(
               "The prompt was dispatched, but lastRun/nextRun could not be saved. Do not retry automatically; check Chat and scheduler history.",
           });
         }
+        if (result.turnOutcome) {
+          return buildJsonTextResult({
+            ...result,
+            executionSemantics:
+              result.turnOutcome === "unknown" ? "unknown" : "prompt_dispatched",
+            retrySafe: false,
+            message:
+              "The Agent Host turn failed, was cancelled, or could not be confirmed. Check Chat and scheduler history; do not retry automatically.",
+          });
+        }
+        if (result.reason === "oneTimeCompleted") {
+          return buildJsonTextResult({
+            ...result,
+            retrySafe: false,
+            message: messages.oneTimeTaskCompleted(task.name),
+          });
+        }
+        if (wasOneTime) {
+          return buildJsonTextResult({
+            ...result,
+            executionSemantics: "unknown",
+            retrySafe: false,
+            message:
+              "The one-time task was reserved but the run failed. Check Chat and scheduler history before rescheduling; do not retry automatically.",
+          });
+        }
         return buildJsonTextResult(result);
       }
       const latestTask = scheduleManager.getTask(id);
@@ -151,6 +243,8 @@ export function createSchedulerRunTaskTool(
         ok: true,
         action: "run",
         executionSemantics: "prompt_dispatched",
+        ...(result.turnOutcome ? { turnOutcome: result.turnOutcome } : {}),
+        ...(result.responseText ? { responseText: result.responseText } : {}),
         enabledStateChanged: latestTask
           ? latestTask.enabled !== wasEnabled
           : wasEnabled,

@@ -945,13 +945,20 @@ suite("Extension Test Suite", () => {
     assert.match(runDescription, /run|execute|trigger|test/i);
     assert.match(
       runDescription,
-      /Recurring tasks keep their enabled state.*one-time tasks apply afterRun/i,
+      /Recurring tasks keep their enabled state.*one-time tasks are reserved and disabled before execution/i,
     );
+    assert.match(
+      runDescription,
+      /afterRun delete applies only after success and saved history/i,
+    );
+    assert.match(runDescription, /claimFailed means no prompt was sent/i);
     assert.match(runDescriptionJa, /今すぐ1回実行|起動|テスト/);
     assert.match(
       runDescriptionJa,
-      /定期タスクの有効\/無効は維持.*単発タスクには afterRun/,
+      /定期タスクの有効\/無効は維持.*単発タスクは実行前に確保・無効化/,
     );
+    assert.match(runDescriptionJa, /afterRun の削除は成功と履歴保存後だけ/);
+    assert.match(runDescriptionJa, /claimFailed は今回プロンプトを送信していない/);
     assert.match(runDescription, /not model response completion/);
     assert.match(runDescription, /saveFailed.*do not retry automatically/);
     assert.match(runDescription, /manualRunNextRunPolicy/);
@@ -1166,7 +1173,7 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
-  test("automatic concurrency settings clarify dispatch rather than response completion", () => {
+  test("automatic concurrency settings explain route-specific waiting", () => {
     const root = path.resolve(__dirname, "../../..");
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "package.json"), "utf8"),
@@ -1189,8 +1196,8 @@ suite("Execution History Queue Tests", () => {
       10,
     );
     for (const [filename, wording] of [
-      ["package.nls.json", "Does not wait for model response completion"],
-      ["package.nls.ja.json", "モデル応答の完了は待ちません"],
+      ["package.nls.json", "Agent Host and CLI runs occupy a slot"],
+      ["package.nls.ja.json", "Agent Host と CLI はターンまたはプロセスの終了まで枠を使い"],
     ]) {
       const strings = JSON.parse(
         fs.readFileSync(path.join(root, filename), "utf8"),
@@ -1209,6 +1216,9 @@ suite("Execution History Queue Tests", () => {
 
     const dispatched = buildSummary("Audit task", "success", nextRun);
     assert.ok(dispatched.includes(messages.executionResultDispatched()));
+
+    const completed = buildSummary("Audit task", "success", nextRun, "completed");
+    assert.ok(completed.includes(messages.executionResultTurnCompleted()));
 
     const failed = buildSummary("Audit task", "failed", nextRun);
     assert.ok(failed.includes(messages.executionResultFailed()));
@@ -1285,6 +1295,32 @@ suite("Execution History Queue Tests", () => {
     assert.ok(!malformed.detail.includes("not-valid"));
     assert.ok(!malformed.detail.includes("unknown-reason"));
     assert.ok(!malformed.detail.includes("Hash"));
+  });
+
+  test("history quick picks distinguish Agent Host completion and uncertain outcomes", async () => {
+    const { __testOnly } = await import("../../extension");
+    const [completed, unknown] = __testOnly.buildExecutionHistoryQuickPickItems([
+      {
+        taskId: "completed",
+        taskName: "Completed",
+        trigger: "manual",
+        status: "success",
+        executedAt: "2026-07-30T09:00:00.000Z",
+        turnOutcome: "completed",
+        responseText: "not_observed",
+      },
+      {
+        taskId: "unknown",
+        taskName: "Unknown",
+        trigger: "auto",
+        status: "failed",
+        executedAt: "2026-07-30T09:00:00.000Z",
+        turnOutcome: "unknown",
+      },
+    ]);
+    assert.ok(completed.description.includes(messages.executionResultTurnCompleted()));
+    assert.ok(completed.detail.includes(messages.executionHistoryResponseTextNotObserved()));
+    assert.ok(unknown.detail.includes(messages.executionHistoryTurnUnknown()));
   });
 
   test("enqueueExecutionHistory rejects the failed write and recovers the queue", async () => {
@@ -1540,12 +1576,30 @@ suite("Manual Run Workspace Confirmation Tests", () => {
     assert.strictEqual(calls, 2);
   });
 
+  test("manual run preserves the snapshot selected before confirmation", async () => {
+    const { __testOnly } = await import("../../extension");
+    const selectedTask = task("workspace");
+    const confirmedSnapshot = JSON.stringify(selectedTask);
+    selectedTask.prompt = "changed while confirmation was open";
+    const result = await __testOnly.runTaskManually(selectedTask, {
+      run: async (_id, snapshot) => {
+        assert.strictEqual(snapshot, confirmedSnapshot);
+        return { ok: false, reason: "taskChanged" };
+      },
+      recordHistory: async () => assert.fail("Nothing was dispatched"),
+      refresh: () => assert.fail("Nothing was dispatched"),
+    }, confirmedSnapshot);
+    assert.deepStrictEqual(result, { ok: false, reason: "taskChanged" });
+  });
+
   test("manual run rejections leave execution history untouched and release the guard", async () => {
     const { __testOnly } = await import("../../extension");
     const selectedTask = task("global");
     for (const reason of [
       "alreadyRunning",
       "oneTimeCompleted",
+      "claimFailed",
+      "taskChanged",
       "taskNotFound",
       "executorUnavailable",
     ] as const) {
@@ -1602,6 +1656,53 @@ suite("Manual Run Workspace Confirmation Tests", () => {
       assert.strictEqual(histories, 1);
       assert.strictEqual(refreshes, 1);
     }
+  });
+
+  test("manual run returns Agent Host observations after history consumes them", async () => {
+    const { __testOnly } = await import("../../extension");
+    const selectedTask = { ...task("global"), id: "agent-host-result" };
+    const result = await __testOnly.runTaskManually(selectedTask, {
+      run: async () => {
+        __testOnly.lastAgentHostRunByTaskId.set(selectedTask.id, {
+          turnOutcome: "completed",
+          responseText: "observed",
+        });
+        return { ok: true };
+      },
+      recordHistory: async () => {
+        __testOnly.lastAgentHostRunByTaskId.delete(selectedTask.id);
+      },
+      refresh: () => {},
+    });
+    assert.deepStrictEqual(result, {
+      ok: true,
+      turnOutcome: "completed",
+      responseText: "observed",
+    });
+  });
+
+  test("manual run retains the completed turn when saving run state fails", async () => {
+    const { __testOnly } = await import("../../extension");
+    const selectedTask = { ...task("global"), id: "agent-host-save-failed" };
+    const result = await __testOnly.runTaskManually(selectedTask, {
+      run: async () => {
+        __testOnly.lastAgentHostRunByTaskId.set(selectedTask.id, {
+          turnOutcome: "completed",
+          responseText: "not_observed",
+        });
+        return { ok: false, reason: "saveFailed" };
+      },
+      recordHistory: async () => {
+        __testOnly.lastAgentHostRunByTaskId.delete(selectedTask.id);
+      },
+      refresh: () => {},
+    });
+    assert.deepStrictEqual(result, {
+      ok: false,
+      reason: "saveFailed",
+      turnOutcome: "completed",
+      responseText: "not_observed",
+    });
   });
 
   test("requires explicit confirmation for another workspace", async () => {
@@ -2474,7 +2575,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
 
     const webviewRunBlock = extractBlockFromStartToken(source, 'case "run": {');
     assert.ok(
-      webviewRunBlock.includes("runTaskManually(runTask)"),
+      webviewRunBlock.includes("runTaskManually(runTask, undefined, confirmedTaskSnapshot)"),
       "webview manual run should use the shared failure-resync path",
     );
 
@@ -2489,7 +2590,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
 
     const commandBlock = source.slice(commandStart, commandEnd);
     assert.ok(
-      commandBlock.includes("runTaskManually(task)"),
+      commandBlock.includes("runTaskManually(task, undefined, confirmedTaskSnapshot)"),
       "command manual run should use the shared failure-resync path",
     );
   });

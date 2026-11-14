@@ -10,6 +10,10 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { PipeWebSocket } from "./minimalWebSocket";
+import type {
+  AgentHostResponseTextObservation,
+  AgentHostTurnOutcome,
+} from "./types";
 
 export type AgentHostFailureKind =
   /** No usable Agent Host; running elsewhere is safe. */
@@ -23,6 +27,7 @@ export class AgentHostError extends Error {
   constructor(
     readonly kind: AgentHostFailureKind,
     message: string,
+    readonly turnOutcome?: Exclude<AgentHostTurnOutcome, "completed">,
   ) {
     super(message);
     this.name = "AgentHostError";
@@ -142,6 +147,10 @@ export interface AgentHostAction {
   [key: string]: unknown;
 }
 
+interface AgentHostActionEnvelope {
+  rejected: boolean;
+}
+
 /** One JSON-RPC connection to the host (a named pipe carrying a WebSocket). */
 export class AgentHostConnection {
   private nextId = 0;
@@ -156,7 +165,11 @@ export class AgentHostConnection {
     }
   >();
   private readonly listeners = new Set<
-    (channel: string, action: AgentHostAction) => void
+    (
+      channel: string,
+      action: AgentHostAction,
+      envelope: AgentHostActionEnvelope,
+    ) => void
   >();
   private readonly closeListeners = new Set<() => void>();
 
@@ -181,7 +194,11 @@ export class AgentHostConnection {
     }
   }
   onAction(
-    listener: (channel: string, action: AgentHostAction) => void,
+    listener: (
+      channel: string,
+      action: AgentHostAction,
+      envelope: AgentHostActionEnvelope,
+    ) => void,
   ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -300,8 +317,12 @@ export class AgentHostConnection {
     const action = message.params?.action as AgentHostAction | undefined;
     const channel = message.params?.channel;
     if (action && typeof action.type === "string" && typeof channel === "string") {
+      const rejected = Object.prototype.hasOwnProperty.call(
+        message.params,
+        "rejectionReason",
+      );
       for (const listener of [...this.listeners]) {
-        listener(channel, action);
+        listener(channel, action, { rejected });
       }
     }
   }
@@ -388,11 +409,13 @@ export interface AgentHostTurnRequest {
   resume?: AgentHostSessionRef;
   /** Called once the host has accepted the turn, so the session can be shown. */
   onSessionStarted?: (ref: AgentHostSessionRef) => void;
+  dispatchGuard?: (dispatch: () => void) => Promise<void>;
 }
 
 export interface AgentHostTurnResult extends AgentHostSessionRef {
   requestedModel?: string;
   appliedModel?: string;
+  responseText: AgentHostResponseTextObservation;
 }
 
 interface SnapshotResult {
@@ -522,21 +545,66 @@ function runTurn(
   const turnId = randomUUID();
   return new Promise<AgentHostTurnResult>((resolve, reject) => {
     let appliedModel: string | undefined;
+    let responseTextObserved = false;
+    let responseTextUncertain = false;
+    const markdownParts = new Set<string>();
     let settled = false;
+    let dispatchStarted = false;
+    let guardPending = !!request.dispatchGuard;
+    let pendingOutcome: (() => void) | undefined;
+    let sessionStarted = false;
+    let cancelTimer: NodeJS.Timeout | undefined;
+    const revealSession = () => {
+      if (sessionStarted) return;
+      sessionStarted = true;
+      try {
+        request.onSessionStarted?.(ref);
+      } catch {
+        // Revealing the session is best effort and must not fail the run.
+      }
+    };
     const finish = (outcome: () => void) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
+      if (cancelTimer) {
+        clearTimeout(cancelTimer);
+      }
       stopListening();
       stopWatchingClose();
       outcome();
     };
+    const finishAfterGuard = (outcome: () => void) => {
+      if (guardPending) {
+        pendingOutcome ??= outcome;
+      } else {
+        finish(outcome);
+      }
+    };
 
     const timer = setTimeout(() => {
-      // The turn keeps running in the host unless it is cancelled, so give the
-      // cancel a moment to arrive before the connection is closed.
+      if (!dispatchStarted) {
+        finish(() =>
+          reject(new AgentHostError("failed", "The Agent Host run timed out before dispatch.", "unknown")),
+        );
+        return;
+      }
+      // The RPC response alone does not confirm that cancellation took effect.
+      cancelTimer = setTimeout(
+        () =>
+          finish(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                "The Agent Host run timed out.",
+                "unknown",
+              ),
+            ),
+          ),
+        CANCEL_TIMEOUT_MS,
+      );
       void connection
         .dispatch(
           ref.chatUri,
@@ -547,45 +615,114 @@ function runTurn(
           },
           CANCEL_TIMEOUT_MS,
         )
-        .catch(() => undefined)
-        .then(() =>
-          finish(() =>
-            reject(new AgentHostError("failed", "The Agent Host run timed out.")),
-          ),
-        );
+        .catch(() => undefined);
     }, request.timeoutMs);
 
-    const stopListening = connection.onAction((channel, action) => {
+    const stopListening = connection.onAction((channel, action, envelope) => {
       if (channel !== ref.chatUri) {
         return;
       }
       // A continued chat can carry events of other turns; only this turn counts.
-      if (typeof action.turnId === "string" && action.turnId !== turnId) {
+      if (action.turnId !== turnId) {
         return;
       }
-      if (action.type === "chat/usage") {
+      if (envelope.rejected) {
+        if (action.type === "chat/turnStarted") {
+          finish(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                "The Agent Host rejected the turn.",
+                "unknown",
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      if (
+        action.type === "chat/turnStarted" ||
+        action.type === "chat/responsePart" ||
+        action.type === "chat/delta" ||
+        action.type === "chat/usage" ||
+        action.type === "chat/turnComplete" ||
+        action.type === "chat/error"
+      ) {
+        revealSession();
+      }
+      if (action.type === "chat/responsePart") {
+        const part = action.part;
+        if (!part || typeof part !== "object" || Array.isArray(part)) {
+          responseTextUncertain = true;
+          return;
+        }
+        const record = part as Record<string, unknown>;
+        if (record.kind === "markdown") {
+          if (typeof record.id !== "string" || typeof record.content !== "string") {
+            responseTextUncertain = true;
+            return;
+          }
+          markdownParts.add(record.id);
+          responseTextObserved ||= /\S/.test(record.content);
+        } else if (
+          record.kind !== "reasoning" &&
+          record.kind !== "toolCall" &&
+          record.kind !== "contentRef" &&
+          record.kind !== "inputRequest" &&
+          record.kind !== "systemNotification"
+        ) {
+          responseTextUncertain = true;
+        }
+      } else if (action.type === "chat/delta") {
+        if (
+          typeof action.partId !== "string" ||
+          !markdownParts.has(action.partId) ||
+          typeof action.content !== "string"
+        ) {
+          responseTextUncertain = true;
+        } else {
+          responseTextObserved ||= /\S/.test(action.content);
+        }
+      } else if (action.type === "chat/usage") {
         const usage = action.usage as { model?: unknown } | undefined;
         if (typeof usage?.model === "string") {
           appliedModel = usage.model;
         }
       } else if (action.type === "chat/turnComplete") {
-        finish(() =>
+        finishAfterGuard(() =>
           resolve({
             ...ref,
             ...(model ? { requestedModel: model.id } : {}),
             ...(appliedModel ? { appliedModel } : {}),
+            responseText: responseTextObserved
+              ? "observed"
+              : responseTextUncertain
+                ? "unknown"
+                : "not_observed",
           }),
         );
       } else if (action.type === "chat/error") {
         const part = action.part as { error?: { message?: unknown } } | undefined;
         const detail =
           typeof part?.error?.message === "string" ? part.error.message : "";
-        finish(() =>
-          reject(new AgentHostError("failed", detail || "The Agent Host run failed.")),
+        finishAfterGuard(() =>
+          reject(
+            new AgentHostError(
+              "failed",
+              detail || "The Agent Host run failed.",
+              "failed",
+            ),
+          ),
         );
       } else if (action.type === "chat/turnCancelled") {
-        finish(() =>
-          reject(new AgentHostError("failed", "The Agent Host run was cancelled.")),
+        finishAfterGuard(() =>
+          reject(
+            new AgentHostError(
+              "failed",
+              "The Agent Host run was cancelled.",
+              "cancelled",
+            ),
+          ),
         );
       }
     });
@@ -593,13 +730,20 @@ function runTurn(
     const stopWatchingClose = connection.onClose(() =>
       finish(() =>
         reject(
-          new AgentHostError("failed", "The Agent Host connection closed during the run."),
+          new AgentHostError(
+            "failed",
+            "The Agent Host connection closed during the run.",
+            "unknown",
+          ),
         ),
       ),
     );
 
-    connection
-      .dispatch(ref.chatUri, {
+    const dispatch = () => {
+      if (settled) return;
+      dispatchStarted = true;
+      void connection
+        .dispatch(ref.chatUri, {
         type: "chat/turnStarted",
         turnId,
         startedAt: new Date().toISOString(),
@@ -618,23 +762,39 @@ function runTurn(
               }
             : {}),
         },
-      })
-      .then(() => {
-        try {
-          request.onSessionStarted?.(ref);
-        } catch {
-          // Revealing the session is best effort and must not fail the run.
-        }
-      })
-      .catch((error: unknown) =>
-        finish(() =>
-          reject(
-            error instanceof AgentHostError
-              ? error
-              : new AgentHostError("failed", "The Agent Host rejected the run."),
+        })
+        .catch((error: unknown) =>
+          finish(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                error instanceof AgentHostError
+                  ? error.message
+                  : "The Agent Host rejected the run.",
+                "unknown",
+              ),
+            ),
           ),
-        ),
+        );
+    };
+    if (request.dispatchGuard) {
+      void request.dispatchGuard(dispatch).then(
+        () => {
+          guardPending = false;
+          if (pendingOutcome) finish(pendingOutcome);
+        },
+        (error: unknown) =>
+          finish(() =>
+            reject(
+              dispatchStarted
+                ? new AgentHostError("failed", "The dispatch outcome could not be confirmed.", "unknown")
+                : error,
+            ),
+          ),
       );
+    } else {
+      dispatch();
+    }
   });
 }
 

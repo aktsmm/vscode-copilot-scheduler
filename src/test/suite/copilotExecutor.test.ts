@@ -1,10 +1,219 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
+import * as agentHostClient from "../../agentHostClient";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
+import { createPromptBlockedError } from "../../promptExecutionErrors";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("Agent Host uses its default model for an empty configuration", async () => {
+    const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+    const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+    const storageUri = Object.getOwnPropertyDescriptor(CopilotExecutor, "extensionGlobalStorageUri")!;
+    const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+    const sessions: Map<string, unknown> = Reflect.get(CopilotExecutor, "agentHostSessions");
+    const previousSessions = new Map(sessions);
+    const requests: agentHostClient.AgentHostTurnRequest[] = [];
+    Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+      configurable: true,
+      value: () => ({ socketPath: "test", token: "test", protocolVersion: "1.0.0" }),
+    });
+    Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+      configurable: true,
+      value: async (request: agentHostClient.AgentHostTurnRequest) => {
+        requests.push(request);
+        return { sessionUri: "test-session", chatUri: "test-chat", responseText: "observed" };
+      },
+    });
+    CopilotExecutor.configureForExtensionContext(vscode.Uri.file(__dirname));
+    try {
+      const executor = new CopilotExecutor();
+      const config = vscode.workspace.getConfiguration("copilotScheduler");
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(
+          routing: ReturnType<typeof __testOnly.buildPromptRouting>,
+          options: { modelConfiguration: Record<string, number> },
+          config: vscode.WorkspaceConfiguration,
+          chatSession: "new",
+        ): Promise<{ result?: { agentHostRun?: { turnOutcome?: string } }; fallbackReason?: string }>;
+      };
+      const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
+      const result = await internals.tryExecuteViaAgentHost(
+        routing, { modelConfiguration: {} }, config, "new",
+      );
+      assert.strictEqual(result.result?.agentHostRun?.turnOutcome, "completed");
+      assert.strictEqual(requests.length, 1);
+      assert.strictEqual(requests[0].modelId, undefined);
+
+      const rejected = await internals.tryExecuteViaAgentHost(
+        routing, { modelConfiguration: { temperature: 1 } }, config, "new",
+      );
+      assert.ok(rejected.fallbackReason);
+      assert.strictEqual(requests.length, 1);
+    } finally {
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", storageUri);
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+      sessions.clear();
+      for (const [key, value] of previousSessions) sessions.set(key, value);
+    }
+  });
+
+  test("a guarded one-time run never falls back to chat or CLI", async () => {
+    const originalWarning = vscode.window.showWarningMessage;
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => undefined,
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(): Promise<{ fallbackReason: string }>;
+        tryOpenChatWithPrompt(): Promise<never>;
+        executePromptViaCopilotCli(): Promise<never>;
+      };
+      internals.tryExecuteViaAgentHost = async () => ({ fallbackReason: "unavailable" });
+      internals.tryOpenChatWithPrompt = async () => assert.fail("chat must not run");
+      internals.executePromptViaCopilotCli = async () => assert.fail("CLI must not run");
+      const dispatchGuard = async (dispatch: () => void) => { dispatch(); };
+      await assert.rejects(
+        executor.executePrompt("synthetic", { dispatchGuard, chatSession: "continue" }),
+        (error: unknown) =>
+          error instanceof Error && error.message === messages.oneTimeDispatchRequiresAgentHost(),
+      );
+      await assert.rejects(
+        executor.executePrompt("synthetic", { dispatchGuard, useCopilotCli: true, model: "test" }),
+        (error: unknown) =>
+          error instanceof Error && error.message === messages.oneTimeDispatchRequiresAgentHost(),
+      );
+    } finally {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+    }
+  });
+
+  test("a recurring Agent Host guard preserves the selected CLI route", async () => {
+    const executor = new CopilotExecutor();
+    let calls = 0;
+    const internals = executor as unknown as {
+      executePromptViaCopilotCli(): Promise<undefined>;
+    };
+    internals.executePromptViaCopilotCli = async () => { calls++; return undefined; };
+    await executor.executePrompt("synthetic", {
+      dispatchGuard: async (dispatch) => { dispatch(); },
+      allowUnguardedFallback: true,
+      useCopilotCli: true,
+      model: "test",
+    });
+    assert.strictEqual(calls, 1);
+  });
+
+  test("an Agent Host failure propagates without waiting for its warning", async () => {
+    const originalWarning = vscode.window.showWarningMessage;
+    let dismiss!: () => void;
+    const warning = new Promise<undefined>((resolve) => {
+      dismiss = () => resolve(undefined);
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: () => warning,
+    });
+    try {
+      const error = createPromptBlockedError("uncertain", "agentHostFailed", "unknown");
+      const executor = new CopilotExecutor() as unknown as {
+        warnAndThrow(error: Error, prompt: string): Promise<never>;
+      };
+      const execution = Promise.resolve().then(() => executor.warnAndThrow(error, "synthetic"));
+      const outcome = await Promise.race([
+        execution.then(() => "resolved", (caught: unknown) => caught),
+        new Promise<string>((resolve) => setTimeout(() => resolve("warning blocked"), 100)),
+      ]);
+      assert.strictEqual(outcome, error);
+    } finally {
+      dismiss();
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+    }
+  });
+
+  test("a chat fallback failure does not wait for the warning to be dismissed", async () => {
+    const originalWarning = vscode.window.showWarningMessage;
+    let dismiss!: () => void;
+    const warning = new Promise<undefined>((resolve) => {
+      dismiss = () => resolve(undefined);
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: () => warning,
+    });
+    try {
+      const error = new Error("chat dispatch failed");
+      const executor = new CopilotExecutor();
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(): Promise<{ fallbackReason: string }>;
+        tryOpenChatWithPrompt(): Promise<never>;
+      };
+      internals.tryExecuteViaAgentHost = async () => ({ fallbackReason: "test" });
+      internals.tryOpenChatWithPrompt = async () => { throw error; };
+      const outcome = await Promise.race([
+        executor.executePrompt("synthetic", { chatSession: "continue" })
+          .then(() => "resolved", (caught: unknown) => caught),
+        new Promise<string>((resolve) => setTimeout(() => resolve("warning blocked"), 200)),
+      ]);
+      assert.strictEqual(outcome, error);
+    } finally {
+      dismiss();
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+    }
+  });
+
+  test("a failed copy action cannot replace an Agent Host failure", async () => {
+    const originalWarning = vscode.window.showWarningMessage;
+    const clipboard = Object.getOwnPropertyDescriptor(vscode.env, "clipboard")!;
+    let copyAttempted!: () => void;
+    const copied = new Promise<void>((resolve) => { copyAttempted = resolve; });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => messages.actionCopyPrompt(),
+    });
+    try {
+      Object.defineProperty(vscode.env, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async () => {
+            copyAttempted();
+            throw new Error("clipboard unavailable");
+          },
+        },
+      });
+      const error = createPromptBlockedError("uncertain", "agentHostFailed", "unknown");
+      const executor = new CopilotExecutor() as unknown as {
+        warnAndThrow(error: Error, prompt: string): Promise<never>;
+      };
+      await assert.rejects(
+        Promise.resolve().then(() => executor.warnAndThrow(error, "synthetic")),
+        (caught: unknown) => caught === error,
+      );
+      await copied;
+      await Promise.resolve();
+    } finally {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+      Object.defineProperty(vscode.env, "clipboard", clipboard);
+    }
+  });
+
   test("effective System permission permits native explicit dispatch without dropping options", async () => {
     const originalModels = CopilotExecutor.getAvailableModelsWithSource;
     const originalExtension = vscode.extensions.getExtension;

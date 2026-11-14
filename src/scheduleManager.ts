@@ -6,6 +6,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import type {
   ScheduledTask,
   CreateTaskInput,
@@ -13,6 +14,7 @@ import type {
   TaskScope,
   ModelInfo,
   ModelSelectionFields,
+  AgentHostTurnOutcome,
 } from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
@@ -54,7 +56,12 @@ import {
   type AttachmentRejection,
 } from "./attachmentResolver";
 import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
-import { isPromptBlockedError } from "./promptExecutionErrors";
+import {
+  createPromptBlockedError,
+  getAgentHostTurnFailure,
+  getPromptBlockedReason,
+  isPromptBlockedError,
+} from "./promptExecutionErrors";
 import { normalizeSkillRef } from "./skillResolver";
 
 // Node.js globals
@@ -70,8 +77,11 @@ declare const console: {
 const STORAGE_KEY = "scheduledTasks";
 const STORAGE_FILE_NAME = "scheduledTasks.json";
 const STORAGE_META_FILE_NAME = "scheduledTasks.meta.json";
+const STORAGE_FALLBACK_FILE_NAME = "scheduledTasks.fallback.json";
 const STORAGE_REVISION_KEY = "scheduledTasksRevision";
 const STORAGE_SAVED_AT_KEY = "scheduledTasksSavedAt";
+const STORAGE_SNAPSHOT_KEY = "scheduledTasksSnapshot";
+const STORAGE_SNAPSHOT_INTENT_KEY = "scheduledTasksSnapshotIntent";
 const DAILY_EXEC_COUNT_KEY = "dailyExecCount";
 const DAILY_EXEC_DATE_KEY = "dailyExecDate";
 const DAILY_TASK_EXEC_COUNTS_KEY = "dailyTaskExecCounts";
@@ -82,7 +92,11 @@ const DISCLAIMER_ACCEPTED_KEY = "disclaimerAccepted";
 type TaskStorageMeta = {
   revision: number;
   savedAt: string; // ISO string
+  commitId?: string;
+  tasksSnapshot?: unknown[];
 };
+
+type TaskStorageSnapshot = TaskStorageMeta & { tasksSnapshot: unknown[] };
 
 class TaskStoreConflictError extends Error {}
 
@@ -92,17 +106,27 @@ type ManualRunFailureReason =
   | "taskNotFound"
   | "executorUnavailable"
   | "alreadyRunning"
+  | "taskChanged"
   | "oneTimeCompleted"
+  | "claimFailed"
   | "promptBlocked"
   | "executionFailed"
   | "saveFailed";
+export type ManualRunExecutionInfo = {
+  name: string;
+  runAt?: string;
+  afterRun?: ScheduledTask["afterRun"];
+  attachmentCount?: number;
+};
 type ManualRunResult =
-  | { ok: true }
+  | { ok: true; claimId?: string; executionInfo?: ManualRunExecutionInfo }
   | {
       ok: false;
       reason: ManualRunFailureReason;
       errorMessage?: string;
       userNotified?: boolean;
+      turnOutcome?: Exclude<AgentHostTurnOutcome, "completed">;
+      executionInfo?: ManualRunExecutionInfo;
     };
 
 const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
@@ -310,9 +334,35 @@ function applyModelSelectionToTask(
 /** A due occurrence reserved on disk before it is executed. */
 interface TaskRunClaim {
   taskId: string;
+  claimId?: string;
   dueAt: Date;
   nextRun: Date | undefined;
+  runAt: string | undefined;
+  cronExpression: string;
+  expectedNextRun: number | undefined;
+  expectedUpdatedAt: number;
+  expectedEnabled: boolean;
+  deleteAfterRun?: boolean;
 }
+
+interface TaskRunSkip {
+  taskId: string;
+  runAt: string | undefined;
+  cronExpression: string;
+  expectedNextRun: number | undefined;
+  expectedEnabled: boolean;
+  expectedLastFiredDueAt: number | undefined;
+  expectedAllowedTimeStart: string | undefined;
+  expectedAllowedTimeEnd: string | undefined;
+  expectedMaxExecutionsPerDay: number | undefined;
+  expectedScope: TaskScope;
+  expectedWorkspacePath: string | undefined;
+  evaluatedAt: Date;
+}
+
+export type TaskExecutionCallbackResult = {
+  retainOneTimeTask?: boolean;
+};
 
 /**
  * Manages scheduled tasks including CRUD operations, cron parsing, and persistence
@@ -329,10 +379,15 @@ export class ScheduleManager {
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
   private storageMetaFilePath: string;
+  private storageFallbackFilePath: string;
   private storageLockFilePath: string;
   private onTasksChangedCallbacks: Array<() => void> = [];
   private onExecuteCallback:
-    | ((task: ScheduledTask) => Promise<void>)
+    | ((
+        task: ScheduledTask,
+        trigger: "manual" | "auto",
+        dispatchGuard?: (dispatch: () => void) => Promise<void>,
+      ) => Promise<void | TaskExecutionCallbackResult>)
     | undefined;
   private dailyExecCount = 0;
   private dailyExecDate = "";
@@ -342,6 +397,10 @@ export class ScheduleManager {
   private inFlightTaskIds: Set<string> = new Set();
 
   private storageRevision = 0;
+  private storageCommitId: string | undefined;
+  private storageSnapshotFingerprint: string | undefined;
+  private taskStoreReadError: string | undefined;
+  private taskStoreWarningShown = false;
   private saveQueue: Promise<void> = Promise.resolve();
   private globalStateWriteQueue: Promise<void> = Promise.resolve();
   private fileWriteQueue: Promise<void> = Promise.resolve();
@@ -368,6 +427,10 @@ export class ScheduleManager {
       this.context.globalStorageUri.fsPath,
       STORAGE_META_FILE_NAME,
     );
+    this.storageFallbackFilePath = path.join(
+      this.context.globalStorageUri.fsPath,
+      STORAGE_FALLBACK_FILE_NAME,
+    );
     this.storageLockFilePath = path.join(
       this.context.globalStorageUri.fsPath,
       "scheduledTasks.lock",
@@ -375,6 +438,7 @@ export class ScheduleManager {
     void Promise.all([
       cleanupOrphanedAtomicWriteTemps(this.storageFilePath),
       cleanupOrphanedAtomicWriteTemps(this.storageMetaFilePath),
+      cleanupOrphanedAtomicWriteTemps(this.storageFallbackFilePath),
     ])
       .then((counts) => {
         const removed = counts.reduce((sum, count) => sum + count, 0);
@@ -399,23 +463,52 @@ export class ScheduleManager {
     this.loadTasks();
   }
 
-  private loadMetaFromFile(): TaskStorageMeta | undefined {
+  private loadMetaFromFile(
+    metadataPath = this.storageMetaFilePath,
+  ): TaskStorageMeta | undefined {
     try {
-      if (!this.storageMetaFilePath) return undefined;
-      if (!fs.existsSync(this.storageMetaFilePath)) return undefined;
-      const raw = fs.readFileSync(this.storageMetaFilePath, "utf8");
+      if (!metadataPath) return undefined;
+      if (!fs.existsSync(metadataPath)) return undefined;
+      const raw = fs.readFileSync(metadataPath, "utf8");
       if (!raw.trim()) return undefined;
       const parsed = JSON.parse(raw) as Partial<TaskStorageMeta>;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Invalid task store metadata");
+      }
+      if (
+        !Number.isSafeInteger(parsed.revision) ||
+        (parsed.revision ?? -1) < 0 ||
+        typeof parsed.savedAt !== "string" ||
+        (parsed.commitId !== undefined &&
+          (typeof parsed.commitId !== "string" || !parsed.commitId)) ||
+        (parsed.tasksSnapshot !== undefined &&
+          (!Array.isArray(parsed.tasksSnapshot) ||
+            parsed.revision === undefined ||
+            typeof parsed.savedAt !== "string"))
+      ) {
+        throw new Error("Invalid task store snapshot");
+      }
       const revision =
         typeof parsed.revision === "number" ? parsed.revision : 0;
       const savedAt = typeof parsed.savedAt === "string" ? parsed.savedAt : "";
-      return { revision, savedAt };
-    } catch {
+      return {
+        revision,
+        savedAt,
+        ...(parsed.commitId ? { commitId: parsed.commitId } : {}),
+        ...(parsed.tasksSnapshot !== undefined
+          ? { tasksSnapshot: parsed.tasksSnapshot }
+          : {}),
+      };
+    } catch (error) {
+      logError(
+        "[CopilotScheduler] Failed to load task store metadata:",
+        error instanceof SyntaxError ? "Invalid JSON" : toSafeErrorDetails(error),
+      );
       return undefined;
     }
   }
 
-  private loadMetaFromGlobalState(): TaskStorageMeta {
+  private loadLegacyMetaFromGlobalState(): TaskStorageMeta {
     const revision = this.context.globalState.get<number>(
       STORAGE_REVISION_KEY,
       0,
@@ -425,6 +518,161 @@ export class ScheduleManager {
       "",
     );
     return { revision: typeof revision === "number" ? revision : 0, savedAt };
+  }
+
+  private loadGlobalStateSnapshot(): TaskStorageSnapshot | undefined {
+    const raw = this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY);
+    if (raw === undefined) return undefined;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      logError("[CopilotScheduler] Invalid global task store snapshot.");
+      return undefined;
+    }
+    const candidate = raw as Partial<TaskStorageSnapshot>;
+    if (
+      typeof candidate.revision !== "number" ||
+      !Number.isSafeInteger(candidate.revision) ||
+      candidate.revision < 0 ||
+      typeof candidate.savedAt !== "string" ||
+      (candidate.commitId !== undefined &&
+        (typeof candidate.commitId !== "string" || !candidate.commitId)) ||
+      !Array.isArray(candidate.tasksSnapshot)
+    ) {
+      logError("[CopilotScheduler] Invalid global task store snapshot.");
+      return undefined;
+    }
+    return {
+      revision: candidate.revision,
+      savedAt: candidate.savedAt,
+      ...(candidate.commitId ? { commitId: candidate.commitId } : {}),
+      tasksSnapshot: candidate.tasksSnapshot,
+    };
+  }
+
+  private hasFileMetadata(metadataPath = this.storageMetaFilePath): boolean {
+    try {
+      fs.statSync(metadataPath);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+  }
+
+  private loadSharedFileMetadata(): {
+    meta: TaskStorageMeta | undefined;
+    primary: TaskStorageMeta | undefined;
+    exists: boolean;
+    error?: string;
+  } {
+    const primary = this.loadMetaFromFile();
+    const fallback = this.loadMetaFromFile(this.storageFallbackFilePath);
+    const primaryExists = this.hasFileMetadata();
+    const fallbackExists = this.hasFileMetadata(this.storageFallbackFilePath);
+    const globalSnapshot = this.loadGlobalStateSnapshot();
+    const payload = !primary?.tasksSnapshot ? this.loadTasksFromFile() : undefined;
+    const oneTimeTasks = (tasks: unknown[]) =>
+      tasks.filter(
+        (task) =>
+          !!task &&
+          typeof task === "object" &&
+          typeof (task as Record<string, unknown>).runAt === "string",
+      );
+    const payloadHasOneTimeClaim =
+      !primary?.tasksSnapshot &&
+      !fallback?.tasksSnapshot &&
+      payload!.tasks.some(
+        (task) =>
+          !!task &&
+          typeof task === "object" &&
+          typeof (task as Record<string, unknown>).runAt === "string" &&
+          !!(task as Record<string, unknown>).lastFiredClaimId,
+      );
+    let error: string | undefined;
+    if (primaryExists && !primary) {
+      error = "Cannot safely recover the invalid file task store metadata";
+    } else if (
+      fallbackExists &&
+      (!fallback?.tasksSnapshot || !fallback.commitId)
+    ) {
+      error = "Cannot safely recover the invalid fallback task store snapshot";
+    } else if (
+      !primary?.tasksSnapshot &&
+      fallback?.tasksSnapshot &&
+      (!payload!.ok ||
+        JSON.stringify(oneTimeTasks(payload!.tasks)) !==
+          JSON.stringify(oneTimeTasks(fallback.tasksSnapshot)))
+    ) {
+      error = "Cannot verify the latest one-time task store snapshot";
+    } else if (
+      !primary?.tasksSnapshot &&
+      ((globalSnapshot?.commitId &&
+        (!fallback?.tasksSnapshot || fallback.revision < globalSnapshot.revision)) ||
+        payloadHasOneTimeClaim)
+    ) {
+      error = "Cannot safely recover missing committed task store metadata";
+    } else if (
+      primary?.tasksSnapshot &&
+      fallback?.tasksSnapshot &&
+      this.snapshotsConflict(primary, {
+        ...fallback,
+        tasksSnapshot: fallback.tasksSnapshot,
+      })
+    ) {
+      error = "Task store snapshots have conflicting commits";
+    }
+    return {
+      primary,
+      meta:
+        fallback && (!primary || fallback.revision > primary.revision)
+          ? fallback
+          : primary,
+      exists: primaryExists || fallbackExists,
+      error,
+    };
+  }
+
+  private canRecoverInvalidGlobalSnapshot(
+    fileMeta: TaskStorageMeta | undefined,
+  ): boolean {
+    const raw = this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_INTENT_KEY);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const intent = raw as Partial<TaskStorageMeta>;
+    if (
+      !fileMeta?.tasksSnapshot ||
+      !fileMeta.commitId ||
+      this.loadLegacyMetaFromGlobalState().revision > fileMeta.revision ||
+      !Number.isSafeInteger(intent.revision) ||
+      (intent.revision ?? -1) < 0 ||
+      typeof intent.commitId !== "string" ||
+      !intent.commitId
+    ) {
+      return false;
+    }
+    return (
+      fileMeta.revision > intent.revision! ||
+      (fileMeta.revision === intent.revision && fileMeta.commitId === intent.commitId)
+    );
+  }
+
+  private snapshotsConflict(
+    fileMeta: TaskStorageMeta | undefined,
+    globalSnapshot: TaskStorageSnapshot | undefined,
+  ): boolean {
+    return !!(
+      fileMeta?.tasksSnapshot &&
+      globalSnapshot &&
+      fileMeta.revision === globalSnapshot.revision &&
+      ((fileMeta.commitId &&
+        globalSnapshot.commitId &&
+        fileMeta.commitId !== globalSnapshot.commitId) ||
+        JSON.stringify(fileMeta.tasksSnapshot) !==
+          JSON.stringify(globalSnapshot.tasksSnapshot))
+    );
+  }
+
+  private loadMetaFromGlobalState(): TaskStorageMeta {
+    const legacy = this.loadLegacyMetaFromGlobalState();
+    const snapshot = this.loadGlobalStateSnapshot();
+    return snapshot && snapshot.revision >= legacy.revision ? snapshot : legacy;
   }
 
   private async saveMetaToFile(meta: TaskStorageMeta): Promise<void> {
@@ -448,7 +696,7 @@ export class ScheduleManager {
     } catch (error) {
       logDebug(
         "[CopilotScheduler] Failed to load tasks from file:",
-        toSafeErrorDetails(error),
+        error instanceof SyntaxError ? "Invalid JSON" : toSafeErrorDetails(error),
       );
       return { tasks: [], ok: false };
     }
@@ -626,10 +874,14 @@ export class ScheduleManager {
    * Bulk update task prompts (used by template sync) and save once.
    */
   async updateTaskPrompts(
-    updates: Array<{ id: string; prompt: string }>,
+    updates: Array<{ id: string; prompt: string; expectedSnapshot?: string }>,
   ): Promise<number> {
     if (!Array.isArray(updates) || updates.length === 0) {
       return 0;
+    }
+
+    if (updates.some((item) => item?.expectedSnapshot !== undefined)) {
+      await this.refreshPersistedTasksIfChanged(false);
     }
 
     const now = new Date();
@@ -642,6 +894,10 @@ export class ScheduleManager {
 
       const task = this.tasks.get(item.id);
       if (!task) continue;
+      if (
+        item.expectedSnapshot !== undefined &&
+        JSON.stringify(task) !== item.expectedSnapshot
+      ) continue;
       if (task.prompt === nextPrompt) continue;
       task.prompt = nextPrompt;
       task.updatedAt = now;
@@ -840,14 +1096,54 @@ export class ScheduleManager {
    */
   private loadTasks(): void {
     const rawSavedTasks = this.context.globalState.get<unknown>(STORAGE_KEY);
-    const savedTasks = Array.isArray(rawSavedTasks) ? rawSavedTasks : [];
-    const globalTasksOk =
-      rawSavedTasks === undefined || Array.isArray(rawSavedTasks);
-    const fileLoad = this.loadTasksFromFile();
+    const legacyGlobalMeta = this.loadLegacyMetaFromGlobalState();
+    const globalSnapshot = this.loadGlobalStateSnapshot();
+    const hasGlobalSnapshot =
+      this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY) !== undefined;
+    const useGlobalSnapshot =
+      globalSnapshot && globalSnapshot.revision >= legacyGlobalMeta.revision;
+    const savedTasks = useGlobalSnapshot
+      ? globalSnapshot.tasksSnapshot
+      : Array.isArray(rawSavedTasks)
+        ? rawSavedTasks
+        : [];
+    const globalTasksOk = Boolean(
+      (!hasGlobalSnapshot || globalSnapshot) &&
+      (useGlobalSnapshot ||
+        rawSavedTasks === undefined ||
+        Array.isArray(rawSavedTasks)),
+    );
+    const filePayload = this.loadTasksFromFile();
+    const sharedFile = this.loadSharedFileMetadata();
+    const rawFileMeta = sharedFile.meta;
+    const hasFileMeta = sharedFile.exists;
+    const fileMeta = rawFileMeta || { revision: 0, savedAt: "" };
+    const fileLoad = rawFileMeta?.tasksSnapshot
+      ? { tasks: rawFileMeta.tasksSnapshot, ok: true }
+      : hasFileMeta && !rawFileMeta
+        ? { tasks: [], ok: false }
+        : filePayload;
     const fileTasks = fileLoad.tasks;
-
-    const globalMeta = this.loadMetaFromGlobalState();
-    const fileMeta = this.loadMetaFromFile() || { revision: 0, savedAt: "" };
+    const filePayloadNeedsRepair =
+      rawFileMeta?.tasksSnapshot !== undefined &&
+      (!filePayload.ok ||
+        JSON.stringify(filePayload.tasks) !==
+          JSON.stringify(rawFileMeta.tasksSnapshot) ||
+        (sharedFile.primary?.revision ?? -1) < rawFileMeta.revision);
+    const globalMeta = useGlobalSnapshot ? globalSnapshot : legacyGlobalMeta;
+    this.taskStoreReadError = sharedFile.error
+      ? sharedFile.error
+      : this.snapshotsConflict(rawFileMeta, globalSnapshot)
+        ? "Task store snapshots have conflicting commits"
+        : hasGlobalSnapshot &&
+            !globalSnapshot &&
+            !this.canRecoverInvalidGlobalSnapshot(rawFileMeta)
+          ? "Cannot safely recover the invalid global task store snapshot"
+          : undefined;
+    if (this.taskStoreReadError) {
+      logError(`[CopilotScheduler] ${this.taskStoreReadError}.`);
+      this.notifyTaskStoreIssue();
+    }
 
     const globalStoreExists =
       (Array.isArray(savedTasks) && savedTasks.length > 0) ||
@@ -855,7 +1151,7 @@ export class ScheduleManager {
 
     const fileStoreExists =
       fileLoad.ok ||
-      fs.existsSync(this.storageMetaFilePath) ||
+      hasFileMeta ||
       (typeof fileMeta.revision === "number" && fileMeta.revision > 0);
 
     const selection = selectTaskStore<unknown>(
@@ -879,6 +1175,10 @@ export class ScheduleManager {
     // IMPORTANT: an empty task array can still be the newest state (e.g., deleting the last task).
     const tasksToLoad = selection.chosenTasks;
     this.storageRevision = selection.chosenRevision || 0;
+    const chosenMeta =
+      selection.chosenKind === "file" ? rawFileMeta : globalMeta;
+    this.storageCommitId = chosenMeta?.commitId;
+    this.storageSnapshotFingerprint = JSON.stringify(tasksToLoad);
 
     let needsSave = false;
     const needsStoreHealing =
@@ -928,7 +1228,7 @@ export class ScheduleManager {
         task.lastFiredDueAt = undefined;
         needsSave = true;
       }
-      if (task.runAt && task.lastFiredDueAt && task.enabled) {
+      if (task.runAt && (task.lastFiredDueAt || task.lastFiredClaimId) && task.enabled) {
         task.enabled = false;
         needsSave = true;
       }
@@ -1147,7 +1447,7 @@ export class ScheduleManager {
         if (!hasValidNextRun) {
           const now = new Date();
           task.nextRun = task.runAt
-            ? task.lastFiredDueAt
+            ? task.lastFiredDueAt || task.lastFiredClaimId
               ? undefined
               : new Date(task.runAt)
             : this.getNextRunForTask(task.cronExpression, now);
@@ -1162,6 +1462,9 @@ export class ScheduleManager {
     }
 
     // Save if any changes were made
+    if (this.taskStoreReadError) {
+      return;
+    }
     if (needsSave) {
       void this.saveTasks().catch((error) =>
         logError(
@@ -1173,6 +1476,7 @@ export class ScheduleManager {
       // Heal the other store if needed (best effort, do not bump revision)
       if (
         needsStoreHealing ||
+        filePayloadNeedsRepair ||
         selection.shouldHealFile ||
         selection.shouldHealGlobalState
       ) {
@@ -1189,16 +1493,31 @@ export class ScheduleManager {
   /**
    * Save tasks to globalState
    */
-  private async saveTasks(options?: { bumpRevision?: boolean }): Promise<void> {
-    // Serialize saves to avoid last-write-wins races across concurrent callers.
-    const op = this.saveQueue.then(() => this.saveTasksInternal(options));
+  private async saveTasks(options?: {
+    bumpRevision?: boolean;
+    requireFile?: boolean;
+  }): Promise<void> {
+    return this.enqueueSave(() => this.saveTasksInternal(options));
+  }
+
+  private notifyTaskStoreIssue(): void {
+    if (this.taskStoreWarningShown) return;
+    this.taskStoreWarningShown = true;
+    void vscode.window.showWarningMessage(messages.taskStoreReservationFailed());
+  }
+
+  private enqueueSave<T>(operation: () => Promise<T>): Promise<T> {
+    const op = this.saveQueue.then(operation);
     // Recover the chain so that a failed save does not block all subsequent saves.
-    this.saveQueue = op.catch((error) => {
-      logError(
-        "[CopilotScheduler] Save failed (chain recovered):",
-        toSafeErrorDetails(error),
-      );
-    });
+    this.saveQueue = op.then(
+      () => undefined,
+      (error) => {
+        logError(
+          "[CopilotScheduler] Save failed (chain recovered):",
+          toSafeErrorDetails(error),
+        );
+      },
+    );
     return op;
   }
 
@@ -1215,10 +1534,11 @@ export class ScheduleManager {
 
   private async saveTasksInternal(options?: {
     bumpRevision?: boolean;
-  }): Promise<void> {
+    requireFile?: boolean;
+  }, tasksOverride?: ScheduledTask[]): Promise<void> {
     try {
       await withTaskStoreLock(this.storageLockFilePath, () =>
-        this.saveTasksWhileLocked(options),
+        this.saveTasksWhileLocked(options, tasksOverride),
       );
     } catch (error) {
       if (
@@ -1240,17 +1560,50 @@ export class ScheduleManager {
 
   private async saveTasksWhileLocked(options?: {
     bumpRevision?: boolean;
-  }): Promise<void> {
+    requireFile?: boolean;
+  }, tasksOverride?: ScheduledTask[]): Promise<void> {
+    if (this.taskStoreReadError) {
+      throw new Error(this.taskStoreReadError);
+    }
+    const sharedFile = this.loadSharedFileMetadata();
+    const fileMeta = sharedFile.meta;
+    const globalSnapshot = this.loadGlobalStateSnapshot();
+    if (sharedFile.error) {
+      throw new Error(sharedFile.error);
+    }
+    if (this.snapshotsConflict(fileMeta, globalSnapshot)) {
+      throw new Error("Task store snapshots have conflicting commits");
+    }
+    if (
+      this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY) !== undefined &&
+      !globalSnapshot &&
+      !this.canRecoverInvalidGlobalSnapshot(fileMeta)
+    ) {
+      throw new Error("Cannot safely recover the invalid global task store snapshot");
+    }
+    const globalMeta = this.loadMetaFromGlobalState();
     const latestPersistedRevision = Math.max(
-      this.loadMetaFromFile()?.revision ?? 0,
-      this.loadMetaFromGlobalState().revision,
+      fileMeta?.revision ?? 0,
+      globalMeta.revision,
     );
     if (latestPersistedRevision > this.storageRevision) {
       throw new TaskStoreConflictError();
     }
+    const latestMeta =
+      (fileMeta?.revision ?? -1) >= globalMeta.revision ? fileMeta : globalMeta;
+    if (
+      latestPersistedRevision === this.storageRevision &&
+      latestMeta?.tasksSnapshot &&
+      this.storageSnapshotFingerprint !== undefined &&
+      JSON.stringify(latestMeta.tasksSnapshot) !== this.storageSnapshotFingerprint
+    ) {
+      throw new TaskStoreConflictError();
+    }
 
     const bumpRevision = options?.bumpRevision !== false;
-    const tasksArray = Array.from(this.tasks.values());
+    const tasksArray = this.cloneTasksForMirror(
+      tasksOverride ?? Array.from(this.tasks.values()),
+    );
 
     const nextRevision = bumpRevision
       ? this.storageRevision + 1
@@ -1258,6 +1611,7 @@ export class ScheduleManager {
     const meta: TaskStorageMeta = {
       revision: nextRevision,
       savedAt: new Date().toISOString(),
+      commitId: bumpRevision ? randomUUID() : (this.storageCommitId ?? randomUUID()),
     };
 
     // Prefer file persistence for responsiveness and reliability.
@@ -1265,8 +1619,10 @@ export class ScheduleManager {
     try {
       await this.queueFileWrite(tasksArray, meta);
       this.storageRevision = meta.revision;
+      this.storageCommitId = meta.commitId;
+      this.storageSnapshotFingerprint = JSON.stringify(tasksArray);
 
-      await this.queueGlobalStateWrite(tasksArray, meta).catch((error) => {
+      await this.queueGlobalStateWrite(tasksArray, meta, true).catch((error) => {
         logDebug(
           "[CopilotScheduler] Task save to globalState failed (file succeeded):",
           toSafeErrorDetails(error),
@@ -1276,17 +1632,28 @@ export class ScheduleManager {
       this.notifyTasksChanged();
       return;
     } catch (fileError) {
-      // If file persistence fails, fall back to globalState (await so at least one store succeeds).
+      if (options?.requireFile) {
+        throw fileError;
+      }
+      // The shared fallback is authoritative when the primary file cannot be
+      // committed; a cached globalState alone cannot prove cross-window freshness.
+      await writeFileAtomically(
+        this.storageFallbackFilePath,
+        JSON.stringify({ ...meta, tasksSnapshot: tasksArray }),
+      );
+      this.storageRevision = meta.revision;
+      this.storageCommitId = meta.commitId;
+      this.storageSnapshotFingerprint = JSON.stringify(tasksArray);
       try {
-        await this.queueGlobalStateWrite(tasksArray, meta);
-        this.storageRevision = meta.revision;
+        await this.queueGlobalStateWrite(tasksArray, meta, true);
       } catch (globalStateError) {
-        throw globalStateError instanceof Error
-          ? globalStateError
-          : new Error(String(globalStateError ?? ""));
+        logError(
+          "[CopilotScheduler] Task save to globalState failed (fallback file succeeded):",
+          toSafeErrorDetails(globalStateError),
+        );
       }
 
-      // Best-effort background file sync for future reliability.
+      // Repair the primary pair when possible, preserving payload-before-meta.
       await this.queueFileWrite(tasksArray, meta).catch((error) => {
         logDebug(
           "[CopilotScheduler] Task save to file failed (globalState succeeded):",
@@ -1308,11 +1675,44 @@ export class ScheduleManager {
   private queueGlobalStateWrite(
     tasksArray: ScheduledTask[],
     meta: TaskStorageMeta,
+    fileCommitted = false,
   ): Promise<void> {
     const tasksSnapshot = this.cloneTasksForMirror(tasksArray);
     const metaSnapshot = { ...meta };
     const op = this.globalStateWriteQueue.then(async () => {
+      const previousSnapshot = this.loadGlobalStateSnapshot();
+      const rawSnapshot =
+        this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY);
+      const previousMeta = this.loadLegacyMetaFromGlobalState();
+      if (rawSnapshot !== undefined && !previousSnapshot && !fileCommitted) {
+        throw new Error("Cannot replace an invalid global task store snapshot");
+      }
+      if (
+        rawSnapshot === undefined ||
+        (previousSnapshot && previousSnapshot.revision < previousMeta.revision)
+      ) {
+        const previous = this.context.globalState.get<unknown>(STORAGE_KEY);
+        if (
+          previous !== undefined &&
+          !Array.isArray(previous) &&
+          !fileCommitted
+        ) {
+          throw new Error("Cannot snapshot an invalid global task store");
+        }
+        await this.context.globalState.update(STORAGE_SNAPSHOT_KEY, {
+          ...previousMeta,
+          tasksSnapshot: Array.isArray(previous) ? previous : [],
+        });
+      }
+      await this.context.globalState.update(STORAGE_SNAPSHOT_INTENT_KEY, {
+        revision: metaSnapshot.revision,
+        commitId: metaSnapshot.commitId,
+      });
       await this.saveTasksToGlobalState(tasksSnapshot);
+      await this.context.globalState.update(STORAGE_SNAPSHOT_KEY, {
+        ...metaSnapshot,
+        tasksSnapshot,
+      });
       await this.saveMetaToGlobalState(metaSnapshot);
     });
     this.globalStateWriteQueue = op.catch(() => undefined);
@@ -1326,8 +1726,46 @@ export class ScheduleManager {
     const tasksSnapshot = this.cloneTasksForMirror(tasksArray);
     const metaSnapshot = { ...meta };
     const op = this.fileWriteQueue.then(async () => {
+      const previousMeta = this.loadMetaFromFile();
+      if (this.hasFileMetadata() && !previousMeta) {
+        throw new Error("Cannot replace invalid task store metadata");
+      }
+      if (previousMeta?.tasksSnapshot === undefined) {
+        const previousPayload = this.loadTasksFromFile();
+        const legacyGlobal = this.context.globalState.get<unknown>(STORAGE_KEY);
+        const legacyGlobalMeta = this.loadLegacyMetaFromGlobalState();
+        const globalSnapshot = this.loadGlobalStateSnapshot();
+        const hasInvalidGlobalSnapshot =
+          this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY) !==
+            undefined && !globalSnapshot;
+        const useGlobalSnapshot =
+          globalSnapshot && globalSnapshot.revision >= legacyGlobalMeta.revision;
+        const globalTasks = useGlobalSnapshot
+          ? globalSnapshot.tasksSnapshot
+          : hasInvalidGlobalSnapshot
+            ? undefined
+            : legacyGlobal;
+        const globalMeta = useGlobalSnapshot
+          ? globalSnapshot
+          : legacyGlobalMeta;
+        const baseline = previousPayload.ok
+          ? {
+              ...(previousMeta ?? { revision: 0, savedAt: "" }),
+              tasksSnapshot: previousPayload.tasks,
+            }
+          : Array.isArray(globalTasks)
+            ? { ...globalMeta, tasksSnapshot: globalTasks }
+            : !fs.existsSync(this.storageFilePath) &&
+                !fs.existsSync(this.storageMetaFilePath)
+              ? { revision: 0, savedAt: "", tasksSnapshot: [] }
+              : undefined;
+        if (!baseline) {
+          throw new Error("Cannot establish a committed task store snapshot");
+        }
+        await this.saveMetaToFile(baseline);
+      }
       await this.saveTasksToFile(tasksSnapshot);
-      await this.saveMetaToFile(metaSnapshot);
+      await this.saveMetaToFile({ ...metaSnapshot, tasksSnapshot });
     });
     this.fileWriteQueue = op.catch(() => undefined);
     return op;
@@ -1511,7 +1949,7 @@ export class ScheduleManager {
 
   private nextRunForTask(task: ScheduledTask, now: Date): Date | undefined {
     return task.runAt
-      ? task.lastFiredDueAt
+      ? task.lastFiredDueAt || task.lastFiredClaimId
         ? undefined
         : new Date(task.runAt)
       : this.getNextRunForTask(task.cronExpression, now);
@@ -1655,6 +2093,19 @@ export class ScheduleManager {
    * Get a task by ID
    */
   getTask(id: string): ScheduledTask | undefined {
+    return this.tasks.get(id);
+  }
+
+  async getTaskForRun(id: string): Promise<ScheduledTask | undefined> {
+    try {
+      await this.refreshPersistedTasksIfChanged(false);
+    } catch (error) {
+      logError(
+        "[CopilotScheduler] Could not refresh the task before confirmation:",
+        toSafeErrorDetails(error),
+      );
+      throw error;
+    }
     return this.tasks.get(id);
   }
 
@@ -1810,7 +2261,7 @@ export class ScheduleManager {
       !task.enabled &&
       nextEnabled &&
       normalizedRunAt &&
-      task.lastFiredDueAt &&
+      (task.lastFiredDueAt || task.lastFiredClaimId) &&
       normalizedRunAt === task.runAt
     ) {
       throw new Error(
@@ -1983,7 +2434,7 @@ export class ScheduleManager {
       // One-time immediate scheduling on update (only for enabled tasks)
       if (task.runAt) {
         task.nextRun =
-          cronChanged || !task.lastFiredDueAt
+          cronChanged || !(task.lastFiredDueAt || task.lastFiredClaimId)
             ? new Date(task.runAt)
             : undefined;
       } else if (updates.runFirstInOneMinute) {
@@ -2003,6 +2454,7 @@ export class ScheduleManager {
     // A rescheduled task must not inherit the previous schedule's duplicate-run guard.
     if (cronChanged || updates.runFirstInOneMinute) {
       task.lastFiredDueAt = undefined;
+      task.lastFiredClaimId = undefined;
     }
 
     task.updatedAt = now;
@@ -2035,7 +2487,7 @@ export class ScheduleManager {
     const nextEnabled = !task.enabled;
     if (nextEnabled && !task.runAt) {
       this.validateCronExpression(task.cronExpression);
-    } else if (nextEnabled && task.lastFiredDueAt) {
+    } else if (nextEnabled && (task.lastFiredDueAt || task.lastFiredClaimId)) {
       throw new Error(
         "A completed one-time task must be rescheduled before enabling.",
       );
@@ -2070,7 +2522,7 @@ export class ScheduleManager {
 
     if (enabled && !task.runAt) {
       this.validateCronExpression(task.cronExpression);
-    } else if (enabled && task.lastFiredDueAt) {
+    } else if (enabled && (task.lastFiredDueAt || task.lastFiredClaimId)) {
       throw new Error(
         "A completed one-time task must be rescheduled before enabling.",
       );
@@ -2218,7 +2670,13 @@ export class ScheduleManager {
   /**
    * Start the scheduler
    */
-  startScheduler(onExecute: (task: ScheduledTask) => Promise<void>): void {
+  startScheduler(
+    onExecute: (
+      task: ScheduledTask,
+      trigger: "manual" | "auto",
+      dispatchGuard?: (dispatch: () => void) => Promise<void>,
+    ) => Promise<void | TaskExecutionCallbackResult>,
+  ): void {
     this.onExecuteCallback = onExecute;
 
     // Stop existing scheduler if running
@@ -2282,12 +2740,23 @@ export class ScheduleManager {
   /**
    * Check and execute tasks that are due
    */
-  private async checkAndExecuteTasks(): Promise<void> {
+  private async checkAndExecuteTasks(
+    excludedOneTimeTaskIds: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     const enabled = config.get<boolean>("enabled", true);
 
     if (!enabled) {
       return;
+    }
+
+    if (this.taskStoreReadError) {
+      try {
+        await this.refreshPersistedTasksIfChanged(false);
+      } catch {
+        this.notifyTaskStoreIssue();
+        return;
+      }
     }
 
     const now = new Date();
@@ -2312,10 +2781,26 @@ export class ScheduleManager {
     const maxConcurrentAutomaticRuns = this.getMaxConcurrentAutomaticRuns();
     const schedulerStartedAt = this.schedulerStartedAt;
 
-    let needsSave = false;
     let executedCount = 0;
     const claims: TaskRunClaim[] = [];
+    const skips: TaskRunSkip[] = [];
     const runResults = new Map<string, Date>();
+    const skipTask = (task: ScheduledTask): void => {
+      skips.push({
+        taskId: task.id,
+        runAt: task.runAt,
+        cronExpression: task.cronExpression,
+        expectedNextRun: task.nextRun?.getTime(),
+        expectedEnabled: task.enabled,
+        expectedLastFiredDueAt: task.lastFiredDueAt?.getTime(),
+        expectedAllowedTimeStart: task.allowedTimeStart,
+        expectedAllowedTimeEnd: task.allowedTimeEnd,
+        expectedMaxExecutionsPerDay: task.maxExecutionsPerDay,
+        expectedScope: task.scope,
+        expectedWorkspacePath: task.workspacePath,
+        evaluatedAt: now,
+      });
+    };
 
     const candidates = Array.from(this.tasks.values()).sort(
       (left, right) =>
@@ -2323,6 +2808,9 @@ export class ScheduleManager {
         (right.nextRun?.getTime() ?? Infinity),
     );
     for (const task of candidates) {
+      if (task.runAt && excludedOneTimeTaskIds.has(task.id)) {
+        continue;
+      }
       if (!task.enabled || !task.nextRun) {
         continue;
       }
@@ -2353,8 +2841,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Skipping missed run from before scheduler startup: ${task.name}`,
           );
-          this.skipDueTask(task, now);
-          needsSave = true;
+          skipTask(task);
           continue;
         }
 
@@ -2368,8 +2855,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Due time already executed, skipping duplicate run: ${task.name}`,
           );
-          this.skipDueTask(task, now);
-          needsSave = true;
+          skipTask(task);
           continue;
         }
 
@@ -2384,8 +2870,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Outside allowed time window, skipping task: ${task.name}`,
           );
-          this.skipDueTask(task, now);
-          needsSave = true;
+          skipTask(task);
           continue;
         }
 
@@ -2393,8 +2878,7 @@ export class ScheduleManager {
           logDebug(
             `[CopilotScheduler] Per-task daily limit reached, skipping task: ${task.name}`,
           );
-          this.skipDueTask(task, now);
-          needsSave = true;
+          skipTask(task);
           continue;
         }
 
@@ -2423,8 +2907,7 @@ export class ScheduleManager {
             );
           }
           // Still advance nextRun so it doesn't keep retrying
-          this.skipDueTask(task, now);
-          needsSave = true;
+          skipTask(task);
           continue;
         }
 
@@ -2440,36 +2923,47 @@ export class ScheduleManager {
             `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
           );
           if (!task.runAt) {
-            task.nextRun = this.getNextRunForTask(task.cronExpression, now);
+            skipTask(task);
           }
-          needsSave = true;
           continue;
         }
 
         claims.push({
           taskId: task.id,
+          ...(task.runAt ? { claimId: randomUUID() } : {}),
           dueAt: nextRunMinute,
           nextRun: task.runAt
             ? undefined
             : this.getNextRunForTask(task.cronExpression, now),
+          runAt: task.runAt,
+          cronExpression: task.cronExpression,
+          expectedNextRun: task.nextRun?.getTime(),
+          expectedUpdatedAt: task.updatedAt.getTime(),
+          expectedEnabled: task.enabled,
         });
         this.automaticRunsInFlight++;
-        needsSave = true;
       }
     }
 
-    if (claims.length > 0) {
+    if (claims.length > 0 || skips.length > 0) {
       // Reserve the occurrence on disk first: a conflicting save can roll the
       // in-memory schedule back, and an unclaimed run would fire again next tick.
-      if (await this.persistRunClaims(claims)) {
-        needsSave = false;
+      const claimResult = await this.persistRunClaims(claims, skips);
+      const accepted = new Set(claimResult.claimed);
+      for (const claim of claims) {
+        if (!accepted.has(claim)) {
+          this.automaticRunsInFlight--;
+          this.finishTaskRun(claim.taskId);
+        }
+      }
+      if (!claimResult.failed) {
         // A Copilot CLI run lasts minutes, not milliseconds like a chat dispatch.
         // Waiting for it here would hold up the whole tick, including recording
         // the results of the quick runs of the same batch.
-        const awaitedClaims = claims.filter(
+        const awaitedClaims = claimResult.claimed.filter(
           (claim) => !this.isLongRunningClaim(claim),
         );
-        for (const claim of claims) {
+        for (const claim of claimResult.claimed) {
           if (this.isLongRunningClaim(claim)) {
             this.startDetachedClaim(claim, defaultJitterSeconds);
           }
@@ -2490,12 +2984,18 @@ export class ScheduleManager {
         logDebug(
           "[CopilotScheduler] Could not claim due tasks, retrying on the next tick.",
         );
-        for (const claim of claims) {
-          this.automaticRunsInFlight--;
-          this.finishTaskRun(claim.taskId);
+        this.notifyTaskStoreIssue();
+        const excluded = new Set(excludedOneTimeTaskIds);
+        for (const task of candidates) {
+          if (task.runAt) excluded.add(task.id);
         }
-        // Persisting is unavailable right now, so skip the trailing save too.
+        if (excluded.size > excludedOneTimeTaskIds.size) {
+          await this.checkAndExecuteTasks(excluded);
+        }
         return;
+      }
+      if (excludedOneTimeTaskIds.size === 0) {
+        this.taskStoreWarningShown = false;
       }
     }
 
@@ -2512,17 +3012,10 @@ export class ScheduleManager {
     }
 
     if (runResults.size > 0) {
-      await this.persistRunResults(runResults);
-    } else if (needsSave) {
-      try {
-        await this.saveTasksOrRestore();
-      } catch (error) {
-        // A conflicting save reloads the store; the next tick re-evaluates it.
-        logDebug(
-          "[CopilotScheduler] Failed to persist schedule updates:",
-          toSafeErrorDetails(error),
-        );
-      }
+      await this.persistRunResults(
+        runResults,
+        new Map(claims.map((claim) => [claim.taskId, claim])),
+      );
     }
   }
 
@@ -2560,7 +3053,10 @@ export class ScheduleManager {
             toSafeErrorDetails(error),
           );
         }
-        await this.persistRunResults(new Map([[claim.taskId, executedAt]]));
+        await this.persistRunResults(
+          new Map([[claim.taskId, executedAt]]),
+          new Map([[claim.taskId, claim]]),
+        );
       })
       .catch((error) => {
         logError(
@@ -2581,49 +3077,239 @@ export class ScheduleManager {
     }
   }
 
-  /**
-   * Persist the due occurrences before running them.
-   * Returns false when the claim could not be stored, leaving the schedule untouched
-   * so the next tick can retry.
-   */
-  private async persistRunClaims(claims: TaskRunClaim[]): Promise<boolean> {
-    const rollback = new Map<
-      string,
-      { nextRun: Date | undefined; lastFiredDueAt: Date | undefined }
-    >();
-    for (const claim of claims) {
-      const task = this.tasks.get(claim.taskId);
-      if (task) {
-        rollback.set(claim.taskId, {
-          nextRun: task.nextRun,
-          lastFiredDueAt: task.lastFiredDueAt,
-        });
-      }
-    }
+  private claimMatchesTask(claim: TaskRunClaim, task: ScheduledTask): boolean {
+    return (
+      task.runAt === claim.runAt &&
+      task.cronExpression === claim.cronExpression &&
+      task.enabled === claim.expectedEnabled &&
+      task.nextRun?.getTime() === claim.expectedNextRun &&
+      task.updatedAt.getTime() === claim.expectedUpdatedAt &&
+      (!task.lastFiredDueAt ||
+        task.lastFiredDueAt.getTime() < claim.dueAt.getTime())
+    );
+  }
 
+  private ownsOneTimeClaim(claim: TaskRunClaim, task: ScheduledTask): boolean {
+    return (
+      !!claim.runAt &&
+      task.runAt === claim.runAt &&
+      task.enabled === false &&
+      task.nextRun === undefined &&
+      !!claim.claimId &&
+      task.lastFiredClaimId === claim.claimId &&
+      task.lastFiredDueAt?.getTime() === claim.dueAt.getTime()
+    );
+  }
+
+  private claimedDispatchGuard(
+    claim: TaskRunClaim,
+    task: ScheduledTask,
+  ): (dispatch: () => void) => Promise<void> {
+    const snapshot = JSON.stringify(task);
+    return async (dispatch) => {
+      try {
+        await this.saveQueue;
+        await withTaskStoreLock(this.storageLockFilePath, async () => {
+          const shared = this.loadSharedFileMetadata();
+          const current = this.tasks.get(claim.taskId);
+          const stored = shared.meta?.tasksSnapshot?.find(
+            (item) =>
+              !!item &&
+              typeof item === "object" &&
+              (item as Record<string, unknown>).id === claim.taskId,
+          );
+          if (
+            shared.error ||
+            !current ||
+            !(claim.runAt
+              ? this.ownsOneTimeClaim(claim, current)
+              : this.ownsRecurringClaim(claim, current)) ||
+            JSON.stringify(current) !== snapshot ||
+            JSON.stringify(stored) !== snapshot
+          ) {
+            throw new Error("The claimed task changed before dispatch");
+          }
+          dispatch();
+        });
+      } catch (error) {
+        logError(
+          "[CopilotScheduler] Could not verify the claimed task before dispatch:",
+          toSafeErrorDetails(error),
+        );
+        throw createPromptBlockedError(
+          claim.runAt
+            ? messages.manualRunChangedAfterClaim()
+            : messages.taskStoreChangedExternally(),
+          "taskClaimChanged",
+        );
+      }
+    };
+  }
+
+  private ownsRecurringClaim(claim: TaskRunClaim, task: ScheduledTask): boolean {
+    return (
+      !claim.runAt &&
+      !task.runAt &&
+      task.cronExpression === claim.cronExpression &&
+      task.enabled === claim.expectedEnabled &&
+      task.nextRun?.getTime() === claim.nextRun?.getTime() &&
+      task.lastFiredDueAt?.getTime() === claim.dueAt.getTime()
+    );
+  }
+
+  private skipMatchesTask(skip: TaskRunSkip, task: ScheduledTask): boolean {
+    return (
+      task.runAt === skip.runAt &&
+      task.cronExpression === skip.cronExpression &&
+      task.enabled === skip.expectedEnabled &&
+      task.nextRun?.getTime() === skip.expectedNextRun &&
+      task.lastFiredDueAt?.getTime() === skip.expectedLastFiredDueAt &&
+      task.allowedTimeStart === skip.expectedAllowedTimeStart &&
+      task.allowedTimeEnd === skip.expectedAllowedTimeEnd &&
+      task.maxExecutionsPerDay === skip.expectedMaxExecutionsPerDay &&
+      task.scope === skip.expectedScope &&
+      task.workspacePath === skip.expectedWorkspacePath
+    );
+  }
+
+  private async refreshPersistedTasksIfChanged(
+    requireFileSnapshot: boolean,
+  ): Promise<void> {
+    await this.saveQueue;
+    await withTaskStoreLock(this.storageLockFilePath, async () => {
+      const sharedFile = this.loadSharedFileMetadata();
+      const fileMeta = sharedFile.meta;
+      const globalSnapshot = this.loadGlobalStateSnapshot();
+      if (sharedFile.error) {
+        throw new Error(sharedFile.error);
+      }
+      if (this.snapshotsConflict(fileMeta, globalSnapshot)) {
+        throw new Error("Task store snapshots have conflicting commits");
+      }
+      if (
+        this.context.globalState.get<unknown>(STORAGE_SNAPSHOT_KEY) !== undefined &&
+        !globalSnapshot &&
+        !this.canRecoverInvalidGlobalSnapshot(fileMeta)
+      ) {
+        throw new Error("Cannot safely recover the invalid global task store snapshot");
+      }
+      if (requireFileSnapshot && !fileMeta?.tasksSnapshot) {
+        throw new Error("Cannot verify the committed one-time task claim");
+      }
+      const globalMeta = this.loadMetaFromGlobalState();
+      const latestRevision = Math.max(
+        fileMeta?.revision ?? 0,
+        globalMeta.revision,
+      );
+      const latestMeta =
+        (fileMeta?.revision ?? -1) >= globalMeta.revision ? fileMeta : globalMeta;
+      if (
+        this.taskStoreReadError ||
+        latestRevision > this.storageRevision ||
+        (latestRevision === this.storageRevision &&
+          latestMeta?.tasksSnapshot &&
+          this.storageSnapshotFingerprint !== undefined &&
+          JSON.stringify(latestMeta.tasksSnapshot) !== this.storageSnapshotFingerprint)
+      ) {
+        this.tasks.clear();
+        this.loadTasks();
+        this.notifyTasksChanged();
+        if (this.taskStoreReadError) {
+          throw new Error(this.taskStoreReadError);
+        }
+      }
+    });
+  }
+
+  private async persistRunClaims(
+    claims: TaskRunClaim[],
+    skips: TaskRunSkip[] = [],
+  ): Promise<{ claimed: TaskRunClaim[]; failed?: true }> {
     for (
       let attempt = 1;
       attempt <= ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS;
       attempt++
     ) {
-      let applied = 0;
-      for (const claim of claims) {
-        // A conflicting save reloads the store, so re-resolve tasks on every attempt.
-        const task = this.tasks.get(claim.taskId);
-        if (!task) {
-          continue;
-        }
-        task.lastFiredDueAt = claim.dueAt;
-        task.nextRun = claim.nextRun;
-        applied++;
-      }
-      if (applied === 0) {
-        break;
-      }
-
       try {
-        await this.saveTasks();
-        return true;
+        return await this.enqueueSave(async () => {
+          const draftTasks = Array.from(this.tasks.values(), (task) => ({
+            ...task,
+          }));
+          const drafts = new Map(draftTasks.map((task) => [task.id, task]));
+          const applied: Array<{
+            claim: TaskRunClaim;
+            original: ScheduledTask;
+            draft: ScheduledTask;
+          }> = [];
+          const skipped: Array<{
+            skip: TaskRunSkip;
+            original: ScheduledTask;
+            draft: ScheduledTask;
+          }> = [];
+          for (const skip of skips) {
+            const original = this.tasks.get(skip.taskId);
+            const draft = drafts.get(skip.taskId);
+            if (!original || !draft || !this.skipMatchesTask(skip, draft)) {
+              continue;
+            }
+            this.skipDueTask(draft, skip.evaluatedAt);
+            skipped.push({
+              skip,
+              original,
+              draft,
+            });
+          }
+          for (const claim of claims) {
+            const original = this.tasks.get(claim.taskId);
+            const draft = drafts.get(claim.taskId);
+            if (!original || !draft || !this.claimMatchesTask(claim, draft)) {
+              continue;
+            }
+            draft.lastFiredDueAt = claim.dueAt;
+            draft.lastFiredClaimId = claim.claimId;
+            draft.nextRun = claim.nextRun;
+            if (claim.runAt) {
+              draft.enabled = false;
+            }
+            applied.push({ claim, original, draft });
+          }
+          if (applied.length === 0 && skipped.length === 0) {
+            return { claimed: [] };
+          }
+          await this.saveTasksInternal(
+            {
+              requireFile:
+                applied.some(({ claim }) => !!claim.runAt) ||
+                skipped.some(({ skip }) => !!skip.runAt),
+            },
+            draftTasks,
+          );
+          const accepted: TaskRunClaim[] = [];
+          for (const { claim, original, draft } of applied) {
+            const current = this.tasks.get(claim.taskId);
+            if (current !== original || !this.claimMatchesTask(claim, current)) {
+              continue;
+            }
+            current.lastFiredDueAt = draft.lastFiredDueAt;
+            current.lastFiredClaimId = draft.lastFiredClaimId;
+            current.nextRun = draft.nextRun;
+            current.enabled = draft.enabled;
+            accepted.push(claim);
+          }
+          for (const { skip, original, draft } of skipped) {
+            const current = this.tasks.get(skip.taskId);
+            if (
+              current !== original ||
+              !this.skipMatchesTask(skip, current)
+            ) {
+              continue;
+            }
+            current.nextRun = draft.nextRun;
+            current.enabled = draft.enabled;
+          }
+          this.notifyTasksChanged();
+          return { claimed: accepted };
+        });
       } catch (error) {
         logDebug(
           `[CopilotScheduler] Failed to claim due tasks (attempt ${attempt}/${ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS}):`,
@@ -2631,23 +3317,17 @@ export class ScheduleManager {
         );
       }
     }
-
-    for (const [taskId, previous] of rollback) {
-      const task = this.tasks.get(taskId);
-      if (!task) {
-        continue;
-      }
-      task.nextRun = previous.nextRun;
-      task.lastFiredDueAt = previous.lastFiredDueAt;
-    }
-    return false;
+    return { claimed: [], failed: true };
   }
 
   /**
    * Persist the results of executed runs, re-applying them when a conflicting
    * save reloads the store, so lastRun is not rolled back by another window.
    */
-  private async persistRunResults(results: Map<string, Date>): Promise<void> {
+  private async persistRunResults(
+    results: Map<string, Date>,
+    claims: Map<string, TaskRunClaim>,
+  ): Promise<void> {
     for (
       let attempt = 1;
       attempt <= ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS;
@@ -2659,8 +3339,21 @@ export class ScheduleManager {
         if (!task) {
           continue;
         }
+        const claim = claims.get(taskId);
+        if (
+          !claim ||
+          (claim.runAt
+            ? !this.ownsOneTimeClaim(claim, task)
+            : !this.ownsRecurringClaim(claim, task))
+        ) {
+          continue;
+        }
         task.lastRun = executedAt;
-        if (task.runAt && task.afterRun === "delete") {
+        if (
+          claim.runAt &&
+          task.afterRun === "delete" &&
+          claim.deleteAfterRun === true
+        ) {
           this.tasks.delete(taskId);
         }
         applied++;
@@ -2702,9 +3395,25 @@ export class ScheduleManager {
 
       await this.applyJitter(claimedTask.jitterSeconds ?? defaultJitterSeconds);
 
-      // Re-resolve: a conflicting save may have replaced the task during jitter.
+      try {
+        await this.refreshPersistedTasksIfChanged(!!claim.runAt);
+      } catch (error) {
+        logError(
+          "[CopilotScheduler] Could not verify the claimed task; dispatch skipped:",
+          toSafeErrorDetails(error),
+        );
+        return undefined;
+      }
+
       const task = this.tasks.get(claim.taskId);
       if (!task) {
+        return undefined;
+      }
+      if (
+        claim.runAt
+          ? !this.ownsOneTimeClaim(claim, task)
+          : !this.ownsRecurringClaim(claim, task)
+      ) {
         return undefined;
       }
 
@@ -2726,8 +3435,14 @@ export class ScheduleManager {
         return undefined;
       }
 
+      const executionTask = { ...task };
+      let callbackResult: void | TaskExecutionCallbackResult;
       try {
-        await this.onExecuteCallback(task);
+        callbackResult = await this.onExecuteCallback(
+          executionTask,
+          "auto",
+          this.claimedDispatchGuard(claim, executionTask),
+        );
       } catch (error) {
         logError("[CopilotScheduler] Task execution error:", {
           taskId: task.id,
@@ -2740,13 +3455,10 @@ export class ScheduleManager {
       const executedAt = new Date();
       this.incrementDailyExecCountInMemory(executedAt);
       this.incrementTaskDailyExecCountInMemory(task.id, executedAt);
-      const latestTask = this.tasks.get(claim.taskId);
-      if (latestTask) {
-        latestTask.lastRun = executedAt;
-        if (latestTask.runAt) {
-          latestTask.enabled = false;
-          latestTask.nextRun = undefined;
-        }
+      if (claim.runAt) {
+        claim.deleteAfterRun =
+          executionTask.afterRun === "delete" &&
+          callbackResult?.retainOneTimeTask !== true;
       }
       return executedAt;
     } finally {
@@ -2763,46 +3475,185 @@ export class ScheduleManager {
     return result.ok;
   }
 
+  async deleteCompletedOneTimeTask(
+    taskId: string,
+    runAt: string,
+    claimId: string,
+  ): Promise<boolean> {
+    await this.refreshPersistedTasksIfChanged(true);
+    const task = this.tasks.get(taskId);
+    if (
+      !task ||
+      task.runAt !== runAt ||
+      task.afterRun !== "delete" ||
+      task.enabled ||
+      !claimId ||
+      task.lastFiredClaimId !== claimId ||
+      task.lastFiredDueAt?.getTime() !== new Date(runAt).getTime()
+    ) {
+      return false;
+    }
+    return this.deleteTask(taskId);
+  }
+
   /**
    * Force run a task immediately and return a classified result.
    */
-  async runTaskNowDetailed(id: string): Promise<ManualRunResult> {
-    const task = this.tasks.get(id);
-    if (!task) {
+  async runTaskNowDetailed(
+    id: string,
+    confirmedTaskSnapshot?: string,
+  ): Promise<ManualRunResult> {
+    if (!this.tasks.has(id)) {
       return { ok: false, reason: "taskNotFound" };
-    }
-    if (task.runAt && task.lastFiredDueAt) {
-      return { ok: false, reason: "oneTimeCompleted" };
     }
     if (!this.onExecuteCallback) {
       return { ok: false, reason: "executorUnavailable" };
     }
-    if (!this.tryStartTaskRun(task.id)) {
+    if (!this.tryStartTaskRun(id)) {
       return { ok: false, reason: "alreadyRunning" };
     }
 
-    const previousNextRun =
-      task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
-        ? new Date(task.nextRun.getTime())
-        : undefined;
-    const previousLastRun =
-      task.lastRun instanceof Date && !Number.isNaN(task.lastRun.getTime())
-        ? new Date(task.lastRun.getTime())
-        : undefined;
-    const previousEnabled = task.enabled;
-    const previousLastFiredDueAt = task.lastFiredDueAt;
-
     try {
       try {
-        await this.onExecuteCallback(task);
+        await this.refreshPersistedTasksIfChanged(false);
+      } catch (error) {
+        logError(
+          "[CopilotScheduler] Could not verify the task before manual dispatch:",
+          toSafeErrorDetails(error),
+        );
+        return {
+          ok: false,
+          reason: "claimFailed",
+          errorMessage: messages.manualRunClaimFailed(),
+        };
+      }
+      const task = this.tasks.get(id);
+      if (!task) return { ok: false, reason: "taskNotFound" };
+      if (
+        confirmedTaskSnapshot !== undefined &&
+        JSON.stringify(task) !== confirmedTaskSnapshot
+      ) {
+        return { ok: false, reason: "taskChanged" };
+      }
+      if (task.runAt && (task.lastFiredDueAt || task.lastFiredClaimId)) {
+        return { ok: false, reason: "oneTimeCompleted" };
+      }
+      const previousNextRun =
+        task.nextRun instanceof Date && !Number.isNaN(task.nextRun.getTime())
+          ? new Date(task.nextRun.getTime())
+          : undefined;
+      const previousLastRun =
+        task.lastRun instanceof Date && !Number.isNaN(task.lastRun.getTime())
+          ? new Date(task.lastRun.getTime())
+          : undefined;
+      const oneTimeRunAt = task.runAt;
+      const originalCronExpression = task.cronExpression;
+      const originalEnabled = task.enabled;
+      let oneTimeClaim: TaskRunClaim | undefined;
+      let executingTask = task;
+      if (oneTimeRunAt) {
+        oneTimeClaim = {
+          taskId: task.id,
+          claimId: randomUUID(),
+          dueAt: new Date(oneTimeRunAt),
+          nextRun: undefined,
+          runAt: oneTimeRunAt,
+          cronExpression: task.cronExpression,
+          expectedNextRun: task.nextRun?.getTime(),
+          expectedUpdatedAt: task.updatedAt.getTime(),
+          expectedEnabled: task.enabled,
+        };
+        const claimedTaskSnapshot = confirmedTaskSnapshot === undefined
+          ? undefined
+          : JSON.stringify({
+              ...task,
+              lastFiredDueAt: oneTimeClaim.dueAt,
+              lastFiredClaimId: oneTimeClaim.claimId,
+              nextRun: undefined,
+              enabled: false,
+            });
+        const claimed = await this.persistRunClaims([oneTimeClaim]);
+        if (!claimed.claimed.includes(oneTimeClaim)) {
+          const latest = this.tasks.get(task.id);
+          if (!latest) return { ok: false, reason: "taskNotFound" };
+          if (
+            latest.runAt === oneTimeRunAt &&
+            (latest.lastFiredDueAt || latest.lastFiredClaimId)
+          ) {
+            return { ok: false, reason: "oneTimeCompleted" };
+          }
+          return {
+            ok: false,
+            reason: "claimFailed",
+            errorMessage: messages.manualRunClaimFailed(),
+          };
+        }
+        try {
+          await this.refreshPersistedTasksIfChanged(true);
+        } catch (error) {
+          logError(
+            "[CopilotScheduler] Could not verify the claimed task; dispatch skipped:",
+            toSafeErrorDetails(error),
+          );
+          return {
+            ok: false,
+            reason: "claimFailed",
+            errorMessage: messages.manualRunClaimFailed(),
+          };
+        }
+        const latest = this.tasks.get(task.id);
+        if (!latest || !this.ownsOneTimeClaim(oneTimeClaim, latest)) {
+          return {
+            ok: false,
+            reason: "claimFailed",
+            errorMessage: messages.manualRunClaimFailed(),
+          };
+        }
+        if (
+          claimedTaskSnapshot !== undefined &&
+          JSON.stringify(latest) !== claimedTaskSnapshot
+        ) {
+          return {
+            ok: false,
+            reason: "taskChanged",
+            errorMessage: messages.manualRunChangedAfterClaim(),
+          };
+        }
+        executingTask = latest;
+      }
+
+      const executionInfo: ManualRunExecutionInfo = {
+        name: executingTask.name,
+        runAt: executingTask.runAt,
+        afterRun: executingTask.afterRun,
+        attachmentCount: executingTask.attachments?.length,
+      };
+      try {
+        await this.onExecuteCallback(
+          { ...executingTask },
+          "manual",
+          oneTimeClaim
+            ? this.claimedDispatchGuard(oneTimeClaim, executingTask)
+            : undefined,
+        );
       } catch (error) {
         const details = toSafeErrorDetails(error);
+        if (getPromptBlockedReason(error) === "taskClaimChanged") {
+          return {
+            ok: false,
+            reason: "taskChanged",
+            errorMessage: messages.manualRunChangedAfterClaim(),
+          };
+        }
         if (isPromptBlockedError(error)) {
           logError("[CopilotScheduler] runTaskNow blocked:", details);
+          const turnOutcome = getAgentHostTurnFailure(error);
           return {
             ok: false,
             reason: "promptBlocked",
             errorMessage: details,
+            executionInfo,
+            ...(turnOutcome ? { turnOutcome } : {}),
           };
         }
         const userNotified =
@@ -2817,17 +3668,56 @@ export class ScheduleManager {
           reason: "executionFailed",
           errorMessage: details,
           userNotified,
+          executionInfo,
         };
       }
 
       // Update lastRun and nextRun after manual execution
       const executedAt = new Date();
-      task.lastRun = executedAt;
-      if (task.runAt) {
-        task.enabled = false;
-        task.nextRun = undefined;
-        task.lastFiredDueAt = previousNextRun ?? new Date(task.runAt);
-      } else if (task.enabled) {
+      if (oneTimeClaim) {
+        let lastError = "";
+        for (
+          let attempt = 1;
+          attempt <= ScheduleManager.RUN_CLAIM_MAX_ATTEMPTS;
+          attempt++
+        ) {
+          const latest = this.tasks.get(task.id);
+          if (!latest || !this.ownsOneTimeClaim(oneTimeClaim, latest)) {
+            return { ok: true, claimId: oneTimeClaim.claimId, executionInfo };
+          }
+          const oldLastRun = latest.lastRun;
+          latest.lastRun = executedAt;
+          try {
+            await this.saveTasks();
+            return { ok: true, claimId: oneTimeClaim.claimId, executionInfo };
+          } catch (error) {
+            if (this.tasks.get(task.id) === latest) {
+              latest.lastRun = oldLastRun;
+            }
+            lastError = toSafeErrorDetails(error);
+            logError("[CopilotScheduler] runTaskNow save failed:", lastError);
+          }
+        }
+        return {
+          ok: false,
+          reason: "saveFailed",
+          errorMessage: lastError,
+          executionInfo,
+        };
+      }
+
+      const latest = this.tasks.get(task.id);
+      if (
+        !latest ||
+        latest.runAt !== oneTimeRunAt ||
+        latest.cronExpression !== originalCronExpression ||
+        latest.enabled !== originalEnabled ||
+        latest.nextRun?.getTime() !== previousNextRun?.getTime()
+      ) {
+        return { ok: true, executionInfo };
+      }
+      latest.lastRun = executedAt;
+      if (latest.enabled) {
         const policy = this.getManualRunNextRunPolicy();
         const shouldAdvanceFromExisting =
           policy === "advance" &&
@@ -2836,34 +3726,33 @@ export class ScheduleManager {
         const nextRunBase = shouldAdvanceFromExisting
           ? previousNextRun
           : executedAt;
-        task.nextRun = this.getNextRunForTask(task.cronExpression, nextRunBase);
+        latest.nextRun = this.getNextRunForTask(latest.cronExpression, nextRunBase);
       }
 
       try {
         await this.saveTasks();
       } catch (error) {
-        // Keep in-memory state consistent with persisted state on save failures.
-        task.lastRun = previousLastRun
-          ? new Date(previousLastRun.getTime())
-          : undefined;
-        task.nextRun = previousNextRun
-          ? new Date(previousNextRun.getTime())
-          : undefined;
-        task.enabled = previousEnabled;
-        task.lastFiredDueAt = previousLastFiredDueAt;
-
+        if (this.tasks.get(task.id) === latest) {
+          latest.lastRun = previousLastRun
+            ? new Date(previousLastRun.getTime())
+            : undefined;
+          latest.nextRun = previousNextRun
+            ? new Date(previousNextRun.getTime())
+            : undefined;
+        }
         const details = toSafeErrorDetails(error);
         logError("[CopilotScheduler] runTaskNow save failed:", details);
         return {
           ok: false,
           reason: "saveFailed",
           errorMessage: details,
+          executionInfo,
         };
       }
 
-      return { ok: true };
+      return { ok: true, executionInfo };
     } finally {
-      this.finishTaskRun(task.id);
+      this.finishTaskRun(id);
     }
   }
 }

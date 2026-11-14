@@ -8,6 +8,7 @@ import { ScheduleManager, __testOnly } from "../../scheduleManager";
 import { messages } from "../../i18n";
 import { getFirstDistinctCronRuns } from "../../cronExpressions";
 import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
+import { createPromptBlockedError } from "../../promptExecutionErrors";
 
 function normalizePathForAssertion(p: string): string {
   const resolved = path.normalize(path.resolve(p));
@@ -1322,6 +1323,537 @@ suite("ScheduleManager Mirror Ordering Tests", () => {
       assert.deepStrictEqual(revisions, [1, 2]);
     } finally {
       releaseFirstPayload?.();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+suite("ScheduleManager Committed Snapshot Tests", () => {
+  test("a failed claim during legacy migration keeps the original occurrence", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "legacy one-time claim",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        revision: number;
+        savedAt: string;
+      };
+      fs.writeFileSync(
+        metadataPath,
+        JSON.stringify({ revision: metadata.revision, savedAt: metadata.savedAt }),
+      );
+      await context.globalState.update("scheduledTasksSnapshot", undefined);
+
+      const internals = manager as unknown as {
+        saveMetaToFile(meta: unknown): Promise<void>;
+        onExecuteCallback(): Promise<void>;
+      };
+      const saveMeta = internals.saveMetaToFile.bind(manager);
+      let metadataWrites = 0;
+      let dispatches = 0;
+      internals.saveMetaToFile = async (meta) => {
+        metadataWrites++;
+        if (metadataWrites > 1) throw new Error("metadata commit failed");
+        await saveMeta(meta);
+      };
+      internals.onExecuteCallback = async () => { dispatches++; };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
+      assert.strictEqual(dispatches, 0);
+      const preserved = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        revision: number;
+        tasksSnapshot: Array<{ enabled: boolean }>;
+      };
+      assert.strictEqual(preserved.revision, metadata.revision);
+      assert.strictEqual(preserved.tasksSnapshot[0].enabled, true);
+
+      const reloaded = new ScheduleManager(context);
+      assert.strictEqual(reloaded.getTask(task.id)?.enabled, true);
+      assert.strictEqual(reloaded.getTask(task.id)?.lastFiredDueAt, undefined);
+      await waitForStartupSave(reloaded);
+      const repairedPayload = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ enabled: boolean }>;
+      assert.strictEqual(repairedPayload[0].enabled, true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing payload is recovered from the committed file snapshot", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "snapshot recovery",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      const payloadPath = path.join(tmp, "scheduledTasks.json");
+      fs.unlinkSync(payloadPath);
+
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(task.id)?.name, task.name);
+      await waitForStartupSave(reloaded);
+      const repaired = JSON.parse(fs.readFileSync(payloadPath, "utf8")) as
+        Array<{ id: string }>;
+      assert.strictEqual(repaired[0].id, task.id);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("global fallback readers ignore an uncommitted payload", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const readerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-snapshot-reader-"));
+    const state = new MockMemento();
+    let holdSnapshot = false;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const snapshotStarted = new Promise<void>((resolve) => { entered = resolve; });
+    const context = {
+      globalState: {
+        keys: () => state.keys(),
+        get: state.get.bind(state),
+        async update(key: string, value: unknown): Promise<void> {
+          if (holdSnapshot && key === "scheduledTasksSnapshot") {
+            entered();
+            await gate;
+          }
+          await state.update(key, value);
+        },
+        setKeysForSync(): void {},
+      },
+      globalStorageUri: vscode.Uri.file(tmp),
+    } as unknown as vscode.ExtensionContext;
+    let writing: Promise<unknown> | undefined;
+    try {
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "committed name",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      (manager as unknown as { queueFileWrite(): Promise<void> }).queueFileWrite =
+        async () => { throw new Error("file unavailable"); };
+      holdSnapshot = true;
+      writing = manager.updateTask(task.id, { name: "uncommitted name" });
+      await snapshotStarted;
+
+      const payload = state.get<Array<{ name: string }>>("scheduledTasks");
+      assert.strictEqual(payload?.[0].name, "uncommitted name");
+      const copiedState = new MockMemento();
+      for (const key of state.keys()) {
+        await copiedState.update(key, state.get(key));
+      }
+      const reader = new ScheduleManager({
+        globalState: copiedState,
+        globalStorageUri: vscode.Uri.file(readerRoot),
+      } as unknown as vscode.ExtensionContext);
+      assert.strictEqual(reader.getTask(task.id)?.name, "committed name");
+      await waitForStartupSave(reader);
+
+      holdSnapshot = false;
+      release();
+      await writing;
+      const committed = new ScheduleManager(context);
+      assert.strictEqual(committed.getTask(task.id)?.name, "uncommitted name");
+      await waitForStartupSave(committed);
+    } finally {
+      holdSnapshot = false;
+      release();
+      await writing;
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(readerRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid file metadata is retained and cannot authorize a one-time claim", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "damaged metadata",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      fs.writeFileSync(metadataPath, "{broken", "utf8");
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      let dispatches = 0;
+      (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await reloaded.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), "{broken");
+      assert.strictEqual(reloaded.getTask(task.id)?.enabled, true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid legacy metadata cannot authorize or overwrite a one-time claim", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "invalid legacy metadata",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const corrupted = JSON.stringify({ revision: "invalid", savedAt: "" });
+      fs.writeFileSync(metadataPath, corrupted);
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      let dispatches = 0;
+      (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await reloaded.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), corrupted);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("lost or empty metadata cannot restore a stale unclaimed one-time task", async () => {
+    for (const [damage, modernMirror, staleFallback] of [
+      ["missing", true, false],
+      ["empty", true, false],
+      ["missing", false, false],
+      ["missing", true, true],
+    ] as const) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+      const context = createMockContext(tmp);
+      const update = context.globalState.update.bind(context.globalState);
+      try {
+        const manager = new ScheduleManager(context);
+        const task = await manager.createTask({
+          name: `metadata ${damage}`,
+          prompt: "hello",
+          cronExpression: "",
+          runAt: new Date(Date.now() + 60_000).toISOString(),
+          scope: "global",
+        });
+        if (staleFallback) {
+          fs.copyFileSync(
+            path.join(tmp, "scheduledTasks.meta.json"),
+            path.join(tmp, "scheduledTasks.fallback.json"),
+          );
+        }
+        if (!modernMirror) {
+          await context.globalState.update("scheduledTasksSnapshot", undefined);
+          await context.globalState.update("scheduledTasksSnapshotIntent", undefined);
+        }
+        context.globalState.update = async () => {
+          throw new Error("mirror unavailable");
+        };
+        (manager as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+          async () => {};
+        assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+        context.globalState.update = update;
+        const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+        const payloadPath = path.join(tmp, "scheduledTasks.json");
+        const payload = fs.readFileSync(payloadPath, "utf8");
+        if (damage === "missing") {
+          fs.unlinkSync(metadataPath);
+        } else {
+          fs.writeFileSync(metadataPath, "{}");
+        }
+
+        const reloaded = new ScheduleManager(context);
+        await waitForStartupSave(reloaded);
+        let dispatches = 0;
+        (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+          async () => { dispatches++; };
+        const result = await reloaded.runTaskNowDetailed(task.id);
+        assert.strictEqual(result.ok, false, damage);
+        assert.strictEqual(dispatches, 0, damage);
+        assert.strictEqual(fs.readFileSync(payloadPath, "utf8"), payload, damage);
+        assert.strictEqual(fs.existsSync(metadataPath), damage !== "missing", damage);
+        if (damage === "empty") {
+          assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), "{}");
+        }
+      } finally {
+        context.globalState.update = update;
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a damaged one-time claim date cannot authorize another execution", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    const update = context.globalState.update.bind(context.globalState);
+    try {
+      const manager = new ScheduleManager(context);
+      const task = await manager.createTask({
+        name: "damaged claim date",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      context.globalState.update = async () => { throw new Error("mirror unavailable"); };
+      (manager as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => {};
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+      context.globalState.update = update;
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const meta = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        tasksSnapshot: Array<{ id: string; lastFiredDueAt?: string }>;
+      };
+      const persisted = meta.tasksSnapshot.find((item) => item.id === task.id);
+      assert.ok(persisted);
+      persisted.lastFiredDueAt = "invalid";
+      fs.writeFileSync(metadataPath, JSON.stringify(meta));
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      let dispatches = 0;
+      (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      assert.ok(reloaded.getTask(task.id)?.lastFiredClaimId);
+      const result = await reloaded.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "oneTimeCompleted");
+      await assert.rejects(() => reloaded.toggleTask(task.id), /rescheduled/);
+      await assert.rejects(() => reloaded.setTaskEnabled(task.id, true), /rescheduled/);
+      await assert.rejects(() => reloaded.updateTask(task.id, { enabled: true }), /rescheduled/);
+      assert.strictEqual(dispatches, 0);
+    } finally {
+      context.globalState.update = update;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a valid file snapshot repairs an invalid global snapshot at the same revision", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "global snapshot repair",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      await context.globalState.update("scheduledTasksSnapshot", { invalid: true });
+
+      const reloaded = new ScheduleManager(context);
+      assert.strictEqual(reloaded.getTask(task.id)?.name, task.name);
+      await waitForStartupSave(reloaded);
+      const snapshot = context.globalState.get<{
+        tasksSnapshot: Array<{ id: string }>;
+      }>("scheduledTasksSnapshot");
+      assert.strictEqual(snapshot?.tasksSnapshot[0].id, task.id);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalid newer global snapshot blocks claims rather than replacing unknown data", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "unrecoverable global snapshot",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const originalMetadata = fs.readFileSync(metadataPath, "utf8");
+      await context.globalState.update("scheduledTasksSnapshot", { invalid: true });
+      await context.globalState.update("scheduledTasksRevision", 999);
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      let dispatches = 0;
+      (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await reloaded.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), originalMetadata);
+      assert.deepStrictEqual(
+        context.globalState.get("scheduledTasksSnapshot"),
+        { invalid: true },
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("same-revision snapshots with different contents cannot be overwritten", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "original",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const originalMetadata = fs.readFileSync(metadataPath, "utf8");
+      const snapshot = context.globalState.get<{
+        revision: number;
+        savedAt: string;
+        commitId: string;
+        tasksSnapshot: Array<Record<string, unknown>>;
+      }>("scheduledTasksSnapshot")!;
+      const conflicting = {
+        ...snapshot,
+        tasksSnapshot: [{ ...snapshot.tasksSnapshot[0], name: "other branch" }],
+      };
+      await context.globalState.update("scheduledTasksSnapshot", conflicting);
+
+      const reloaded = new ScheduleManager(context);
+      let dispatches = 0;
+      (reloaded as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await reloaded.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), originalMetadata);
+      assert.deepStrictEqual(context.globalState.get("scheduledTasksSnapshot"), conflicting);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a damaged global snapshot recovers from a newer shared fallback", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "older file",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      (first as unknown as { queueFileWrite(): Promise<void> }).queueFileWrite =
+        async () => { throw new Error("file unavailable"); };
+      await first.updateTask(task.id, { name: "newer global" });
+      await context.globalState.update("scheduledTasksSnapshot", { invalid: true });
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      assert.strictEqual(reloaded.getTask(task.id)?.name, "newer global");
+      const repaired = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        tasksSnapshot: Array<{ name: string }>;
+      };
+      assert.strictEqual(repaired.tasksSnapshot[0].name, "newer global");
+      const snapshot = context.globalState.get<{
+        tasksSnapshot: Array<{ name: string }>;
+      }>("scheduledTasksSnapshot")!;
+      assert.strictEqual(snapshot.tasksSnapshot[0].name, "newer global");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalid global snapshot cannot be replaced by a different same-revision commit", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const context = createMockContext(tmp);
+    try {
+      const first = new ScheduleManager(context);
+      const task = await first.createTask({
+        name: "old commit",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      const metadataPath = path.join(tmp, "scheduledTasks.meta.json");
+      const oldMetadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        revision: number;
+      };
+      (first as unknown as { queueFileWrite(): Promise<void> }).queueFileWrite =
+        async () => { throw new Error("file unavailable"); };
+      await first.updateTask(task.id, { name: "new commit" });
+      const currentRevision = context.globalState.get<number>("scheduledTasksRevision")!;
+      fs.unlinkSync(path.join(tmp, "scheduledTasks.fallback.json"));
+      const staleMetadata = JSON.stringify({ ...oldMetadata, revision: currentRevision });
+      fs.writeFileSync(metadataPath, staleMetadata);
+      await context.globalState.update("scheduledTasksSnapshot", { invalid: true });
+
+      const reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      await assert.rejects(() => reloaded.updateTask(task.id, { name: "overwrite" }));
+      assert.strictEqual(fs.readFileSync(metadataPath, "utf8"), staleMetadata);
+      assert.deepStrictEqual(context.globalState.get("scheduledTasksSnapshot"), { invalid: true });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale window detects a newer fallback even when its global state is stale", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "shared task",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      (first as unknown as { queueFileWrite(): Promise<void> }).queueFileWrite =
+        async () => { throw new Error("primary file unavailable"); };
+      (second as unknown as { queueFileWrite(): Promise<void> }).queueFileWrite =
+        async () => { throw new Error("primary file unavailable"); };
+
+      await first.updateTask(task.id, { name: "first window" });
+      await assert.rejects(() => second.updateTask(task.id, { name: "stale window" }));
+      assert.strictEqual(second.getTask(task.id)?.name, "first window");
+      await waitForStartupSave(second);
+      const fallback = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.fallback.json"), "utf8"),
+      ) as { tasksSnapshot: Array<{ name: string }> };
+      assert.strictEqual(fallback.tasksSnapshot[0].name, "first window");
+    } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
@@ -2929,6 +3461,10 @@ suite("ScheduleManager RunNow Tests", () => {
       const blocker = new Promise<void>((resolve) => {
         release = resolve;
       });
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
       let executions = 0;
 
       (
@@ -2938,24 +3474,34 @@ suite("ScheduleManager RunNow Tests", () => {
         }
       ).onExecuteCallback = async () => {
         executions++;
+        markStarted();
         await blocker;
       };
 
       const manualRun = manager.runTaskNowDetailed(task.id);
-      await Promise.resolve();
+      try {
+        await Promise.race([
+          started,
+          manualRun.then(() => {
+            throw new Error("Manual execution finished before its callback started");
+          }),
+        ]);
 
-      task.nextRun = new Date(Date.now() - 60 * 1000);
-      await (
-        manager as unknown as {
-          checkAndExecuteTasks?: () => Promise<void>;
-        }
-      ).checkAndExecuteTasks?.();
+        task.nextRun = new Date(Date.now() - 60 * 1000);
+        await (
+          manager as unknown as {
+            checkAndExecuteTasks?: () => Promise<void>;
+          }
+        ).checkAndExecuteTasks?.();
 
-      assert.strictEqual(executions, 1);
-      assert.ok(task.nextRun instanceof Date);
-      assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
+        assert.strictEqual(executions, 1);
+        assert.ok(task.nextRun instanceof Date);
+        assert.ok((task.nextRun as Date).getTime() > Date.now() - 1000);
+      } finally {
+        release();
+        await manualRun;
+      }
 
-      release();
       const manualResult = await manualRun;
       assert.strictEqual(manualResult.ok, true);
     } finally {
@@ -3374,6 +3920,1347 @@ suite("ScheduleManager RunNow Tests", () => {
     }
   });
 
+  test("claimed one-time tasks remain disabled after execution failure or a post-jitter skip", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    try {
+      for (const outcome of ["failure", "skip"] as const) {
+        for (const afterRun of ["disable", "delete"] as const) {
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+          try {
+            const manager = new ScheduleManager(createMockContext(tmp));
+            const runAt = new Date(Date.now() - 60_000).toISOString();
+            const task = await manager.createTask({
+              name: `${outcome}-${afterRun}`,
+              prompt: "hello",
+              cronExpression: "",
+              runAt,
+              afterRun,
+              scope: "global",
+              jitterSeconds: 0,
+            });
+            let executions = 0;
+            const internals = manager as unknown as {
+              applyJitter: () => Promise<void>;
+              getTimeZone: () => string | undefined;
+              onExecuteCallback: () => Promise<void>;
+              checkAndExecuteTasks: () => Promise<void>;
+            };
+            internals.getTimeZone = () => undefined;
+            internals.onExecuteCallback = async () => {
+              executions++;
+              throw createPromptBlockedError("uncertain", "agentHostFailed", "unknown");
+            };
+            if (outcome === "skip") {
+              internals.applyJitter = async () => {
+                task.allowedTimeStart = new Date(Date.now() + 60 * 60_000)
+                  .toTimeString().slice(0, 5);
+                task.allowedTimeEnd = new Date(Date.now() + 120 * 60_000)
+                  .toTimeString().slice(0, 5);
+              };
+            }
+            await internals.checkAndExecuteTasks();
+            await manager.waitForDetachedRuns();
+            const latest = manager.getTask(task.id);
+            assert.ok(latest, `${outcome}/${afterRun} should retain the task`);
+            assert.strictEqual(latest.enabled, false);
+            assert.strictEqual(latest.nextRun, undefined);
+            const persisted = JSON.parse(
+              fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+            ) as Array<{ id: string; enabled: boolean; lastFiredDueAt?: string }>;
+            const stored = persisted.find((item) => item.id === task.id);
+            assert.strictEqual(stored?.enabled, false);
+            assert.strictEqual(stored?.lastFiredDueAt, runAt);
+            await internals.checkAndExecuteTasks();
+            assert.strictEqual(executions, outcome === "failure" ? 1 : 0);
+          } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+        }
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  test("a manual one-time run excludes stale automatic and manual claims in another window", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    let manualRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "cross-window claim",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 60_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      let firstExecutions = 0;
+      let secondExecutions = 0;
+      (first as unknown as { onExecuteCallback: () => Promise<void> }).onExecuteCallback =
+        async () => { firstExecutions++; entered(); await hold; };
+      const secondInternals = second as unknown as {
+        onExecuteCallback: () => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      secondInternals.onExecuteCallback = async () => { secondExecutions++; };
+
+      manualRun = first.runTaskNowDetailed(task.id);
+      await started;
+      await secondInternals.checkAndExecuteTasks();
+      await second.waitForDetachedRuns();
+      await waitForStartupSave(second);
+      const competingManual = await second.runTaskNowDetailed(task.id);
+      assert.strictEqual(competingManual.ok, false);
+      assert.strictEqual(secondExecutions, 0);
+      release();
+      assert.strictEqual((await manualRun).ok, true);
+      assert.strictEqual(firstExecutions, 1);
+    } finally {
+      release();
+      await manualRun;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a queued one-time run does not dispatch after its occurrence is rescheduled", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let run: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "queued one-time task",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      let dispatches = 0;
+      (first as unknown as {
+        onExecuteCallback(
+          task: ScheduledTask,
+          trigger: string,
+          guard?: (dispatch: () => void) => Promise<void>,
+        ): Promise<void>;
+      }).onExecuteCallback = async (_task, _trigger, guard) => {
+        entered();
+        await hold;
+        assert.ok(guard);
+        await guard(() => { dispatches++; });
+      };
+      run = first.runTaskNowDetailed(task.id);
+      await started;
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, {
+        runAt: new Date(Date.now() + 120_000).toISOString(),
+        enabled: true,
+      });
+      release();
+      await run;
+      assert.strictEqual(dispatches, 0);
+    } finally {
+      release();
+      await run;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an unchanged one-time reservation permits a guarded dispatch", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "guarded one-time task",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      let dispatches = 0;
+      (manager as unknown as {
+        onExecuteCallback(
+          task: ScheduledTask,
+          trigger: string,
+          guard?: (dispatch: () => void) => Promise<void>,
+        ): Promise<void>;
+      }).onExecuteCallback = async (_task, _trigger, guard) => {
+        assert.ok(guard);
+        await guard(() => { dispatches++; });
+      };
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+      assert.strictEqual(dispatches, 1);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale manual cron run cannot bypass a newer one-time reservation", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "manual run of a rescheduled task",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+      });
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      const runAt = new Date(Date.now() + 60_000).toISOString();
+      await second.updateTask(task.id, { cronExpression: "", runAt, afterRun: "delete" });
+
+      let dispatches = 0;
+      (first as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await first.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(dispatches, 1);
+      if (result.ok) {
+        assert.strictEqual(result.executionInfo?.runAt, runAt);
+        assert.strictEqual(result.executionInfo?.afterRun, "delete");
+        assert.ok(result.claimId);
+      }
+
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      const persisted = reloaded.getTask(task.id);
+      if (dispatches > 0) {
+        assert.strictEqual(persisted?.enabled, false);
+        assert.strictEqual(persisted?.lastFiredDueAt?.toISOString(), runAt);
+      }
+      await waitForStartupSave(reloaded);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a changed task is not dispatched using an earlier confirmation", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "original task",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+      });
+      const confirmedSnapshot = JSON.stringify(task);
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, {
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        afterRun: "delete",
+      });
+      let dispatches = 0;
+      (first as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+
+      const result = await first.runTaskNowDetailed(task.id, confirmedSnapshot);
+      assert.deepStrictEqual(result, { ok: false, reason: "taskChanged" });
+      assert.strictEqual(dispatches, 0);
+      await waitForStartupSave(first);
+      await waitForStartupSave(second);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a post-run prompt snapshot does not overwrite a newer task edit", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "template task",
+        prompt: "old snapshot",
+        promptSource: "global",
+        promptPath: "valid.prompt.md",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+      });
+      const expectedSnapshot = JSON.stringify(task);
+      const currentUpdate = { id: task.id, prompt: "fresh file content", expectedSnapshot };
+      assert.strictEqual(await first.updateTaskPrompts([currentUpdate]), 1);
+      assert.strictEqual(first.getTask(task.id)?.prompt, "fresh file content");
+      const executionSnapshot = JSON.stringify(first.getTask(task.id));
+      await first.updateTask(task.id, {
+        promptSource: "inline",
+        promptPath: "",
+        prompt: "new prompt",
+      });
+
+      const update = {
+        id: task.id,
+        prompt: "old file content",
+        expectedSnapshot: executionSnapshot,
+      };
+      assert.strictEqual(await first.updateTaskPrompts([update]), 0);
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(task.id)?.prompt, "new prompt");
+      assert.strictEqual(reloaded.getTask(task.id)?.promptSource, "inline");
+      await waitForStartupSave(reloaded);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a manual one-time run does not dispatch a task edited after its reservation", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "confirmed task",
+        prompt: "original prompt",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const confirmedSnapshot = JSON.stringify(task);
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      const internals = first as unknown as {
+        refreshPersistedTasksIfChanged(requireFile: boolean): Promise<void>;
+        onExecuteCallback(): Promise<void>;
+      };
+      const refreshFirst = internals.refreshPersistedTasksIfChanged.bind(first);
+      const refreshSecond = (
+        second as unknown as {
+          refreshPersistedTasksIfChanged(requireFile: boolean): Promise<void>;
+        }
+      ).refreshPersistedTasksIfChanged.bind(second);
+      internals.refreshPersistedTasksIfChanged = async (requireFile) => {
+        if (requireFile) {
+          await refreshSecond(false);
+          await second.updateTask(task.id, { prompt: "changed prompt" });
+        }
+        await refreshFirst(requireFile);
+      };
+      let dispatches = 0;
+      internals.onExecuteCallback = async () => { dispatches++; };
+
+      const result = await first.runTaskNowDetailed(task.id, confirmedSnapshot);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "taskChanged");
+        assert.strictEqual(result.errorMessage, messages.manualRunChangedAfterClaim());
+      }
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(first.getTask(task.id)?.enabled, false);
+      assert.ok(first.getTask(task.id)?.lastFiredClaimId);
+      await waitForStartupSave(first);
+      await waitForStartupSave(second);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a confirmed unchanged one-time task can still run", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "unchanged task",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      let dispatches = 0;
+      (manager as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { dispatches++; };
+      const result = await manager.runTaskNowDetailed(task.id, JSON.stringify(task));
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(dispatches, 1);
+      await waitForStartupSave(manager);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a reclaimed one-time occurrence is not dispatched by an older jittered claim", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "agentHost" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstHold = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondHold = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    let secondRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    let first: ScheduleManager | undefined;
+    try {
+      first = new ScheduleManager(createMockContext(tmp));
+      const runAt = new Date(Date.now() - 60_000).toISOString();
+      const task = await first.createTask({
+        name: "reclaimed occurrence",
+        prompt: "hello",
+        cronExpression: "",
+        runAt,
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      let jitterEntered!: () => void;
+      const jitterStarted = new Promise<void>((resolve) => { jitterEntered = resolve; });
+      let firstDispatches = 0;
+      const internals = first as unknown as {
+        applyJitter(): Promise<void>;
+        onExecuteCallback(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+      };
+      internals.applyJitter = async () => { jitterEntered(); await firstHold; };
+      internals.onExecuteCallback = async () => { firstDispatches++; };
+      await internals.checkAndExecuteTasks();
+      await jitterStarted;
+
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, {
+        runAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      });
+      await second.updateTask(task.id, { runAt, enabled: true });
+      let entered!: () => void;
+      const secondStarted = new Promise<void>((resolve) => { entered = resolve; });
+      (second as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { entered(); await secondHold; };
+      secondRun = second.runTaskNowDetailed(task.id);
+      await secondStarted;
+
+      releaseFirst();
+      await first.waitForDetachedRuns();
+      assert.strictEqual(firstDispatches, 0);
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await secondRun;
+      if (first) await first.waitForDetachedRuns();
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a torn task payload and metadata read cannot claim an already dispatched one-time run", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    let firstRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const prototype = ScheduleManager.prototype as unknown as {
+      loadTasksFromFile: () => { tasks: unknown[]; ok: boolean };
+    };
+    const originalLoad = prototype.loadTasksFromFile;
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "torn-read claim",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const staleTasks = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as unknown[];
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      (first as unknown as { onExecuteCallback: () => Promise<void> }).onExecuteCallback =
+        async () => { entered(); await hold; };
+      firstRun = first.runTaskNowDetailed(task.id);
+      await started;
+
+      prototype.loadTasksFromFile = () => ({ tasks: staleTasks, ok: true });
+      const second = new ScheduleManager(createMockContext(tmp));
+      prototype.loadTasksFromFile = originalLoad;
+      let duplicateDispatches = 0;
+      (second as unknown as { onExecuteCallback: () => Promise<void> }).onExecuteCallback =
+        async () => { duplicateDispatches++; };
+
+      const secondRun = await second.runTaskNowDetailed(task.id);
+      assert.strictEqual(secondRun.ok, false);
+      assert.strictEqual(duplicateDispatches, 0);
+    } finally {
+      prototype.loadTasksFromFile = originalLoad;
+      release();
+      await firstRun;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("failed one-time claim metadata does not persist an unsent run as completed", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "partial claim save",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: () => Promise<void>;
+        saveMetaToFile: () => Promise<void>;
+      };
+      const originalSaveMeta = internals.saveMetaToFile;
+      let dispatches = 0;
+      internals.onExecuteCallback = async () => { dispatches++; };
+      internals.saveMetaToFile = async () => { throw new Error("metadata unavailable"); };
+      const result = await manager.runTaskNowDetailed(task.id);
+      internals.saveMetaToFile = originalSaveMeta;
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
+      assert.strictEqual(dispatches, 0);
+
+      const reloaded = new ScheduleManager(createMockContext(tmp)).getTask(task.id);
+      assert.strictEqual(reloaded?.enabled, true);
+      assert.strictEqual(reloaded?.lastFiredDueAt, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a cron claim changed to a future one-time schedule during jitter is not dispatched", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "rescheduled during jitter",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      const internals = manager as unknown as {
+        saveTasks: () => Promise<void>;
+        applyJitter: () => Promise<void>;
+        onExecuteCallback: () => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      await internals.saveTasks();
+      const runAt = new Date(Date.now() + 86_400_000).toISOString();
+      let dispatches = 0;
+      internals.applyJitter = async () => {
+        await manager.updateTask(task.id, { cronExpression: "", runAt });
+      };
+      internals.onExecuteCallback = async () => { dispatches++; };
+
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(manager.getTask(task.id)?.nextRun?.toISOString(), runAt);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a queued Agent Host cron claim cannot dispatch after rescheduling", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "agentHost" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let first: ScheduleManager | undefined;
+    try {
+      first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "queued cron",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      let dispatches = 0;
+      const internals = first as unknown as {
+        saveTasks(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+        onExecuteCallback(
+          task: ScheduledTask,
+          trigger: string,
+          guard?: (dispatch: () => void) => Promise<void>,
+        ): Promise<void>;
+      };
+      await internals.saveTasks();
+      internals.onExecuteCallback = async (_task, _trigger, guard) => {
+        entered();
+        await hold;
+        if (guard) await guard(() => { dispatches++; });
+        else dispatches++;
+      };
+      await internals.checkAndExecuteTasks();
+      await started;
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, {
+        cronExpression: "",
+        runAt: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      release();
+      await first.waitForDetachedRuns();
+      assert.strictEqual(dispatches, 0);
+    } finally {
+      release();
+      if (first) await first.waitForDetachedRuns();
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an unchanged Agent Host cron claim permits guarded dispatch", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "agentHost" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let manager: ScheduleManager | undefined;
+    try {
+      manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "unchanged queued cron",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      let dispatches = 0;
+      const internals = manager as unknown as {
+        saveTasks(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+        onExecuteCallback(
+          task: ScheduledTask,
+          trigger: string,
+          guard?: (dispatch: () => void) => Promise<void>,
+        ): Promise<void>;
+      };
+      await internals.saveTasks();
+      internals.onExecuteCallback = async (_task, _trigger, guard) => {
+        assert.ok(guard);
+        await guard(() => { dispatches++; });
+      };
+      await internals.checkAndExecuteTasks();
+      await manager.waitForDetachedRuns();
+      assert.strictEqual(dispatches, 1);
+    } finally {
+      if (manager) await manager.waitForDetachedRuns();
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a different window can reschedule a cron claim during jitter", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "cross-window jitter reschedule",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      const internals = first as unknown as {
+        saveTasks(): Promise<void>;
+        applyJitter(): Promise<void>;
+        onExecuteCallback(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+      };
+      await internals.saveTasks();
+      const runAt = new Date(Date.now() + 86_400_000).toISOString();
+      let dispatches = 0;
+      internals.applyJitter = async () => {
+        const second = new ScheduleManager(createMockContext(tmp));
+        await waitForStartupSave(second);
+        await second.updateTask(task.id, { cronExpression: "", runAt });
+      };
+      internals.onExecuteCallback = async () => { dispatches++; };
+
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(first.getTask(task.id)?.runAt, runAt);
+      await waitForStartupSave(first);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an old cron completion cannot delete a new one-time schedule", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    let tick: Promise<void> | undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "old cron completion",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      const internals = first as unknown as {
+        saveTasks: () => Promise<void>;
+        onExecuteCallback: () => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      await internals.saveTasks();
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      internals.onExecuteCallback = async () => { entered(); await hold; };
+      tick = internals.checkAndExecuteTasks();
+      await started;
+
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      const runAt = new Date(Date.now() + 86_400_000).toISOString();
+      await second.updateTask(task.id, {
+        cronExpression: "",
+        runAt,
+        afterRun: "delete",
+      });
+      release();
+      await tick;
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; runAt?: string }>;
+      assert.strictEqual(persisted.find((entry) => entry.id === task.id)?.runAt, runAt);
+    } finally {
+      release();
+      await tick;
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a manual cron completion preserves a new one-time run date", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "manual cron rescheduled",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+      });
+      const runAt = new Date(Date.now() + 86_400_000).toISOString();
+      (manager as unknown as { onExecuteCallback: () => Promise<void> }).onExecuteCallback =
+        async () => { await manager.updateTask(task.id, { cronExpression: "", runAt }); };
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+      assert.strictEqual(manager.getTask(task.id)?.nextRun?.toISOString(), runAt);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a skipped one-time occurrence remains skipped after a conflicting claim save", async () => {
+    const restore = overrideSchedulerConfig({
+      executionRoute: "chat",
+      missedRunPolicy: "skip",
+    });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const skipped = await first.createTask({
+        name: "missed one-time",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 180_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const recurring = await first.createTask({
+        name: "current recurring",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      recurring.nextRun = truncateToMinute(new Date());
+      const internals = first as unknown as {
+        saveTasks: () => Promise<void>;
+        onExecuteCallback: () => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+        schedulerStartedAt: Date;
+      };
+      await internals.saveTasks();
+      internals.schedulerStartedAt = new Date(Date.now() - 120_000);
+      internals.onExecuteCallback = async () => {};
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.createTask({
+        name: "other window change",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(first.getTask(skipped.id)?.enabled, false);
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(skipped.id)?.enabled, false);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a skipped one-time occurrence survives a conflict without other claims", async () => {
+    const restore = overrideSchedulerConfig({
+      executionRoute: "chat",
+      missedRunPolicy: "skip",
+    });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const skipped = await first.createTask({
+        name: "only missed one-time task",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 180_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const internals = first as unknown as {
+        onExecuteCallback(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+        schedulerStartedAt: Date;
+      };
+      internals.schedulerStartedAt = new Date(Date.now() - 120_000);
+      internals.onExecuteCallback = async () => {
+        assert.fail("a skipped task must not be dispatched");
+      };
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.createTask({
+        name: "other window change",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(first.getTask(skipped.id)?.enabled, false);
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(skipped.id)?.enabled, false);
+      await waitForStartupSave(reloaded);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a missed one-time skip survives a concurrent rename", async () => {
+    const restore = overrideSchedulerConfig({ missedRunPolicy: "skip" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "before rename",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 180_000).toISOString(),
+        scope: "global",
+      });
+      const internals = first as unknown as {
+        checkAndExecuteTasks(): Promise<void>;
+        schedulerStartedAt: Date;
+        onExecuteCallback(): Promise<void>;
+      };
+      internals.schedulerStartedAt = new Date(Date.now() - 120_000);
+      internals.onExecuteCallback = async () => assert.fail("missed task ran");
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, { name: "after rename" });
+
+      await internals.checkAndExecuteTasks();
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(task.id)?.name, "after rename");
+      assert.strictEqual(reloaded.getTask(task.id)?.enabled, false);
+      await waitForStartupSave(reloaded);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a one-time skip survives a same-window rename during its save", async () => {
+    const restore = overrideSchedulerConfig({ missedRunPolicy: "skip" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let checking: Promise<void> | undefined;
+    let renaming: Promise<ScheduledTask | undefined> | undefined;
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "before rename",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 180_000).toISOString(),
+        scope: "global",
+      });
+      task.updatedAt = new Date(Date.now() - 10_000);
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const internals = manager as unknown as {
+        checkAndExecuteTasks(): Promise<void>;
+        schedulerStartedAt: Date;
+        onExecuteCallback(): Promise<void>;
+        saveMetaToFile(meta: { tasksSnapshot?: Array<ScheduledTask> }): Promise<void>;
+      };
+      internals.schedulerStartedAt = new Date(Date.now() - 120_000);
+      internals.onExecuteCallback = async () => assert.fail("missed task ran");
+      const saveMeta = internals.saveMetaToFile.bind(manager);
+      internals.saveMetaToFile = async (meta) => {
+        if (meta.tasksSnapshot?.some((item) => item.id === task.id && !item.enabled)) {
+          entered();
+          await hold;
+        }
+        await saveMeta(meta);
+      };
+      checking = internals.checkAndExecuteTasks();
+      await started;
+      renaming = manager.updateTask(task.id, { name: "after rename" });
+      release();
+      await checking;
+      await renaming;
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(task.id)?.name, "after rename");
+      assert.strictEqual(reloaded.getTask(task.id)?.enabled, false);
+      await waitForStartupSave(reloaded);
+    } finally {
+      release();
+      await checking;
+      await renaming;
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed pending reservation cannot leak into an unrelated save", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let run: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const oneTime = await manager.createTask({
+        name: "pending reservation",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      const other = await manager.createTask({
+        name: "other task",
+        prompt: "hello",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const internals = manager as unknown as {
+        saveMetaToFile(meta: { tasksSnapshot?: Array<ScheduledTask> }): Promise<void>;
+        onExecuteCallback(): Promise<void>;
+      };
+      const saveMeta = internals.saveMetaToFile.bind(manager);
+      let held = false;
+      let dispatches = 0;
+      internals.onExecuteCallback = async () => { dispatches++; };
+      internals.saveMetaToFile = async (meta) => {
+        if (meta.tasksSnapshot?.some((task) => task.id === oneTime.id && task.lastFiredClaimId)) {
+          if (!held) {
+            held = true;
+            entered();
+            await hold;
+          }
+          throw new Error("reservation commit failed");
+        }
+        await saveMeta(meta);
+      };
+      run = manager.runTaskNowDetailed(oneTime.id);
+      await started;
+      const update = manager.updateTask(other.id, { name: "updated independently" });
+      release();
+      await update;
+      const result = await run;
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(dispatches, 0);
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      assert.strictEqual(reloaded.getTask(other.id)?.name, "updated independently");
+      assert.strictEqual(reloaded.getTask(oneTime.id)?.enabled, true);
+      assert.strictEqual(reloaded.getTask(oneTime.id)?.lastFiredDueAt, undefined);
+      await waitForStartupSave(reloaded);
+    } finally {
+      release();
+      await run;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed one-time reservation does not starve a due recurring task", async () => {
+    const restore = overrideSchedulerConfig({
+      executionRoute: "chat",
+      jitterSeconds: 0,
+      maxConcurrentAutomaticRuns: 1,
+      maxDailyExecutions: 0,
+    });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const context = createMockContext(tmp);
+      const manager = new ScheduleManager(context);
+      const oneTime = await manager.createTask({
+        name: "unreservable one-time",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 180_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const recurring = await manager.createTask({
+        name: "independent recurring",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      recurring.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      const internals = manager as unknown as {
+        saveTasks(): Promise<void>;
+        queueFileWrite(): Promise<void>;
+        checkAndExecuteTasks(): Promise<void>;
+        onExecuteCallback(task: ScheduledTask): Promise<void>;
+      };
+      await internals.saveTasks();
+      internals.queueFileWrite = async () => { throw new Error("file unavailable"); };
+      const dispatched: string[] = [];
+      internals.onExecuteCallback = async (task) => { dispatched.push(task.id); };
+
+      await internals.checkAndExecuteTasks();
+      assert.deepStrictEqual(dispatched, [recurring.id]);
+      assert.strictEqual(manager.getTask(oneTime.id)?.enabled, true);
+      assert.strictEqual(manager.getTask(oneTime.id)?.lastFiredDueAt, undefined);
+      const snapshot = context.globalState.get<{
+        tasksSnapshot: Array<{ id: string; enabled: boolean; lastFiredClaimId?: string }>;
+      }>("scheduledTasksSnapshot")!;
+      const persistedOneTime = snapshot.tasksSnapshot.find((task) => task.id === oneTime.id);
+      assert.strictEqual(persistedOneTime?.enabled, true);
+      assert.strictEqual(persistedOneTime?.lastFiredClaimId, undefined);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("execution callbacks receive the actual manual or automatic trigger", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "trigger origin",
+        prompt: "hello",
+        cronExpression: "* * * * *",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: (task: ScheduledTask, trigger: string) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      const triggers: string[] = [];
+      internals.onExecuteCallback = async (_task, trigger) => { triggers.push(trigger); };
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, true);
+      task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+      await internals.checkAndExecuteTasks();
+      assert.deepStrictEqual(triggers, ["manual", "auto"]);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("history failure retains a one-time task without changing its after-run setting", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "history save failed",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() - 60_000).toISOString(),
+        afterRun: "delete",
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: () => Promise<{ retainOneTimeTask: boolean }>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      internals.onExecuteCallback = async () => ({ retainOneTimeTask: true });
+      await internals.checkAndExecuteTasks();
+      const retained = manager.getTask(task.id);
+      assert.strictEqual(retained?.enabled, false);
+      assert.strictEqual(retained?.afterRun, "delete");
+
+      const nextRunAt = new Date(Date.now() + 86_400_000).toISOString();
+      await manager.updateTask(task.id, { runAt: nextRunAt, enabled: true });
+      assert.strictEqual(manager.getTask(task.id)?.afterRun, "delete");
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a running callback keeps the original schedule when a task is rescheduled", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "chat" });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const oldRunAt = new Date(Date.now() - 60_000).toISOString();
+      const task = await manager.createTask({
+        name: "schedule snapshot",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: oldRunAt,
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      const nextRunAt = new Date(Date.now() + 86_400_000).toISOString();
+      let callbackRunAt: string | undefined;
+      const internals = manager as unknown as {
+        onExecuteCallback: (task: ScheduledTask) => Promise<void>;
+        checkAndExecuteTasks: () => Promise<void>;
+      };
+      internals.onExecuteCallback = async (executedTask) => {
+        await manager.updateTask(task.id, { runAt: nextRunAt, enabled: true });
+        callbackRunAt = executedTask.runAt;
+      };
+      await internals.checkAndExecuteTasks();
+      assert.strictEqual(callbackRunAt, oldRunAt);
+      assert.strictEqual(manager.getTask(task.id)?.runAt, nextRunAt);
+    } finally {
+      restore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a manual one-time run updates the reloaded task rather than a stale object", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const task = await first.createTask({
+        name: "reload during run",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        jitterSeconds: 0,
+      });
+      (first as unknown as { onExecuteCallback: () => Promise<void> }).onExecuteCallback =
+        async () => {
+          const second = new ScheduleManager(createMockContext(tmp));
+          await second.createTask({
+            name: "other task",
+            prompt: "hello",
+            cronExpression: "0 9 * * *",
+            scope: "global",
+          });
+          await assert.rejects(() => first.updateTask(task.id, { name: "stale update" }));
+        };
+      const result = await first.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, true);
+      const latest = first.getTask(task.id);
+      assert.ok(latest?.lastRun instanceof Date);
+      assert.strictEqual(latest.enabled, false);
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; enabled: boolean; lastRun?: string }>;
+      assert.strictEqual(saved.find((item) => item.id === task.id)?.enabled, false);
+      assert.ok(saved.find((item) => item.id === task.id)?.lastRun);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("finishing an old one-time run does not delete a rescheduled task", async () => {
+    const restore = overrideSchedulerConfig({ executionRoute: "agentHost" });
+    try {
+      for (const trigger of ["manual", "auto"] as const) {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+        let release!: () => void;
+        const hold = new Promise<void>((resolve) => { release = resolve; });
+        let first: ScheduleManager | undefined;
+        let second: ScheduleManager | undefined;
+        let manualRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+        try {
+          first = new ScheduleManager(createMockContext(tmp));
+          const runAt = new Date(Date.now() - 60_000).toISOString();
+          const task = await first.createTask({
+            name: `${trigger} rescheduled`,
+            prompt: "hello",
+            cronExpression: "",
+            runAt,
+            afterRun: "delete",
+            scope: "global",
+            jitterSeconds: 0,
+          });
+
+          let entered!: () => void;
+          const started = new Promise<void>((resolve) => { entered = resolve; });
+          const internals = first as unknown as {
+            onExecuteCallback: () => Promise<void>;
+            checkAndExecuteTasks: () => Promise<void>;
+          };
+          internals.onExecuteCallback = async () => { entered(); await hold; };
+          if (trigger === "manual") {
+            manualRun = first.runTaskNowDetailed(task.id);
+          } else {
+            await internals.checkAndExecuteTasks();
+          }
+          await started;
+          second = new ScheduleManager(createMockContext(tmp));
+          await waitForStartupSave(second);
+          const rescheduledAt = new Date(Date.now() + 3_600_000).toISOString();
+          await second.updateTask(task.id, { runAt: rescheduledAt, enabled: true });
+          release();
+          if (manualRun) {
+            assert.strictEqual((await manualRun).ok, true);
+            assert.strictEqual(
+              await first.deleteCompletedOneTimeTask(task.id, runAt, "obsolete-claim"),
+              false,
+            );
+          } else {
+            await first.waitForDetachedRuns();
+          }
+          const saved = JSON.parse(
+            fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+          ) as Array<{ id: string; enabled: boolean; runAt?: string }>;
+          const latest = saved.find((item) => item.id === task.id);
+          assert.strictEqual(latest?.runAt, rescheduledAt);
+          assert.strictEqual(latest?.enabled, true);
+        } finally {
+          release();
+          await manualRun;
+          if (first) {
+            await first.waitForDetachedRuns();
+            await waitForStartupSave(first);
+          }
+          if (second) await waitForStartupSave(second);
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  test("old manual completion cannot delete a new claim for the same date", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstHold = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondHold = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    let firstRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    let secondRun: ReturnType<ScheduleManager["runTaskNowDetailed"]> | undefined;
+    try {
+      const first = new ScheduleManager(createMockContext(tmp));
+      const runAt = new Date(Date.now() - 60_000).toISOString();
+      const task = await first.createTask({
+        name: "reclaimed same date",
+        prompt: "hello",
+        cronExpression: "",
+        runAt,
+        afterRun: "delete",
+        scope: "global",
+      });
+      let firstEntered!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { firstEntered = resolve; });
+      (first as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { firstEntered(); await firstHold; };
+      firstRun = first.runTaskNowDetailed(task.id);
+      await firstStarted;
+
+      const second = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(second);
+      await second.updateTask(task.id, {
+        runAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      });
+      await second.updateTask(task.id, { runAt, enabled: true });
+      let secondEntered!: () => void;
+      const secondStarted = new Promise<void>((resolve) => { secondEntered = resolve; });
+      (second as unknown as { onExecuteCallback(): Promise<void> }).onExecuteCallback =
+        async () => { secondEntered(); await secondHold; };
+      secondRun = second.runTaskNowDetailed(task.id);
+      await secondStarted;
+
+      releaseFirst();
+      const result = await firstRun;
+      assert.strictEqual(result.ok, true);
+      assert.ok(result.ok && result.claimId);
+      if (result.ok && result.claimId) {
+        assert.strictEqual(
+          await first.deleteCompletedOneTimeTask(task.id, runAt, result.claimId),
+          false,
+        );
+      }
+      assert.ok(first.getTask(task.id));
+      releaseSecond();
+      assert.strictEqual((await secondRun).ok, true);
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await Promise.allSettled([firstRun, secondRun]);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a one-time run does not dispatch if the cross-window claim cannot be saved", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "unavailable claim store",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+      });
+      let executions = 0;
+      const internals = manager as unknown as {
+        onExecuteCallback: () => Promise<void>;
+        queueFileWrite: () => Promise<void>;
+      };
+      internals.onExecuteCallback = async () => { executions++; };
+      internals.queueFileWrite = async () => { throw new Error("file unavailable"); };
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
+      assert.strictEqual(executions, 0);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("one-time schedule validates timestamps and can switch to cron", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
@@ -3473,11 +5360,20 @@ suite("ScheduleManager RunNow Tests", () => {
         jitterSeconds: 0,
       });
       task.lastFiredDueAt = new Date(runAt);
+      task.lastFiredClaimId = "test-claim";
       task.nextRun = undefined;
       task.enabled = false;
       const internals = manager as unknown as {
         saveTasks: () => Promise<void>;
-        persistRunResults: (results: Map<string, Date>) => Promise<void>;
+        persistRunResults: (
+          results: Map<string, Date>,
+          claims: Map<string, {
+            runAt: string;
+            dueAt: Date;
+            claimId: string;
+            deleteAfterRun: boolean;
+          }>,
+        ) => Promise<void>;
       };
       await internals.saveTasks();
       const saveTasks = internals.saveTasks.bind(manager);
@@ -3489,7 +5385,15 @@ suite("ScheduleManager RunNow Tests", () => {
         }
         await saveTasks();
       };
-      await internals.persistRunResults(new Map([[task.id, new Date()]]));
+      await internals.persistRunResults(
+        new Map([[task.id, new Date()]]),
+        new Map([[task.id, {
+          runAt,
+          dueAt: new Date(runAt),
+          claimId: "test-claim",
+          deleteAfterRun: true,
+        }]]),
+      );
       assert.strictEqual(attempts, 2);
       assert.strictEqual(manager.getTask(task.id), undefined);
       const persisted = JSON.parse(
@@ -4257,13 +6161,13 @@ suite("ScheduleManager RunNow Tests", () => {
       const internals = manager as unknown as {
         automaticRunsInFlight: number;
         onExecuteCallback?: (task: unknown) => Promise<void>;
-        saveTasks: () => Promise<void>;
+        saveTasksInternal: () => Promise<void>;
         checkAndExecuteTasks?: () => Promise<void>;
       };
       internals.onExecuteCallback = async () => {
         executions++;
       };
-      internals.saveTasks = async () => {
+      internals.saveTasksInternal = async () => {
         saveAttempts++;
         throw new Error("store unavailable");
       };
@@ -4397,6 +6301,163 @@ suite("ScheduleManager RunNow Tests", () => {
       } catch {
         // ignore
       }
+    }
+  });
+
+  test("a manual one-time Agent Host failure is retained disabled and is not retried", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const runAt = new Date(Date.now() + 60_000).toISOString();
+      const task = await manager.createTask({
+        name: "uncertain one-time task",
+        prompt: "hello",
+        cronExpression: "",
+        runAt,
+        afterRun: "delete",
+        scope: "global",
+        enabled: true,
+      });
+      let attempts = 0;
+      (
+        manager as unknown as { onExecuteCallback: () => Promise<void> }
+      ).onExecuteCallback = async () => {
+        attempts++;
+        throw createPromptBlockedError("uncertain", "agentHostFailed", "unknown");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.turnOutcome, "unknown");
+      }
+      const latest = manager.getTask(task.id);
+      assert.ok(latest);
+      assert.strictEqual(latest.enabled, false);
+      assert.strictEqual(latest.nextRun, undefined);
+      assert.strictEqual(latest.lastFiredDueAt?.toISOString(), runAt);
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, false);
+      assert.strictEqual(attempts, 1);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; enabled: boolean; lastFiredDueAt?: string }>;
+      const stored = persisted.find((item) => item.id === task.id);
+      assert.strictEqual(stored?.enabled, false);
+      assert.strictEqual(stored?.lastFiredDueAt, runAt);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed one-time CLI run remains disabled and cannot be dispatched again", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "unpersisted protection",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        enabled: true,
+      });
+      const internals = manager as unknown as { onExecuteCallback: () => Promise<void> };
+      let executions = 0;
+      internals.onExecuteCallback = async () => {
+        executions++;
+        throw createPromptBlockedError("CLI failed", "copilotCliFailed");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "promptBlocked");
+      }
+      assert.strictEqual(manager.getTask(task.id)?.enabled, false);
+      assert.strictEqual(manager.getTask(task.id)?.nextRun, undefined);
+      assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, false);
+      assert.strictEqual(executions, 1);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a one-time run retries a transient result-save failure after reservation", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const runAt = new Date(Date.now() + 60_000).toISOString();
+      const task = await manager.createTask({
+        name: "state save failed",
+        prompt: "hello",
+        cronExpression: "",
+        runAt,
+        afterRun: "delete",
+        scope: "global",
+        enabled: true,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: () => Promise<void>;
+        saveTasks: () => Promise<void>;
+      };
+      const originalSave = internals.saveTasks.bind(manager);
+      let saveAttempts = 0;
+      internals.onExecuteCallback = async () => {};
+      internals.saveTasks = async () => {
+        if (++saveAttempts === 1) throw new Error("state save failed");
+        await originalSave();
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(saveAttempts, 2);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; enabled: boolean; lastFiredDueAt?: string; lastRun?: string }>;
+      const stored = persisted.find((item) => item.id === task.id);
+      assert.strictEqual(stored?.enabled, false);
+      assert.strictEqual(stored?.lastFiredDueAt, runAt);
+      assert.ok(stored?.lastRun);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed result save cannot erase the persisted one-time reservation on reload", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "unpersisted state",
+        prompt: "hello",
+        cronExpression: "",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: "global",
+        enabled: true,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: () => Promise<void>;
+        saveTasks: () => Promise<void>;
+      };
+      internals.onExecuteCallback = async () => {};
+      internals.saveTasks = async () => {
+        throw new Error("storage unavailable\nmore details");
+      };
+
+      const result = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        assert.strictEqual(result.reason, "saveFailed");
+      }
+      assert.strictEqual(manager.getTask(task.id)?.enabled, false);
+      await assert.rejects(() => manager.updateTask(task.id, { name: "reload" }));
+      assert.strictEqual(manager.getTask(task.id)?.enabled, false);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as Array<{ id: string; enabled: boolean }>;
+      assert.strictEqual(persisted.find((item) => item.id === task.id)?.enabled, false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
