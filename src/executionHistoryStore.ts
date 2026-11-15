@@ -238,6 +238,7 @@ function normalizeExecutionHistoryEntry(
       ? entry.attachmentCount
       : undefined;
   const turnOutcome =
+    entry.turnOutcome === "queued" ||
     entry.turnOutcome === "completed" ||
     entry.turnOutcome === "failed" ||
     entry.turnOutcome === "cancelled" ||

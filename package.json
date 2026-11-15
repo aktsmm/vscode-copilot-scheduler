@@ -481,9 +481,10 @@
                 "preview_cron",
                 "list_models",
                 "list_agents",
-                "list_skills"
+                "list_skills",
+                "list_sessions"
               ],
-              "description": "Which kind of read to perform. Use list_models before setting 'model' on a task, list_agents before setting 'agent', and list_skills before writing a '/<skill>' prompt."
+              "description": "Which kind of read to perform. Use list_models before setting 'model', list_agents before setting 'agent', list_skills before writing a '/<skill>' prompt, and list_sessions before binding a task to an existing Copilot chat."
             },
             "scope": {
               "type": "string",
@@ -648,6 +649,10 @@
                 "continue"
               ],
               "description": "Per-task chat session override. 'default' uses the global setting."
+            },
+            "targetChatId": {
+              "type": "string",
+              "description": "Optional opaque bindingId returned by scheduler_query kind=list_sessions. Queues this task in that existing Copilot chat. Call list_sessions first; never guess or use an internal URI. Workspace tasks must match the selected chat's sole workspace."
             },
             "autoMode": {
               "type": "boolean",
@@ -824,6 +829,10 @@
                     "new",
                     "continue"
                   ]
+                },
+                "targetChatId": {
+                  "type": "string",
+                  "description": "Set to a bindingId returned by scheduler_query kind=list_sessions to bind the task to an existing Copilot chat. Use an empty string to clear the binding. Workspace tasks must match the selected chat's sole workspace."
                 },
                 "autoMode": {
                   "type": "boolean",

@@ -69,6 +69,11 @@ export const messages = {
       "The one-time task cannot be safely dispatched through the chat or CLI fallback. Check the Agent Host and reschedule the task before retrying.",
       "単発タスクはチャットや CLI の代替経路では安全に送信できません。Agent Host を確認し、日時を再設定してから再実行してください。",
     ),
+  targetChatRequiresAgentHost: () =>
+    t(
+      "A task bound to an existing chat requires the Agent Host route. No message was sent.",
+      "既存チャットに紐付けたタスクには Agent Host 経路が必要です。メッセージは送信されていません。",
+    ),
   lmToolRunConfirmation: (name: string, afterRun?: "disable" | "delete") =>
     afterRun
       ? t(
@@ -86,6 +91,8 @@ export const messages = {
     ),
   executionResultDispatched: () => t("Dispatched", "送信済み"),
   executionResultTurnCompleted: () => t("Turn completed", "ターン完了"),
+  executionResultQueued: () =>
+    t("Queued in the selected Copilot chat", "選択した Copilot チャットに追加済み"),
   executionResultFailed: () => t("Failed", "失敗"),
   executionResultBlocked: () => t("Blocked", "実行前に中止"),
   promptFileBlocked: (name: string, reason: string) =>
@@ -143,6 +150,7 @@ export const messages = {
   executionHistoryPickPlaceholder: () =>
     t("Recent execution history (latest first)", "実行履歴（新しい順）"),
   executionHistoryTurnOutcome: () => t("Agent Host turn", "Agent Host ターン"),
+  executionHistoryTurnQueued: () => t("Queued", "キューに追加済み"),
   executionHistoryTurnCompleted: () => t("Completed", "完了"),
   executionHistoryTurnFailed: () => t("Failed", "失敗"),
   executionHistoryTurnCancelled: () => t("Cancelled", "キャンセル"),
@@ -887,6 +895,25 @@ export const messages = {
   labelChatSessionDefault: () => t("Use setting default", "設定の既定値を使う"),
   labelChatSessionNew: () => t("New session", "新しいセッション"),
   labelChatSessionContinue: () => t("Continue session", "継続セッション"),
+  labelTargetChat: () => t("Existing Copilot chat", "既存の Copilot チャット"),
+  labelTargetChatDefault: () =>
+    t("Use the configured chat behavior", "設定済みのチャット動作を使う"),
+  targetChatLoadNote: () =>
+    t(
+      "Refresh to choose a running Copilot chat. A bound task is queued without interrupting an active turn.",
+      "実行中の Copilot チャットを選ぶには更新してください。紐付けたタスクは実行中のターンに割り込まず、キューに追加されます。",
+    ),
+  targetChatLoading: () => t("Loading chats…", "チャットを読み込み中…"),
+  targetChatLoadFailed: () =>
+    t(
+      "Could not load Agent Host chats. Ensure VS Code Agent Host is running, then refresh.",
+      "Agent Host のチャットを読み込めません。VS Code の Agent Host を起動してから更新してください。",
+    ),
+  targetChatUnavailable: () =>
+    t(
+      "The selected Copilot chat is no longer available.",
+      "選択した Copilot チャットは利用できなくなりました。",
+    ),
   labelJitterSeconds: () =>
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
   labelMaxExecutionsPerDay: () =>

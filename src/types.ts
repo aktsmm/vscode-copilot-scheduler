@@ -198,6 +198,12 @@ export interface ScheduledTask {
   /** Task-specific chat session override. Undefined means use the global setting. */
   chatSession?: ChatSessionBehavior;
 
+  /** Opaque Agent Host chat binding selected from scheduler_query or the task picker. */
+  targetChatId?: string;
+
+  /** Cached display title for the bound chat; never used to resolve the target. */
+  targetChatTitle?: string;
+
   /** Max random delay in seconds applied before execution (0 = off). */
   jitterSeconds?: number;
 
@@ -310,6 +316,12 @@ export interface CreateTaskInput {
   /** Per-task chat session override. "default" uses the global setting. */
   chatSession?: TaskChatSessionMode;
 
+  /** Opaque ID returned by scheduler_query kind=list_sessions. Empty clears the binding on update. */
+  targetChatId?: string;
+
+  /** Display-only chat title populated after the binding is resolved. */
+  targetChatTitle?: string;
+
   /** Max random delay in seconds applied before execution (0 = off; undefined = use configured default). */
   jitterSeconds?: number;
 
@@ -399,6 +411,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
+
+  /** Opaque ID of an existing Agent Host chat to receive the task. */
+  targetChatId?: string;
 
   /** Files attached to the chat request, in their stored (relative) form. */
   attachments?: TaskAttachment[];
@@ -498,6 +513,12 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
 
+  /** Opaque ID of an existing Agent Host chat to receive the task. */
+  targetChatId?: string;
+
+  /** Stable task identifier used to coalesce its pending message in the target chat. */
+  taskId?: string;
+
   /** Absolute paths of attachment files, already resolved and validated. */
   attachFilePaths?: string[];
 
@@ -535,6 +556,7 @@ export interface CopilotCliRunInfo {
 }
 
 export type AgentHostTurnOutcome =
+  | "queued"
   | "completed"
   | "failed"
   | "cancelled"
@@ -553,6 +575,8 @@ export interface AgentHostRunInfo {
   appliedModel?: string;
   /** Why the task ran through the chat route instead of the Agent Host. */
   fallbackReason?: string;
+  /** Stable identifier of a message accepted into an existing chat queue. */
+  messageId?: string;
   turnOutcome?: AgentHostTurnOutcome;
   responseText?: AgentHostResponseTextObservation;
 }
@@ -572,6 +596,7 @@ export type WebviewToExtensionMessage =
   | ({ type: "testPrompt" } & PromptExecutionRequest)
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
+  | { type: "refreshAgentHostChats" }
   | { type: "openModelRuntimeArguments" }
   | { type: "applyModelRuntimeArguments" }
   | { type: "openAutoEnableSettings" }

@@ -2188,6 +2188,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           getSelectedSkillRefForSubmit: () => null,
           getEffectivePromptSource: () => promptSource,
           chatSessionSelect: null,
+          targetChatSelect: { value: "" },
           jitterSecondsInput: null,
           maxExecutionsPerDayInput: null,
           attachmentsState: [],
@@ -2664,6 +2665,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'id="success-toast" class="feedback-banner feedback-banner-success" role="status" aria-live="polite"',
       '<label for="cron-preset">',
       '<label for="cron-expression">',
+      '<select id="target-chat" aria-describedby="target-chat-note">',
+      'id="target-chat-note" role="status" aria-live="polite" aria-atomic="true"',
+      'id="chat-refresh-btn" aria-label="',
     ]) {
       assert.ok(
         sourceContainsToken(htmlSource, token),

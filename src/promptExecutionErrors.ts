@@ -62,7 +62,7 @@ export function getPromptBlockedReason(
 
 export function getAgentHostTurnFailure(
   error: unknown,
-): Exclude<AgentHostTurnOutcome, "completed"> | undefined {
+): Exclude<AgentHostTurnOutcome, "completed" | "queued"> | undefined {
   if (getPromptBlockedReason(error) !== "agentHostFailed") {
     return undefined;
   }

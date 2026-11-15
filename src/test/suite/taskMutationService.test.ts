@@ -274,6 +274,46 @@ suite("taskMutationService lmToolClient", () => {
 });
 
 suite("taskMutationService model resolution", () => {
+  const chatId = "ab".repeat(32);
+
+  test("createTask re-validates an existing-chat binding and normalizes its ID", async () => {
+    const fake = new FakeScheduleManager();
+    const seen: string[] = [];
+    const c = createLmToolMutationClient({
+      scheduleManager: fake as unknown as ScheduleManager,
+      resolveTargetChatBinding: async (id) => {
+        seen.push(id);
+        return { title: "Daily review" };
+      },
+    });
+    const result = await c.createTask({
+      ...baseInput(),
+      targetChatId: chatId.toUpperCase(),
+    });
+    assertOk(result);
+    assert.deepStrictEqual(seen, [chatId]);
+    assert.strictEqual(fake.lastCreateInput?.targetChatId, chatId);
+    assert.strictEqual(fake.lastCreateInput?.targetChatTitle, "Daily review");
+  });
+
+  test("createTask rejects a malformed binding, Copilot CLI combination, or missing resolver without saving", async () => {
+    const fake = new FakeScheduleManager();
+    const c = createLmToolMutationClient({
+      scheduleManager: fake as unknown as ScheduleManager,
+      resolveTargetChatBinding: async () => ({ title: "x" }),
+    });
+    for (const input of [
+      { targetChatId: "ahp-copilotcli:/chat-1" },
+      { targetChatId: chatId, useCopilotCli: true },
+    ]) {
+      assertFail(await c.createTask({ ...baseInput(), ...input }));
+    }
+    assertFail(
+      await client(fake).createTask({ ...baseInput(), targetChatId: chatId }),
+    );
+    assert.strictEqual(fake.lastCreateInput, undefined);
+  });
+
   test("createTask passes only model selection fields to the resolver", async () => {
     const fake = new FakeScheduleManager();
     const delegate = catalogResolver([fakeModel()]);

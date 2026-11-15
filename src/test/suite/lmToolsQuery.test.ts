@@ -352,8 +352,8 @@ suite("lmTools scheduler_query", () => {
     assert.strictEqual(payload.retentionLimit, 50);
     assert.strictEqual(payload.retentionScope, "task");
     assert.deepStrictEqual(payload.statusSemantics, {
-      success: "prompt_dispatched",
-      note: "status alone confirms prompt dispatch, not model response completion",
+      success: "prompt_dispatched_or_queued",
+      note: "status alone confirms dispatch or queue acceptance, not model response completion",
     });
     assert.deepStrictEqual(
       history.map((item) => item.taskId),
@@ -520,6 +520,32 @@ suite("lmTools scheduler_query", () => {
       agents.some((agent) => "filePath" in agent),
       false,
     );
+  });
+
+  test("kind=list_sessions exposes only opaque IDs, titles, and workspace names", async () => {
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      {
+        ...fakeCatalogProvider(),
+        listSessions: async () => [
+          {
+            bindingId: "a".repeat(64),
+            title: "Daily review",
+            workingDirectories: ["C:\\Users\\me\\repo"],
+          },
+        ],
+      },
+    );
+    const payload = parseJson(await invoke(tool, { kind: "list_sessions" }));
+    assert.deepStrictEqual(payload.sessions, [
+      {
+        bindingId: "a".repeat(64),
+        title: "Daily review",
+        workingDirectoryNames: ["repo"],
+      },
+    ]);
+    assert.strictEqual(JSON.stringify(payload).includes("C:\\\\"), false);
+    assert.strictEqual(JSON.stringify(payload).includes("ahp-"), false);
   });
 
   test("discovery kinds reject unexpected fields", async () => {

@@ -1151,6 +1151,28 @@ suite("lmTools write wrappers", () => {
     );
   });
 
+  test("create and update confirmations disclose an existing-chat binding", async () => {
+    const chatId = "cd".repeat(32);
+    const created = await withConfirmationMode("always", () =>
+      prepare(createSchedulerCreateTaskTool(new FakeClient()), {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review the workspace",
+        scope: "workspace",
+        targetChatId: chatId,
+      }),
+    );
+    assert.match(confirmationMessageText(created), /existing chat/);
+    assert.ok(!confirmationMessageText(created).includes(chatId));
+    const updated = await withConfirmationMode("always", () =>
+      prepare(createSchedulerUpdateTaskTool(new FakeClient()), {
+        id: "task-1",
+        updates: { targetChatId: chatId },
+      }),
+    );
+    assert.match(confirmationMessageText(updated), /existing Copilot chat/);
+  });
+
   test("update task forwards model and execution controls", async () => {
     const client = new FakeClient();
     const tool = createSchedulerUpdateTaskTool(client);

@@ -5,12 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.0] - 2026-11-12
+## [1.10.0] - 2026-11-16
 
 Tasks now run through the Agent Host by default, so the model, reasoning effort, context size, custom agent and attachments set on a task are applied, and the model that really ran is recorded. The older chat route remains available.
 
 ### Added
 
+- Tasks can be bound to an existing Copilot chat (Webview selector and `targetChatId` / `scheduler_query kind=list_sessions` in Chat tools). The prompt is queued as a pending message through the Agent Host without interrupting an active turn; the binding is revalidated on save and before dispatch, workspace tasks must match the chat's sole workspace, and the task never falls back to another route. History shows `queued`.
 - **Agent Host route** (default). A task is sent to the Agent Host that VS Code runs for the Copilot harness, over the [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/), instead of being typed into a chat window. Verified on VS Code 1.146: the requested model is the model that ran (Claude Sonnet 5.5 and GPT-5.6 Luna), a continued run can use another model, and a custom agent and an attachment take effect. The execution history records the requested and the reported model, and a warning appears when they differ (Auto is not compared).
 - **Continue** keeps using the last Scheduler session of the task's folder while VS Code stays open; a new session starts after a restart. Runs that share a session never overlap.
 - Settings `copilotScheduler.executionRoute` (`agentHost` by default, or `chat`), `copilotScheduler.executionFallback` (`chat` by default, or `fail`), `copilotScheduler.agentHostAutoApprove` (default on, so unattended tasks can use tools), `copilotScheduler.agentHostOpenSession` (default on: open the session as an editor tab) and `copilotScheduler.agentHostTimeoutMinutes` (default 60). The last two are machine-scoped, so a workspace cannot change them.

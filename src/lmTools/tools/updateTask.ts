@@ -36,6 +36,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "modelConfiguration",
   "scope",
   "chatSession",
+  "targetChatId",
   "autoMode",
   "modelFallback",
   "jitterSeconds",
@@ -83,6 +84,9 @@ export function createSchedulerUpdateTaskTool(
               }`,
               attachmentDetail
                 ? `\n\nThe attachment list is replaced by:\n${attachmentDetail}`
+                : "",
+              updateKeys.includes("targetChatId")
+                ? "\n\nThe task's prompts will be queued into the selected existing Copilot chat (an empty value unbinds it)."
                 : "",
             ].join(""),
           ),

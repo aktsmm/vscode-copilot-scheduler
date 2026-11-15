@@ -770,6 +770,7 @@ export class SchedulerWebview {
             modelVersion: message.modelVersion,
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
+            targetChatId: message.targetChatId,
             ...(message.useCopilotCli === true ? { useCopilotCli: true } : {}),
           });
         }
@@ -833,6 +834,31 @@ export class SchedulerWebview {
           agents: this.cachedAgents,
         });
         this.postMessage(this.buildUpdateModelsMessage());
+        break;
+
+      case "refreshAgentHostChats":
+        try {
+          const chats = await CopilotExecutor.listAvailableAgentHostChats();
+          this.postMessage({
+            type: "updateAgentHostChats",
+            chats: chats.map((chat) => ({
+              bindingId: chat.bindingId,
+              title: chat.title,
+              workingDirectoryNames: chat.workingDirectories.map(
+                (directory) => path.basename(directory),
+              ),
+            })),
+          });
+        } catch (error) {
+          logDebug(
+            `[CopilotScheduler] Could not load Agent Host chats: ${sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error ?? ""))}`,
+          );
+          this.postMessage({
+            type: "updateAgentHostChats",
+            chats: [],
+            error: messages.targetChatLoadFailed(),
+          });
+        }
         break;
 
       case "refreshPrompts":
@@ -1811,6 +1837,11 @@ export class SchedulerWebview {
       labelChatSessionDefault: messages.labelChatSessionDefault(),
       labelChatSessionNew: messages.labelChatSessionNew(),
       labelChatSessionContinue: messages.labelChatSessionContinue(),
+      labelTargetChat: messages.labelTargetChat(),
+      labelTargetChatDefault: messages.labelTargetChatDefault(),
+      targetChatLoadNote: messages.targetChatLoadNote(),
+      targetChatLoading: messages.targetChatLoading(),
+      targetChatLoadFailed: messages.targetChatLoadFailed(),
       labelJitterSeconds: messages.labelJitterSeconds(),
       labelMaxExecutionsPerDay: messages.labelMaxExecutionsPerDay(),
       labelAllowedTimeWindow: messages.labelAllowedTimeWindow(),
@@ -3073,6 +3104,16 @@ export class SchedulerWebview {
                 <option value="continue">${escapeHtml(strings.labelChatSessionContinue)}</option>
               </select>
               <p class="note" id="chat-session-note">${escapeHtml(defaultChatSessionNote)}</p>
+            </div>
+            <div class="form-group col-12">
+              <label for="target-chat">${escapeHtml(strings.labelTargetChat)}</label>
+              <div class="template-row">
+                <select id="target-chat" aria-describedby="target-chat-note">
+                  <option value="">${escapeHtml(strings.labelTargetChatDefault)}</option>
+                </select>
+                <button type="button" class="btn-secondary" id="chat-refresh-btn" aria-label="${escapeHtmlAttr(`${strings.actionRefresh}: ${strings.labelTargetChat}`)}">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+              <p class="note" id="target-chat-note" role="status" aria-live="polite" aria-atomic="true">${escapeHtml(strings.targetChatLoadNote)}</p>
             </div>
           </div>
         </section>
