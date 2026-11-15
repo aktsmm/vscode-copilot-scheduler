@@ -1099,10 +1099,10 @@
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",
     "@vscode/test-electron": "^2.3.0",
-    "@vscode/vsce": "^4.0.0",
+    "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.27.2",
     "eslint": "^8.0.0",
-    "glob": "^10.0.0",
+    "glob": "^14.0.4",
     "mocha": "^11.7.5",
     "typescript": "^5.0.0",
     "ws": "^8.22.1",
@@ -1110,7 +1110,7 @@
     "yazl": "2.5.1"
   },
   "overrides": {
-    "serialize-javascript": "7.0.5",
+    "serialize-javascript": "7.1.4",
     "diff": "9.0.0"
   }
 }
