@@ -44,9 +44,13 @@ import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
   AgentHostError,
   findAgentHostEndpoint,
+  listAgentHostChats,
+  queueAgentHostMessage,
+  resolveAgentHostChatBinding,
   resolveUserDataDir,
   runAgentHostTurn,
   toFileUri,
+  type AgentHostChatInfo,
   type AgentHostSessionRef,
 } from "./agentHostClient";
 import {
@@ -617,6 +621,31 @@ export class CopilotExecutor {
     this.agentHostUserDataDir = resolveUserDataDir(globalStorageUri.fsPath);
   }
 
+  static async listAvailableAgentHostChats(): Promise<AgentHostChatInfo[]> {
+    const userDataDir = this.agentHostUserDataDir;
+    const endpoint = userDataDir ? findAgentHostEndpoint(userDataDir) : undefined;
+    if (!endpoint) {
+      throw new AgentHostError("unavailable", "No running Agent Host was found.");
+    }
+    return listAgentHostChats(endpoint);
+  }
+
+  static async resolveTargetAgentHostChat(
+    targetChatId: string,
+    expectedWorkspacePath?: string,
+  ): Promise<AgentHostChatInfo> {
+    const userDataDir = this.agentHostUserDataDir;
+    const endpoint = userDataDir ? findAgentHostEndpoint(userDataDir) : undefined;
+    if (!endpoint) {
+      throw new AgentHostError("unavailable", "No running Agent Host was found.");
+    }
+    return resolveAgentHostChatBinding(
+      endpoint,
+      targetChatId,
+      expectedWorkspacePath,
+    );
+  }
+
   private getPreferredWorkspaceName(): string {
     return getPreferredWorkspaceName();
   }
@@ -630,6 +659,16 @@ export class CopilotExecutor {
   ): Promise<ExecutePromptResult> {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
+
+    if (options?.targetChatId && options.useCopilotCli === true) {
+      return this.warnAndThrow(
+        createPromptBlockedError(
+          messages.targetChatRequiresAgentHost(),
+          "agentHostUnavailable",
+        ),
+        processedPrompt,
+      );
+    }
 
     // The CLI route needs a model to apply; without one the chat route is used as before.
     if (options?.useCopilotCli === true && (options.model ?? "").trim()) {
@@ -661,6 +700,18 @@ export class CopilotExecutor {
 
     // Get chat session behavior and command delay factor once per execution
     const config = vscode.workspace.getConfiguration("copilotScheduler");
+    if (
+      options?.targetChatId &&
+      resolveExecutionRoute(config) !== "agentHost"
+    ) {
+      return this.warnAndThrow(
+        createPromptBlockedError(
+          messages.targetChatRequiresAgentHost(),
+          "agentHostUnavailable",
+        ),
+        routing.legacyPrompt,
+      );
+    }
     const chatSession = resolveChatSessionBehavior(
       options?.chatSession,
       config,
@@ -888,7 +939,9 @@ export class CopilotExecutor {
     config: vscode.WorkspaceConfiguration,
     chatSession: ChatSessionBehavior,
   ): Promise<{ result?: ExecutePromptResult; fallbackReason?: string }> {
+    const targetChatId = options?.targetChatId;
     const failOnFallback =
+      !!targetChatId ||
       config.get<string>("executionFallback", "chat") === "fail";
     const decline = async (rawDetail: string) => {
       const detail = sanitizeAbsolutePathDetails(
@@ -1037,11 +1090,50 @@ export class CopilotExecutor {
           ? { resume: CopilotExecutor.agentHostSessions.get(sessionKey) }
           : {}),
       });
+    const queueTargetChat = targetChatId
+      ? () =>
+          queueAgentHostMessage({
+        endpoint,
+        targetChatId,
+        text: routing.chatOpenPrompt,
+        ...(options?.taskId ? { taskId: options.taskId } : {}),
+        ...(requestedCwd ? { expectedWorkspacePath: requestedCwd } : {}),
+        ...(modelId ? { modelId } : {}),
+        modelOptions: {
+          ...configuration,
+          reasoningEffort:
+            configuration.reasoningEffort ?? options?.modelReasoningEffort,
+        },
+        ...(agentUri ? { agentUri } : {}),
+        attachments: (options?.attachFilePaths ?? []).map((filePath) => ({
+          label: path.basename(filePath),
+          uri: toFileUri(filePath),
+        })),
+        ...(options?.dispatchGuard ? { dispatchGuard: options.dispatchGuard } : {}),
+          })
+      : undefined;
 
     try {
       logDebug(
-        `[CopilotScheduler] Running through the Agent Host: model=${modelId ?? "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
+        `[CopilotScheduler] ${targetChatId ? "Queueing to a bound Agent Host chat" : "Running through the Agent Host"}: model=${modelId ?? "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
       );
+      if (targetChatId && queueTargetChat) {
+        const queued = await CopilotExecutor.runSerialized(
+          `target:${targetChatId}`,
+          queueTargetChat,
+        );
+        return {
+          result: {
+            agentHostRun: {
+              ...(queued.requestedModel
+                ? { requestedModel: queued.requestedModel }
+                : {}),
+              turnOutcome: "queued",
+              messageId: queued.messageId,
+            },
+          },
+        };
+      }
       const turn = await CopilotExecutor.runSerialized(sessionKey, run);
       CopilotExecutor.agentHostSessions.set(sessionKey, {
         sessionUri: turn.sessionUri,

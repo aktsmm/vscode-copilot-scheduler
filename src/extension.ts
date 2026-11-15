@@ -188,6 +188,7 @@ function buildPromptExecutionOptions(
   return {
     agent: request.agent,
     chatSession: request.chatSession,
+    targetChatId: request.targetChatId,
     model: request.model,
     modelName: request.modelName,
     modelVendor: request.modelVendor,
@@ -479,9 +480,11 @@ function buildExecutionSummary(
 ): string {
   const resultLabel =
     status === "success"
-      ? turnOutcome === "completed"
-        ? messages.executionResultTurnCompleted()
-        : messages.executionResultDispatched()
+      ? turnOutcome === "queued"
+        ? messages.executionResultQueued()
+        : turnOutcome === "completed"
+          ? messages.executionResultTurnCompleted()
+          : messages.executionResultDispatched()
       : status === "blocked"
         ? messages.executionResultBlocked()
         : messages.executionResultFailed();
@@ -545,6 +548,7 @@ function buildExecutionHistoryDetail(entry: ExecutionHistoryEntry): string {
 
   if (entry.turnOutcome) {
     const outcomeLabels = {
+      queued: messages.executionHistoryTurnQueued,
       completed: messages.executionHistoryTurnCompleted,
       failed: messages.executionHistoryTurnFailed,
       cancelled: messages.executionHistoryTurnCancelled,
@@ -790,7 +794,7 @@ type ManualRunFailureResult = {
 type ManualRunSuccessResult = {
   ok: true;
   claimId?: string;
-  turnOutcome?: "completed";
+  turnOutcome?: AgentHostTurnOutcome;
   responseText?: AgentHostResponseTextObservation;
   executionInfo?: ManualRunExecutionInfo;
 };
@@ -1354,8 +1358,14 @@ export function activate(context: vscode.ExtensionContext): void {
       listModels: loadPickerModelCatalog,
       listAgents: () => CopilotExecutor.getAllAgents(),
       listSkills: discoverWorkspaceSkills,
+      listSessions: () => CopilotExecutor.listAvailableAgentHostChats(),
     },
     resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
+    resolveTargetChatBinding: (bindingId, expectedWorkspacePath) =>
+      CopilotExecutor.resolveTargetAgentHostChat(
+        bindingId,
+        expectedWorkspacePath,
+      ),
     runTask: async (task, confirmedSnapshot) => {
       const result = await runTaskManually(task, undefined, confirmedSnapshot);
       if (result.ok) {
@@ -1631,6 +1641,8 @@ async function executeTask(
             getTaskAttachmentRoots(task),
             task.scope === "workspace" ? task.workspacePath : undefined,
           ),
+          targetChatId: task.targetChatId,
+          taskId: task.id,
           ...(dispatchGuard
             ? { dispatchGuard, allowUnguardedFallback: !task.runAt }
             : {}),
@@ -2345,19 +2357,23 @@ async function runTaskManually(
     if (!publicResult.ok) {
       deps.refresh();
       return publicResult.reason === "saveFailed" &&
-        agentHostRun?.turnOutcome === "completed"
+        agentHostRun?.turnOutcome
         ? {
             ...publicResult,
-            turnOutcome: "completed",
-            responseText: agentHostRun.responseText,
+            turnOutcome: agentHostRun.turnOutcome,
+            ...(agentHostRun.turnOutcome === "completed"
+              ? { responseText: agentHostRun.responseText }
+              : {}),
           }
         : publicResult;
     }
-    return agentHostRun?.turnOutcome === "completed"
+    return agentHostRun?.turnOutcome
       ? {
           ...publicResult,
-          turnOutcome: "completed",
-          responseText: agentHostRun.responseText,
+          turnOutcome: agentHostRun.turnOutcome,
+          ...(agentHostRun.turnOutcome === "completed"
+            ? { responseText: agentHostRun.responseText }
+            : {}),
         }
       : publicResult;
   } finally {
@@ -2395,6 +2411,51 @@ async function confirmManualRunIfWorkspaceMismatch(
     messages.actionCancel(),
   );
   return choice === messages.confirmRunAnyway();
+}
+
+async function resolveWebviewTargetChatBinding(
+  data: Partial<CreateTaskInput>,
+  existing?: ScheduledTask,
+): Promise<Partial<CreateTaskInput>> {
+  const targetChatIdWasProvided = Object.prototype.hasOwnProperty.call(
+    data,
+    "targetChatId",
+  );
+  const targetChatId = targetChatIdWasProvided
+    ? data.targetChatId
+    : existing?.targetChatId;
+  if (targetChatId === undefined) {
+    return targetChatIdWasProvided
+      ? { targetChatId: "", targetChatTitle: "" }
+      : {};
+  }
+  if (typeof targetChatId !== "string") {
+    throw new Error(messages.targetChatUnavailable());
+  }
+  const normalizedId = targetChatId.trim().toLowerCase();
+  if (!normalizedId) {
+    return targetChatIdWasProvided
+      ? { targetChatId: "", targetChatTitle: "" }
+      : {};
+  }
+  if ((data.useCopilotCli ?? existing?.useCopilotCli) === true) {
+    throw new Error(messages.targetChatRequiresAgentHost());
+  }
+  const scope = data.scope ?? existing?.scope;
+  const expectedWorkspacePath =
+    scope === "workspace"
+      ? data.scope === "workspace"
+        ? scheduleManager.getPreferredWorkspaceRootPath()
+        : existing?.workspacePath
+      : undefined;
+  const chat = await CopilotExecutor.resolveTargetAgentHostChat(
+    normalizedId,
+    expectedWorkspacePath,
+  );
+  return {
+    targetChatId: normalizedId,
+    targetChatTitle: chat.title,
+  };
 }
 
 async function handleTaskActionAsync(action: TaskAction): Promise<void> {
@@ -2530,8 +2591,11 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             throw new Error(messages.dynamicConfigurationUnavailable());
         }
         if (action.taskId === "__create__" && action.data) {
+          const targetBinding = await resolveWebviewTargetChatBinding(
+            action.data,
+          );
           const task = await scheduleManager.createTask(
-            action.data as CreateTaskInput,
+            { ...action.data, ...targetBinding } as CreateTaskInput,
           );
           const accepted = await ensureCreatedTaskAcceptedAfterDisclaimer(task);
           if (!accepted) {
@@ -2544,12 +2608,17 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           SchedulerWebview.updateTasks(scheduleManager.getAllTasks());
           SchedulerWebview.switchToList(createdMsg);
         } else if (action.data) {
+          const current = scheduleManager.getTask(action.taskId);
+          const targetBinding = await resolveWebviewTargetChatBinding(
+            action.data,
+            current,
+          );
           const previousCronExpression = scheduleManager.getTask(
             action.taskId,
           )?.cronExpression;
           const task = await scheduleManager.updateTask(
             action.taskId,
-            action.data,
+            { ...action.data, ...targetBinding },
           );
           if (!task) {
             const msg = messages.taskNotFound();

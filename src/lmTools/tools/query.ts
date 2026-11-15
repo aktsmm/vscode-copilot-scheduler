@@ -32,7 +32,8 @@ type QueryKind =
   | "preview_cron"
   | "list_models"
   | "list_agents"
-  | "list_skills";
+  | "list_skills"
+  | "list_sessions";
 
 interface QueryInput {
   kind?: QueryKind | string;
@@ -57,6 +58,13 @@ export interface SchedulerCatalogProvider {
   }>;
   listAgents(): Promise<readonly AgentInfo[]>;
   listSkills?(): Promise<DiscoveredSkills>;
+  listSessions?(): Promise<
+    readonly {
+      bindingId: string;
+      title: string;
+      workingDirectories: readonly string[];
+    }[]
+  >;
 }
 
 const VALID_KINDS: readonly QueryKind[] = [
@@ -67,6 +75,7 @@ const VALID_KINDS: readonly QueryKind[] = [
   "list_models",
   "list_agents",
   "list_skills",
+  "list_sessions",
 ];
 
 function invalidKindResult(input: unknown): vscode.LanguageModelToolResult {
@@ -97,6 +106,7 @@ const ALLOWED_BY_KIND: Record<QueryKind, ReadonlySet<string>> = {
   list_models: new Set(["kind"]),
   list_agents: new Set(["kind"]),
   list_skills: new Set(["kind"]),
+  list_sessions: new Set(["kind"]),
 };
 
 function catalogUnavailableResult(
@@ -196,8 +206,8 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
     retentionLimit: getExecutionHistoryLimit(),
     retentionScope: "task",
     statusSemantics: {
-      success: "prompt_dispatched",
-      note: "status alone confirms prompt dispatch, not model response completion",
+      success: "prompt_dispatched_or_queued",
+      note: "status alone confirms dispatch or queue acceptance, not model response completion",
     },
     turnOutcomeSemantics: {
       note: "When present, turnOutcome is an Agent Host turn observation; it does not confirm that the requested work succeeded. responseText describes observed assistant text, not the contents of the response.",
@@ -342,6 +352,28 @@ async function handleListSkills(
   });
 }
 
+async function handleListSessions(
+  catalogProvider: SchedulerCatalogProvider,
+): Promise<vscode.LanguageModelToolResult> {
+  const listSessions = catalogProvider.listSessions;
+  if (!listSessions) {
+    return catalogUnavailableResult("list_sessions");
+  }
+  const sessions = await listSessions.call(catalogProvider);
+  return buildJsonTextResult({
+    ok: true,
+    count: sessions.length,
+    privacy: "Chat content and internal URIs are omitted.",
+    sessions: sessions.map((session) => ({
+      bindingId: session.bindingId,
+      title: session.title,
+      workingDirectoryNames: session.workingDirectories.map(
+        (directory) => directory.split(/[\\/]/).filter(Boolean).pop() ?? "",
+      ),
+    })),
+  });
+}
+
 export function createSchedulerQueryTool(
   scheduleManager: ScheduleManager,
   catalogProvider?: SchedulerCatalogProvider,
@@ -377,7 +409,8 @@ export function createSchedulerQueryTool(
           return handlePreviewCron(input);
         case "list_models":
         case "list_agents":
-        case "list_skills": {
+        case "list_skills":
+        case "list_sessions": {
           if (!catalogProvider) {
             return catalogUnavailableResult(kindStrict);
           }
@@ -387,6 +420,9 @@ export function createSchedulerQueryTool(
             }
             if (kindStrict === "list_agents") {
               return await handleListAgents(catalogProvider);
+            }
+            if (kindStrict === "list_sessions") {
+              return await handleListSessions(catalogProvider);
             }
             const listSkills = catalogProvider.listSkills;
             if (!listSkills) {

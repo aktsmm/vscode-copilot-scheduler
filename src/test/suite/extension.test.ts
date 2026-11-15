@@ -1997,6 +1997,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelFamily: "gpt-5.4",
       modelVersion: "high",
       modelReasoningEffort: "high",
+      targetChatId: undefined,
       attachFilePaths: undefined,
     });
   });

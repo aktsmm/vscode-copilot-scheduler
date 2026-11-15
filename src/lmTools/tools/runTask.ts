@@ -21,7 +21,7 @@ interface RunTaskToolInput {
 export type ManualTaskRunResult =
   | {
       ok: true;
-      turnOutcome?: "completed";
+      turnOutcome?: AgentHostTurnOutcome;
       responseText?: AgentHostResponseTextObservation;
     }
   | {
@@ -204,10 +204,14 @@ export function createSchedulerRunTaskTool(
         if (result.reason === "saveFailed") {
           return buildJsonTextResult({
             ...result,
-            executionSemantics: "prompt_dispatched",
+            executionSemantics:
+              result.turnOutcome === "queued"
+                ? "prompt_queued"
+                : "prompt_dispatched",
             retrySafe: false,
-            message:
-              "The prompt was dispatched, but lastRun/nextRun could not be saved. Do not retry automatically; check Chat and scheduler history.",
+            message: result.turnOutcome === "queued"
+              ? "The prompt was queued in the selected Copilot chat, but lastRun/nextRun could not be saved. Do not retry automatically; check Chat and scheduler history."
+              : "The prompt was dispatched, but lastRun/nextRun could not be saved. Do not retry automatically; check Chat and scheduler history.",
           });
         }
         if (result.turnOutcome) {
@@ -242,7 +246,10 @@ export function createSchedulerRunTaskTool(
       return buildJsonTextResult({
         ok: true,
         action: "run",
-        executionSemantics: "prompt_dispatched",
+        executionSemantics:
+          result.turnOutcome === "queued"
+            ? "prompt_queued"
+            : "prompt_dispatched",
         ...(result.turnOutcome ? { turnOutcome: result.turnOutcome } : {}),
         ...(result.responseText ? { responseText: result.responseText } : {}),
         enabledStateChanged: latestTask

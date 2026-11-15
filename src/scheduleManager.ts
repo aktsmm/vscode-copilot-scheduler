@@ -125,7 +125,7 @@ type ManualRunResult =
       reason: ManualRunFailureReason;
       errorMessage?: string;
       userNotified?: boolean;
-      turnOutcome?: Exclude<AgentHostTurnOutcome, "completed">;
+      turnOutcome?: Exclude<AgentHostTurnOutcome, "completed" | "queued">;
       executionInfo?: ManualRunExecutionInfo;
     };
 
@@ -1394,6 +1394,38 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (
+        task.targetChatId !== undefined &&
+        (typeof task.targetChatId !== "string" ||
+          !/^[a-f0-9]{64}$/i.test(task.targetChatId))
+      ) {
+        task.targetChatId = undefined;
+        task.targetChatTitle = undefined;
+        needsSave = true;
+      } else if (task.targetChatId) {
+        const normalizedTargetChatId = task.targetChatId.toLowerCase();
+        if (normalizedTargetChatId !== task.targetChatId) {
+          task.targetChatId = normalizedTargetChatId;
+          needsSave = true;
+        }
+        if (
+          task.targetChatTitle !== undefined &&
+          typeof task.targetChatTitle !== "string"
+        ) {
+          task.targetChatTitle = undefined;
+          needsSave = true;
+        } else if (
+          typeof task.targetChatTitle === "string" &&
+          task.targetChatTitle.length > 500
+        ) {
+          task.targetChatTitle = task.targetChatTitle.slice(0, 500);
+          needsSave = true;
+        }
+      } else if (task.targetChatTitle !== undefined) {
+        task.targetChatTitle = undefined;
+        needsSave = true;
+      }
+
       if (task.attachments !== undefined) {
         const normalizedAttachments = normalizeAttachments(
           task.attachments,
@@ -2071,6 +2103,17 @@ export class ScheduleManager {
         input.chatSession === "new" || input.chatSession === "continue"
           ? input.chatSession
           : undefined,
+      targetChatId:
+        typeof input.targetChatId === "string" &&
+        /^[a-f0-9]{64}$/i.test(input.targetChatId.trim())
+          ? input.targetChatId.trim().toLowerCase()
+          : undefined,
+      targetChatTitle:
+        typeof input.targetChatTitle === "string" &&
+        typeof input.targetChatId === "string" &&
+        /^[a-f0-9]{64}$/i.test(input.targetChatId.trim())
+          ? input.targetChatTitle.trim().slice(0, 500)
+          : undefined,
       jitterSeconds:
         input.jitterSeconds !== undefined
           ? this.clampJitterSeconds(input.jitterSeconds)
@@ -2406,6 +2449,20 @@ export class ScheduleManager {
           ? updates.chatSession
           : undefined;
     }
+    if (updates.targetChatId !== undefined) {
+      const targetChatId =
+        typeof updates.targetChatId === "string"
+          ? updates.targetChatId.trim()
+          : "";
+      task.targetChatId = /^[a-f0-9]{64}$/i.test(targetChatId)
+        ? targetChatId.toLowerCase()
+        : undefined;
+      task.targetChatTitle = task.targetChatId
+        ? typeof updates.targetChatTitle === "string"
+          ? updates.targetChatTitle.trim().slice(0, 500)
+          : undefined
+        : undefined;
+    }
     if (updates.jitterSeconds !== undefined) {
       task.jitterSeconds = this.clampJitterSeconds(updates.jitterSeconds);
     }
@@ -2576,6 +2633,8 @@ export class ScheduleManager {
       useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,
       chatSession: original.chatSession,
+      targetChatId: original.targetChatId,
+      targetChatTitle: original.targetChatTitle,
       jitterSeconds: original.jitterSeconds,
       maxExecutionsPerDay: original.maxExecutionsPerDay,
       allowedTimeStart: original.allowedTimeStart,

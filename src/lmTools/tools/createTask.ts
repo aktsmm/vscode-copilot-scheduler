@@ -33,6 +33,7 @@ interface CreateTaskToolInput {
   modelConfiguration?: ModelConfiguration;
   enabled?: boolean;
   chatSession?: string;
+  targetChatId?: string;
   autoMode?: boolean;
   modelFallback?: boolean;
   jitterSeconds?: number;
@@ -61,6 +62,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
       input.modelConfiguration ?? (input.modelReasoningEffort ? undefined : {}),
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
+    targetChatId: input.targetChatId,
     autoMode: input.autoMode,
     modelFallback: input.modelFallback,
     jitterSeconds: input.jitterSeconds,
@@ -99,6 +101,9 @@ export function createSchedulerCreateTaskTool(
           ? `- modelVendor: ${escapeConfirmationText(input.modelVendor)}`
           : undefined,
         describeAttachmentsForConfirmation(input.attachments),
+        input.targetChatId
+          ? `- existing chat: ${formatConfirmationCode(String(input.targetChatId).slice(0, 12))}… (prompts are queued into that chat)`
+          : undefined,
         input.enabled === false
           ? "- initial state: disabled"
           : "- initial state: enabled",

@@ -895,6 +895,9 @@
   var useCopilotCliInput = document.getElementById("use-copilot-cli");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
+  var targetChatSelect = document.getElementById("target-chat");
+  var targetChatNote = document.getElementById("target-chat-note");
+  var chatRefreshBtn = document.getElementById("chat-refresh-btn");
   var jitterSecondsInput = document.getElementById("jitter-seconds");
   var maxExecutionsPerDayInput = document.getElementById(
     "max-executions-per-day",
@@ -950,6 +953,76 @@
   function updateChatSessionDefaultNote() {
     if (!chatSessionNote) return;
     chatSessionNote.textContent = String(defaultChatSessionNote || "");
+  }
+
+  function setTargetChatSelection(bindingId, title) {
+    if (!targetChatSelect) return;
+    var id = String(bindingId || "");
+    if (!id) {
+      targetChatSelect.value = "";
+      return;
+    }
+    var option = Array.prototype.find.call(
+      targetChatSelect.options,
+      function (candidate) {
+        return candidate.value === id;
+      },
+    );
+    if (!option) {
+      option = document.createElement("option");
+      option.value = id;
+      option.textContent = String(title || id);
+      targetChatSelect.appendChild(option);
+    }
+    targetChatSelect.value = id;
+  }
+
+  function updateTargetChatOptions(chats, error) {
+    if (!targetChatSelect) return;
+    var selectedId = targetChatSelect.value;
+    var selectedLabel = "";
+    Array.prototype.find.call(
+      targetChatSelect.options,
+      function (option) {
+        if (option.value === selectedId) {
+          selectedLabel = option.textContent || "";
+          return true;
+        }
+        return false;
+      },
+    );
+    while (targetChatSelect.options.length > 1) {
+      targetChatSelect.remove(1);
+    }
+    (Array.isArray(chats) ? chats : []).forEach(function (chat) {
+      if (!chat || typeof chat.bindingId !== "string") return;
+      var option = document.createElement("option");
+      option.value = chat.bindingId;
+      var workspaces = Array.isArray(chat.workingDirectoryNames)
+        ? chat.workingDirectoryNames.filter(Boolean).join(", ")
+        : "";
+      option.textContent =
+        String(chat.title || "Untitled chat") +
+        (workspaces ? " — " + workspaces : "");
+      targetChatSelect.appendChild(option);
+    });
+    if (
+      selectedId &&
+      !Array.prototype.some.call(targetChatSelect.options, function (option) {
+        return option.value === selectedId;
+      })
+    ) {
+      var staleOption = document.createElement("option");
+      staleOption.value = selectedId;
+      staleOption.textContent = selectedLabel || selectedId;
+      targetChatSelect.appendChild(staleOption);
+    }
+    targetChatSelect.value = selectedId;
+    if (targetChatNote) {
+      targetChatNote.textContent = String(
+        error || strings.targetChatLoadNote || "",
+      );
+    }
   }
 
   function copyModelConfigurationForForm(value) {
@@ -1017,6 +1090,7 @@
         source.chatSession === "new" || source.chatSession === "continue"
           ? source.chatSession
           : "default",
+      targetChatId: String(source.targetChatId || ""),
       jitterSeconds: boundedNumber(
         source.jitterSeconds != null
           ? source.jitterSeconds
@@ -2289,6 +2363,7 @@
         useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
+        targetChatId: targetChatSelect ? targetChatSelect.value : "",
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
           : 0,
@@ -2444,6 +2519,7 @@
         type: "testPrompt",
         prompt: prompt,
         agent: agent,
+        targetChatId: targetChatSelect ? targetChatSelect.value : "",
         chatSession:
           chatSessionSelect &&
           (chatSessionSelect.value === "new" ||
@@ -2490,6 +2566,15 @@
   if (agentRefreshBtn) {
     agentRefreshBtn.addEventListener("click", function () {
       vscode.postMessage({ type: "refreshAgents" });
+    });
+  }
+
+  if (chatRefreshBtn) {
+    chatRefreshBtn.addEventListener("click", function () {
+      if (targetChatNote) {
+        targetChatNote.textContent = String(strings.targetChatLoading || "");
+      }
+      vscode.postMessage({ type: "refreshAgentHostChats" });
     });
   }
 
@@ -2664,6 +2749,11 @@
       return strings.labelChatSessionNew || "";
     }
 
+    function getTaskTargetChatLabel(task) {
+      if (!task || !task.targetChatId) return "";
+      return String(task.targetChatTitle || strings.labelTargetChat || "");
+    }
+
     function buildSection(title, count, content) {
       return (
         '<section class="task-section">' +
@@ -2749,6 +2839,7 @@
       var taskDailyLimit = Number(task.maxExecutionsPerDay || 0);
       var hasTaskDailyLimit = isFinite(taskDailyLimit) && taskDailyLimit > 0;
       var taskChatSessionLabel = getTaskChatSessionLabel(task);
+      var taskTargetChatLabel = getTaskTargetChatLabel(task);
       var timeStart = task.allowedTimeStart || "";
       var timeEnd = task.allowedTimeEnd || "";
       var timeWindowInfo =
@@ -2830,6 +2921,13 @@
             escapeHtml(strings.labelChatSession || "") +
             ": " +
             escapeHtml(taskChatSessionLabel) +
+            "</span>"
+          : "") +
+        (taskTargetChatLabel
+          ? "<span>" +
+            escapeHtml(strings.labelTargetChat || "") +
+            ": " +
+            escapeHtml(taskTargetChatLabel) +
             "</span>"
           : "") +
         "<span>" +
@@ -3446,6 +3544,7 @@
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
     }
+    if (targetChatSelect) targetChatSelect.value = "";
     var defaultScopeInput = document.querySelector(
       'input[name="scope"][value="' + defaultScope + '"]',
     );
@@ -4044,6 +4143,7 @@
     if (chatSessionSelect) {
       chatSessionSelect.value = task.chatSession || "default";
     }
+    setTargetChatSelection(task.targetChatId, task.targetChatTitle);
     updateChatSessionDefaultNote();
 
     // Switch to edit tab (same form)
@@ -4184,6 +4284,9 @@
               }
             }
           }
+          break;
+        case "updateAgentHostChats":
+          updateTargetChatOptions(message.chats, message.error);
           break;
         case "updateModels":
           {

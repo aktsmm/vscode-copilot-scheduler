@@ -7,8 +7,8 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { randomUUID } from "crypto";
-import { pathToFileURL } from "url";
+import { createHash, randomUUID } from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
 import { PipeWebSocket } from "./minimalWebSocket";
 import type {
   AgentHostResponseTextObservation,
@@ -27,7 +27,10 @@ export class AgentHostError extends Error {
   constructor(
     readonly kind: AgentHostFailureKind,
     message: string,
-    readonly turnOutcome?: Exclude<AgentHostTurnOutcome, "completed">,
+    readonly turnOutcome?: Exclude<
+      AgentHostTurnOutcome,
+      "completed" | "queued"
+    >,
   ) {
     super(message);
     this.name = "AgentHostError";
@@ -418,6 +421,33 @@ export interface AgentHostTurnResult extends AgentHostSessionRef {
   responseText: AgentHostResponseTextObservation;
 }
 
+export interface AgentHostChatInfo {
+  bindingId: string;
+  title: string;
+  sessionUri: string;
+  chatUri: string;
+  provider: string;
+  workingDirectories: string[];
+}
+
+export interface AgentHostQueuedMessageRequest {
+  endpoint: AgentHostEndpoint;
+  targetChatId: string;
+  text: string;
+  taskId?: string;
+  expectedWorkspacePath?: string;
+  modelId?: string;
+  modelOptions?: Record<string, string | number | undefined>;
+  agentUri?: string;
+  attachments?: AgentHostAttachment[];
+  dispatchGuard?: (dispatch: () => void) => Promise<void>;
+}
+
+export interface AgentHostQueuedMessageResult extends AgentHostSessionRef {
+  messageId: string;
+  requestedModel?: string;
+}
+
 interface SnapshotResult {
   snapshot?: { state?: Record<string, unknown> };
   state?: Record<string, unknown>;
@@ -425,6 +455,469 @@ interface SnapshotResult {
 
 function snapshotState(result: SnapshotResult): Record<string, unknown> {
   return result.snapshot?.state ?? result.state ?? (result as Record<string, unknown>);
+}
+
+export function toAgentHostChatBindingId(chatUri: string): string {
+  return createHash("sha256").update(chatUri).digest("hex");
+}
+
+function normalizeDirectory(directory: string): string {
+  const resolved = path.resolve(directory).replace(/[\\/]+$/u, "");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function toLocalDirectories(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const directories = new Set<string>();
+  for (const uri of value) {
+    if (typeof uri !== "string") continue;
+    try {
+      const parsed = new URL(uri);
+      if (parsed.protocol === "file:") {
+        directories.add(path.resolve(fileURLToPath(parsed)));
+      }
+    } catch {
+      // Ignore unsupported or malformed workspace URIs.
+    }
+  }
+  return [...directories];
+}
+
+function isArchived(status: unknown): boolean {
+  return typeof status === "number" && (status & (1 << 6)) !== 0;
+}
+
+async function initializeAgentHost(
+  connection: AgentHostConnection,
+): Promise<Array<Record<string, unknown>>> {
+  const init = await connection.request<{
+    snapshots?: Array<{ state?: { agents?: Array<Record<string, unknown>> } }>;
+  }>("initialize", {
+    channel: "ahp-root://",
+    clientId: `copilot-scheduler-${randomUUID()}`,
+    protocolVersions: PROTOCOL_VERSIONS,
+    initialSubscriptions: ["ahp-root://"],
+    clientInfo: { name: "copilot-scheduler", version: "1" },
+  });
+  return init.snapshots?.[0]?.state?.agents ?? [];
+}
+
+async function listSessionSummaries(
+  connection: AgentHostConnection,
+): Promise<Array<Record<string, unknown>>> {
+  const sessions: Array<Record<string, unknown>> = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 1000; page++) {
+    const result = await connection.request<{
+      items?: Array<Record<string, unknown>>;
+      nextCursor?: unknown;
+    }>("listSessions", {
+      channel: "ahp-root://",
+      limit: 100,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (!Array.isArray(result.items)) {
+      throw new AgentHostError(
+        "unsupported",
+        "The Agent Host returned an invalid session catalog.",
+      );
+    }
+    sessions.push(...result.items);
+    if (typeof result.nextCursor !== "string" || !result.nextCursor) {
+      return sessions;
+    }
+    if (cursors.has(result.nextCursor)) {
+      throw new AgentHostError(
+        "unsupported",
+        "The Agent Host returned a repeated session cursor.",
+      );
+    }
+    cursors.add(result.nextCursor);
+    cursor = result.nextCursor;
+  }
+  throw new AgentHostError(
+    "unsupported",
+    "The Agent Host session catalog exceeded the supported page limit.",
+  );
+}
+
+function readChatCatalog(
+  sessions: readonly Record<string, unknown>[],
+): AgentHostChatInfo[] {
+  const chats = new Map<string, AgentHostChatInfo>();
+  for (const session of sessions) {
+    if (
+      typeof session.resource !== "string" ||
+      typeof session.provider !== "string" ||
+      session.provider !== PROVIDER ||
+      !Array.isArray(session.chats)
+    ) {
+      continue;
+    }
+    const sessionUri = session.resource;
+    const sessionDirectories = session.workingDirectories;
+    for (const item of session.chats) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const chat = item as Record<string, unknown>;
+      if (
+        typeof chat.resource !== "string" ||
+        chat.interactivity === "read-only" ||
+        chat.interactivity === "hidden" ||
+        isArchived(chat.status)
+      ) {
+        continue;
+      }
+      const provider =
+        typeof chat.provider === "string" ? chat.provider : session.provider;
+      if (provider !== PROVIDER) continue;
+      const workingDirectories = toLocalDirectories(
+        chat.workingDirectories ?? sessionDirectories,
+      );
+      if (workingDirectories.length === 0) continue;
+      const chatUri = chat.resource;
+      chats.set(chatUri, {
+        bindingId: toAgentHostChatBindingId(chatUri),
+        title:
+          typeof chat.title === "string" && chat.title.trim()
+            ? chat.title.trim().slice(0, 500)
+            : "Untitled chat",
+        sessionUri,
+        chatUri,
+        provider,
+        workingDirectories,
+      });
+    }
+  }
+  return [...chats.values()];
+}
+
+/** Lists selectable Copilot chats without reading their conversation content. */
+export async function listAgentHostChats(
+  endpoint: AgentHostEndpoint,
+): Promise<AgentHostChatInfo[]> {
+  const connection = await AgentHostConnection.open(endpoint);
+  try {
+    await initializeAgentHost(connection);
+    return readChatCatalog(await listSessionSummaries(connection));
+  } finally {
+    connection.close();
+  }
+}
+
+export async function resolveAgentHostChatBinding(
+  endpoint: AgentHostEndpoint,
+  targetChatId: string,
+  expectedWorkspacePath?: string,
+): Promise<AgentHostChatInfo> {
+  const connection = await AgentHostConnection.open(endpoint);
+  try {
+    await initializeAgentHost(connection);
+    return await resolveAgentHostChat(
+      connection,
+      targetChatId,
+      expectedWorkspacePath,
+    );
+  } finally {
+    connection.close();
+  }
+}
+
+function validateTargetWorkspace(
+  chat: AgentHostChatInfo,
+  expectedWorkspacePath: string | undefined,
+): void {
+  if (!expectedWorkspacePath) return;
+  const expected = normalizeDirectory(expectedWorkspacePath);
+  if (
+    chat.workingDirectories.length !== 1 ||
+    normalizeDirectory(chat.workingDirectories[0]) !== expected
+  ) {
+    throw new AgentHostError(
+      "unsupported",
+      "The selected chat does not belong exclusively to the task workspace.",
+    );
+  }
+}
+
+async function resolveAgentHostChat(
+  connection: AgentHostConnection,
+  targetChatId: string,
+  expectedWorkspacePath: string | undefined,
+): Promise<AgentHostChatInfo> {
+  const chats = readChatCatalog(await listSessionSummaries(connection));
+  const normalizedId = targetChatId.trim().toLowerCase();
+  const matches = chats.filter((chat) => chat.bindingId === normalizedId);
+  if (matches.length !== 1) {
+    throw new AgentHostError(
+      "unsupported",
+      "The selected Copilot chat is no longer available.",
+    );
+  }
+  const selected = matches[0];
+  validateTargetWorkspace(selected, expectedWorkspacePath);
+
+  const sessionState = snapshotState(
+    await connection.request<SnapshotResult>("subscribe", {
+      channel: selected.sessionUri,
+    }),
+  );
+  const sessionChats = Array.isArray(sessionState.chats)
+    ? (sessionState.chats as Array<Record<string, unknown>>)
+    : [];
+  const currentSummary = sessionChats.find(
+    (chat) => chat?.resource === selected.chatUri,
+  );
+  if (
+    sessionState.lifecycle !== "ready" ||
+    sessionState.provider !== PROVIDER ||
+    !currentSummary ||
+    currentSummary.interactivity === "read-only" ||
+    currentSummary.interactivity === "hidden" ||
+    isArchived(currentSummary.status)
+  ) {
+    throw new AgentHostError(
+      "unsupported",
+      "The selected Copilot chat is no longer available.",
+    );
+  }
+
+  const chatState = snapshotState(
+    await connection.request<SnapshotResult>("subscribe", {
+      channel: selected.chatUri,
+    }),
+  );
+  const provider =
+    typeof chatState.provider === "string"
+      ? chatState.provider
+      : selected.provider;
+  const workingDirectories = toLocalDirectories(
+    chatState.workingDirectories ?? sessionState.workingDirectories,
+  );
+  const current: AgentHostChatInfo = {
+    ...selected,
+    title:
+      typeof chatState.title === "string" && chatState.title.trim()
+        ? chatState.title.trim().slice(0, 500)
+        : selected.title,
+    provider,
+    workingDirectories,
+  };
+  if (
+    chatState.resource !== selected.chatUri ||
+    provider !== PROVIDER ||
+    chatState.interactivity === "read-only" ||
+    chatState.interactivity === "hidden" ||
+    isArchived(chatState.status)
+  ) {
+    throw new AgentHostError(
+      "unsupported",
+      "The selected Copilot chat is no longer available.",
+    );
+  }
+  validateTargetWorkspace(current, expectedWorkspacePath);
+  return current;
+}
+
+/** Queues one task-specific message in an existing chat; repeated task runs upsert the same pending ID. */
+export async function queueAgentHostMessage(
+  request: AgentHostQueuedMessageRequest,
+): Promise<AgentHostQueuedMessageResult> {
+  const connection = await AgentHostConnection.open(request.endpoint);
+  try {
+    const agents = await initializeAgentHost(connection);
+    const agent = agents.find((candidate) => candidate.provider === PROVIDER) as
+      | { models?: AgentHostModelInfo[] }
+      | undefined;
+    if (!agent) {
+      throw new AgentHostError(
+        "unsupported",
+        "The Agent Host has no Copilot agent.",
+      );
+    }
+    let model: { id: string; config?: Record<string, string | number> } | undefined;
+    if (request.modelId) {
+      const info = (agent.models ?? []).find((item) => item.id === request.modelId);
+      if (!info) {
+        throw new AgentHostError(
+          "unsupported",
+          "The Agent Host does not offer the requested model.",
+        );
+      }
+      const config = mapModelConfiguration(info, request.modelOptions ?? {});
+      model = {
+        id: info.id,
+        ...(Object.keys(config).length > 0 ? { config } : {}),
+      };
+    } else if (
+      Object.values(request.modelOptions ?? {}).some(
+        (value) => value !== undefined && value !== "",
+      )
+    ) {
+      throw new AgentHostError(
+        "unsupported",
+        "Model options need a model to apply to.",
+      );
+    }
+    const chat = await resolveAgentHostChat(
+      connection,
+      request.targetChatId,
+      request.expectedWorkspacePath,
+    );
+    const messageId = `copilot-scheduler-${createHash("sha256")
+      .update(request.taskId || randomUUID())
+      .digest("hex")}`;
+    const message = {
+      text: request.text,
+      origin: { kind: "user" },
+      ...(model ? { model } : {}),
+      ...(request.agentUri ? { agent: { uri: request.agentUri } } : {}),
+      ...(request.attachments && request.attachments.length > 0
+        ? {
+            attachments: request.attachments.map((item) => ({
+              type: "resource",
+              label: item.label,
+              uri: item.uri,
+            })),
+          }
+        : {}),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let dispatchStarted = false;
+      let timedOut = false;
+      let guardPending = !!request.dispatchGuard;
+      let pendingOutcome: (() => void) | undefined;
+      const finish = (outcome: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stopListening();
+        stopWatchingClose();
+        outcome();
+      };
+      const finishAfterGuard = (outcome: () => void) => {
+        if (settled) return;
+        if (guardPending) {
+          pendingOutcome ??= outcome;
+        } else {
+          finish(outcome);
+        }
+      };
+      const timer = setTimeout(
+        () => {
+          timedOut = true;
+          finish(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                "The Agent Host did not confirm the queued message.",
+                dispatchStarted ? "unknown" : undefined,
+              ),
+            ),
+          );
+        },
+        REQUEST_TIMEOUT_MS,
+      );
+      const stopListening = connection.onAction((channel, action, envelope) => {
+        if (
+          channel !== chat.chatUri ||
+          action.type !== "chat/pendingMessageSet" ||
+          action.id !== messageId
+        ) {
+          return;
+        }
+        if (envelope.rejected) {
+          finishAfterGuard(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                "The Agent Host rejected the queued message.",
+                "unknown",
+              ),
+            ),
+          );
+        } else if (action.kind === "queued") {
+          finishAfterGuard(resolve);
+        }
+      });
+      const stopWatchingClose = connection.onClose(() =>
+        finishAfterGuard(() =>
+          reject(
+            new AgentHostError(
+              "failed",
+              "The Agent Host connection closed before confirming the queued message.",
+              dispatchStarted ? "unknown" : undefined,
+            ),
+          ),
+        ),
+      );
+      const dispatch = () => {
+        if (settled || timedOut || dispatchStarted) return;
+        dispatchStarted = true;
+        void connection
+          .dispatch(chat.chatUri, {
+            type: "chat/pendingMessageSet",
+            kind: "queued",
+            id: messageId,
+            message,
+          })
+          .catch(() =>
+            finishAfterGuard(() =>
+              reject(
+                new AgentHostError(
+                  "failed",
+                  "The Agent Host did not confirm the queued message.",
+                  "unknown",
+                ),
+              ),
+            ),
+          );
+      };
+      if (request.dispatchGuard) {
+        void request.dispatchGuard(dispatch).then(
+          () => {
+            guardPending = false;
+            if (pendingOutcome) finish(pendingOutcome);
+            else if (!dispatchStarted) {
+              finish(() =>
+                reject(
+                  new AgentHostError(
+                    "failed",
+                    "The task reservation did not allow a queued message.",
+                  ),
+                ),
+              );
+            }
+          },
+          (error: unknown) =>
+            finish(() =>
+              reject(
+                dispatchStarted
+                  ? new AgentHostError(
+                      "failed",
+                      "The queued message outcome is unknown.",
+                      "unknown",
+                    )
+                  : error,
+              ),
+            ),
+        );
+      } else {
+        dispatch();
+      }
+    });
+
+    return {
+      sessionUri: chat.sessionUri,
+      chatUri: chat.chatUri,
+      messageId,
+      ...(model ? { requestedModel: model.id } : {}),
+    };
+  } finally {
+    connection.close();
+  }
 }
 
 /** Starts one turn and waits for the host to finish it. */
@@ -461,16 +954,7 @@ async function prepareTurn(
   ref: AgentHostSessionRef;
   model?: { id: string; config?: Record<string, string | number> };
 }> {
-  const init = await connection.request<{
-    snapshots?: Array<{ state?: { agents?: Array<Record<string, unknown>> } }>;
-  }>("initialize", {
-    channel: "ahp-root://",
-    clientId: `copilot-scheduler-${randomUUID()}`,
-    protocolVersions: PROTOCOL_VERSIONS,
-    initialSubscriptions: ["ahp-root://"],
-    clientInfo: { name: "copilot-scheduler", version: "1" },
-  });
-  const agents = init.snapshots?.[0]?.state?.agents ?? [];
+  const agents = await initializeAgentHost(connection);
   const agent = agents.find((candidate) => candidate.provider === PROVIDER) as
     | { models?: AgentHostModelInfo[] }
     | undefined;

@@ -74,6 +74,11 @@ export type ModelCatalogLoader = () => Promise<{
   models: readonly ModelInfo[];
 }>;
 
+export type TargetChatBindingResolver = (
+  bindingId: string,
+  expectedWorkspacePath?: string,
+) => Promise<{ title: string }>;
+
 export interface LmToolMutationClient {
   createTask(input: CreateTaskInput): Promise<MutationResult>;
   updateTask(
@@ -88,6 +93,7 @@ type ClientDependencies = {
   scheduleManager: ScheduleManager;
   /** Optional so existing callers and tests keep working without a catalog. */
   resolveModelSelection?: ModelSelectionResolver;
+  resolveTargetChatBinding?: TargetChatBindingResolver;
 };
 
 function toMessage(error: unknown): string {
@@ -163,6 +169,34 @@ function hasModelFieldsBesidesModel(fields: ModelSelectionFields): boolean {
     const value = fields[key];
     return typeof value === "string" && value.trim().length > 0;
   });
+}
+
+async function resolveTargetChatBinding(
+  bindingId: unknown,
+  expectedWorkspacePath: string | undefined,
+  resolver: TargetChatBindingResolver | undefined,
+): Promise<Pick<CreateTaskInput, "targetChatId" | "targetChatTitle">> {
+  if (bindingId === undefined || bindingId === null) {
+    return { targetChatId: "", targetChatTitle: "" };
+  }
+  if (typeof bindingId !== "string") {
+    throw new Error("targetChatId must be an opaque chat binding id.");
+  }
+  const normalizedId = bindingId.trim().toLowerCase();
+  if (!normalizedId) {
+    return { targetChatId: "", targetChatTitle: "" };
+  }
+  if (!/^[a-f0-9]{64}$/i.test(normalizedId)) {
+    throw new Error("targetChatId must be an opaque chat binding id.");
+  }
+  if (!resolver) {
+    throw new Error("Existing-chat delivery is unavailable in this context.");
+  }
+  const chat = await resolver(normalizedId, expectedWorkspacePath);
+  return {
+    targetChatId: normalizedId,
+    targetChatTitle: chat.title,
+  };
 }
 
 function mergeModelSelection(
@@ -504,11 +538,27 @@ export function createModelSelectionResolver(
 export function createLmToolMutationClient(
   deps: ClientDependencies,
 ): LmToolMutationClient {
-  const { scheduleManager, resolveModelSelection } = deps;
+  const {
+    scheduleManager,
+    resolveModelSelection,
+    resolveTargetChatBinding: resolveTargetChat,
+  } = deps;
 
   return {
     async createTask(input) {
       try {
+        const targetBinding = await resolveTargetChatBinding(
+          input.targetChatId,
+          input.scope === "workspace"
+            ? scheduleManager.getPreferredWorkspaceRootPath()
+            : undefined,
+          resolveTargetChat,
+        );
+        if (targetBinding.targetChatId && input.useCopilotCli === true) {
+          throw new Error(
+            "A task cannot use Copilot CLI and an existing chat binding at the same time.",
+          );
+        }
         if (input.enabled && !scheduleManager.isDisclaimerAccepted()) {
           return {
             ok: false,
@@ -541,8 +591,8 @@ export function createLmToolMutationClient(
         );
         const task = await scheduleManager.createTask(
           modelOutcome.selection
-            ? { ...input, ...modelOutcome.selection }
-            : input,
+            ? { ...input, ...targetBinding, ...modelOutcome.selection }
+            : { ...input, ...targetBinding },
         );
         return withWarnings(task, [warning, ...modelOutcome.warnings]);
       } catch (error) {
@@ -574,6 +624,37 @@ export function createLmToolMutationClient(
       }
 
       try {
+        const targetChatIdWasProvided = Object.prototype.hasOwnProperty.call(
+          updates,
+          "targetChatId",
+        );
+        const shouldResolveTarget =
+          targetChatIdWasProvided ||
+          (updates.scope !== undefined && !!existing.targetChatId);
+        const targetBinding = shouldResolveTarget
+          ? await resolveTargetChatBinding(
+              targetChatIdWasProvided
+                ? updates.targetChatId
+                : existing.targetChatId,
+              (updates.scope ?? existing.scope) === "workspace"
+                ? updates.scope === "workspace"
+                  ? scheduleManager.getPreferredWorkspaceRootPath()
+                  : existing.workspacePath
+                : undefined,
+              resolveTargetChat,
+            )
+          : {};
+        const effectiveTargetChatId = shouldResolveTarget
+          ? targetBinding.targetChatId
+          : existing.targetChatId;
+        if (
+          effectiveTargetChatId &&
+          (updates.useCopilotCli ?? existing.useCopilotCli) === true
+        ) {
+          throw new Error(
+            "A task cannot use Copilot CLI and an existing chat binding at the same time.",
+          );
+        }
         if (
           !hasSystemMessageDeclaration() &&
           updates.modelConfiguration &&
@@ -622,8 +703,8 @@ export function createLmToolMutationClient(
         const updated = await scheduleManager.updateTask(
           id,
           modelOutcome.selection
-            ? { ...updates, ...modelOutcome.selection }
-            : updates,
+            ? { ...updates, ...targetBinding, ...modelOutcome.selection }
+            : { ...updates, ...targetBinding },
         );
         if (!updated) {
           return {

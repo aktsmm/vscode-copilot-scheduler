@@ -3,13 +3,17 @@ import * as fs from "fs";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   AgentHostError,
   findAgentHostEndpoint,
+  listAgentHostChats,
   mapModelConfiguration,
+  queueAgentHostMessage,
   resolveUserDataDir,
   runAgentHostTurn,
+  toAgentHostChatBindingId,
   type AgentHostEndpoint,
   type AgentHostTurnRequest,
 } from "../../agentHostClient";
@@ -48,6 +52,12 @@ async function startFakeHost(
     cancel?: (send: (action: Record<string, unknown>) => void) => void;
     acceptStart?: boolean;
     missingSessions?: boolean;
+    sessionPages?: Array<{
+      items: Array<Record<string, unknown>>;
+      nextCursor?: string;
+    }>;
+    queueAck?: boolean;
+    queueRejected?: boolean;
   } = {},
 ): Promise<FakeHost> {
   const socketPath =
@@ -103,6 +113,13 @@ async function startFakeHost(
         case "createSession":
           reply(null);
           break;
+        case "listSessions": {
+          const cursor = message.params.cursor;
+          const pageIndex = cursor === "page-2" ? 1 : 0;
+          const page = behaviour.sessionPages?.[pageIndex] ?? { items: [] };
+          reply(page);
+          break;
+        }
         case "subscribe":
           if (
             behaviour.missingSessions &&
@@ -116,13 +133,59 @@ async function startFakeHost(
               }),
             );
           } else {
-            reply({ snapshot: { state: { defaultChat: "ahp-chat:/chat-1" } } });
+            const sessions =
+              behaviour.sessionPages?.flatMap((page) => page.items) ?? [];
+            const channel = String(message.params.channel);
+            const session = sessions.find((item) => item.resource === channel);
+            const chat = sessions
+              .flatMap((item) =>
+                Array.isArray(item.chats)
+                  ? (item.chats as Array<Record<string, unknown>>)
+                  : [],
+              )
+              .find((item) => item.resource === channel);
+            if (session) {
+              reply({
+                snapshot: {
+                  state: {
+                    lifecycle: "ready",
+                    provider: session.provider,
+                    chats: session.chats,
+                    workingDirectories: session.workingDirectories,
+                  },
+                },
+              });
+            } else if (chat) {
+              const parent = sessions.find((item) =>
+                Array.isArray(item.chats) &&
+                (item.chats as Array<Record<string, unknown>>).some(
+                  (entry) => entry.resource === channel,
+                ),
+              );
+              reply({
+                snapshot: {
+                  state: {
+                    resource: chat.resource,
+                    provider: chat.provider,
+                    title: chat.title,
+                    workingDirectories:
+                      chat.workingDirectories ?? parent?.workingDirectories,
+                  },
+                },
+              });
+            } else {
+              reply({ snapshot: { state: { defaultChat: "ahp-chat:/chat-1" } } });
+            }
           }
           break;
         case "dispatchAction": {
           reply(null);
           const channel = message.params.channel as string;
-          const action = message.params.action as { type: string; turnId?: string };
+          const action = message.params.action as {
+            type: string;
+            turnId?: string;
+            id?: string;
+          };
           if (action.type === "chat/turnStarted") {
             const send = (next: Record<string, unknown>, rejectionReason?: string) =>
               notify(channel, { turnId: action.turnId, ...next }, rejectionReason);
@@ -142,6 +205,18 @@ async function startFakeHost(
             behaviour.cancel((next) =>
               notify(channel, { turnId: action.turnId, ...next }),
             );
+          } else if (action.type === "chat/pendingMessageSet") {
+            if (behaviour.queueAck !== false) {
+              notify(
+                channel,
+                {
+                  type: "chat/pendingMessageSet",
+                  id: action.id,
+                  kind: "queued",
+                },
+                behaviour.queueRejected ? "queue rejected" : undefined,
+              );
+            }
           }
           break;
         }
@@ -184,6 +259,164 @@ suite("Agent Host client", () => {
 
   teardown(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("lists Copilot chats across pages without exposing chat content", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [
+        {
+          resource: chatUri,
+          title: "Daily review",
+          interactivity: "interactive",
+        },
+      ],
+    };
+    const host = await startFakeHost(tmp, {
+      sessionPages: [
+        { items: [session], nextCursor: "page-2" },
+        {
+          items: [
+            {
+              resource: "ahp-other:/session",
+              provider: "other",
+              chats: [],
+            },
+            {
+              resource: "ahp-copilotcli:/archived-session",
+              provider: "copilotcli",
+              workingDirectories: [tmp],
+              chats: [
+                {
+                  resource: "ahp-copilotcli:/archived-chat",
+                  title: "Archived",
+                  status: 1 << 6,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    try {
+      const chats = await listAgentHostChats(host.endpoint);
+      assert.deepStrictEqual(chats, [
+        {
+          bindingId: toAgentHostChatBindingId(chatUri),
+          title: "Daily review",
+          sessionUri: session.resource,
+          chatUri,
+          provider: "copilotcli",
+          workingDirectories: [tmp],
+        },
+      ]);
+      assert.strictEqual(host.calls.filter((call) => call.method === "listSessions").length, 2);
+      assert.strictEqual(
+        JSON.stringify(chats).includes("conversation"),
+        false,
+      );
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("queues a stable per-task message and refuses a workspace mismatch", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [
+        {
+          resource: chatUri,
+          title: "Daily review",
+          interactivity: "interactive",
+        },
+      ],
+    };
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{ items: [session] }],
+    });
+    try {
+      const request = {
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri).toUpperCase(),
+        expectedWorkspacePath: tmp,
+        taskId: "stable-task-id",
+        text: "Review today's changes",
+      };
+      const first = await queueAgentHostMessage(request);
+      const second = await queueAgentHostMessage(request);
+      assert.strictEqual(first.messageId, second.messageId);
+      assert.match(first.messageId, /^copilot-scheduler-[a-f0-9]{64}$/);
+      const queued = host.calls.filter((call) => {
+        if (call.method !== "dispatchAction") return false;
+        const action = call.params.action as Record<string, unknown> | undefined;
+        return action?.type === "chat/pendingMessageSet";
+      });
+      assert.strictEqual(queued.length, 2);
+      const firstAction = queued[0].params.action as Record<string, unknown>;
+      assert.strictEqual(firstAction.kind, "queued");
+      assert.strictEqual(firstAction.id, first.messageId);
+
+      await assert.rejects(
+        queueAgentHostMessage({
+          ...request,
+          expectedWorkspacePath: path.join(tmp, "another-workspace"),
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError && error.kind === "unsupported",
+      );
+      assert.strictEqual(
+        host.calls.filter((call) => {
+          if (call.method !== "dispatchAction") return false;
+          const action = call.params.action as Record<string, unknown> | undefined;
+          return action?.type === "chat/pendingMessageSet";
+        }).length,
+        2,
+      );
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("reports an unconfirmed queued dispatch as unknown", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [
+        {
+          resource: chatUri,
+          title: "Daily review",
+          interactivity: "interactive",
+        },
+      ],
+    };
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{ items: [session] }],
+      queueRejected: true,
+    });
+    try {
+      await assert.rejects(
+        queueAgentHostMessage({
+          endpoint: host.endpoint,
+          targetChatId: toAgentHostChatBindingId(chatUri),
+          taskId: "stable-task-id",
+          text: "Review today's changes",
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+    } finally {
+      await host.close();
+    }
   });
 
   test("a dispatch guard can allow or block the Agent Host turn", async () => {

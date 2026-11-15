@@ -4,6 +4,7 @@ import type { ScheduleManager } from "../scheduleManager";
 import {
   createLmToolMutationClient,
   type ModelSelectionResolver,
+  type TargetChatBindingResolver,
 } from "../taskMutationService";
 import { createSchedulerCreateTaskTool } from "./tools/createTask";
 import { createSchedulerDeleteTaskTool } from "./tools/deleteTask";
@@ -25,6 +26,7 @@ import { createSchedulerUpdateTaskTool } from "./tools/updateTask";
 export interface LmToolsRegistrationOptions {
   catalogProvider?: SchedulerCatalogProvider;
   resolveModelSelection?: ModelSelectionResolver;
+  resolveTargetChatBinding?: TargetChatBindingResolver;
   runTask?: ManualTaskRunner;
 }
 
@@ -46,6 +48,7 @@ export function registerLmTools(
   const mutationClient = createLmToolMutationClient({
     scheduleManager,
     resolveModelSelection: options.resolveModelSelection,
+    resolveTargetChatBinding: options.resolveTargetChatBinding,
   });
 
   const disposables: vscode.Disposable[] = [
