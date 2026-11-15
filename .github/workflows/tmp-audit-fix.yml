@@ -1,0 +1,22 @@
+name: Temp audit fix
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit fix --registry=https://registry.npmjs.org || true
+      - run: npm audit --registry=https://registry.npmjs.org || true
+      - run: node scripts/verify-package-lock-registry.js
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(deps): apply npm audit fix" || echo none
+          git push
