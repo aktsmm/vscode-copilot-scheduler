@@ -1,5 +1,7 @@
 name: Temp audit fix
-on:`n  push:`n    branches: [deps/audit-fix]
+on:
+  push:
+    branches: [deps/audit-fix]
 permissions:
   contents: write
 jobs:
