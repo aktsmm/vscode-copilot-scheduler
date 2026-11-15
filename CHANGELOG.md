@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-11-16
+
+### Changed
+
+- Updated development dependencies (vsce, glob, and overrides for minimatch and serialize-javascript) to clear the npm audit findings that blocked the 1.10.0 publish. No runtime change; 1.10.0 was tagged but never published, so its changes ship in this version.
+
 ## [1.10.0] - 2026-11-16
 
 Tasks now run through the Agent Host by default, so the model, reasoning effort, context size, custom agent and attachments set on a task are applied, and the model that really ran is recorded. The older chat route remains available.
