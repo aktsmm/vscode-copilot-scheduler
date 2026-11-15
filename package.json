@@ -1111,6 +1111,9 @@
   },
   "overrides": {
     "serialize-javascript": "7.1.4",
+    "@vscode/vsce": { "minimatch": "11.0.5" },
+    "@typescript-eslint/typescript-estree": { "minimatch": "11.0.5" },
+    "mocha": { "minimatch": "11.0.5", "glob": "14.0.4" },
     "diff": "9.0.0"
   }
 }
