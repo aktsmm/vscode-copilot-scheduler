@@ -51,6 +51,7 @@ import {
   resolveUserDataDir,
   runAgentHostTurn,
   toFileUri,
+  WORKSPACE_FOLDER_REQUIRED_DETAIL,
   type AgentHostChatInfo,
   type AgentHostModelInfo,
   type AgentHostSessionRef,
@@ -1099,7 +1100,7 @@ export class CopilotExecutor {
       : workspaceFolders.find((candidate) => isDirectory(candidate));
     const workspaceModeActive = !!options?.agentHostWorkspaceMode && !targetChatId;
     if (workspaceModeActive && (!cwd || !path.isAbsolute(cwd))) {
-      return decline("the task needs one unambiguous local execution folder");
+      return decline(WORKSPACE_FOLDER_REQUIRED_DETAIL);
     }
 
     const configuration = options?.modelConfiguration ?? {};
@@ -1121,7 +1122,7 @@ export class CopilotExecutor {
       ambiguousWorkspaceMode &&
       !(chatSession === "continue" && CopilotExecutor.agentHostSessions.has(sessionKey))
     ) {
-      return decline("the task needs one unambiguous local execution folder");
+      return decline(WORKSPACE_FOLDER_REQUIRED_DETAIL);
     }
     const run = () =>
       runAgentHostTurn({

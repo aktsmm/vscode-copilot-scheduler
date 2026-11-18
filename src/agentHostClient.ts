@@ -55,6 +55,10 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const CANCEL_TIMEOUT_MS = 3_000;
 
+/** Shown in the run history when an explicit session location has no single local folder to apply to. */
+export const WORKSPACE_FOLDER_REQUIRED_DETAIL =
+  "an explicit session location needs exactly one local folder: use a workspace task, or open a single local folder";
+
 /** VS Code keeps `<userData>/User/globalStorage/<extension id>` for each extension. */
 export function resolveUserDataDir(globalStoragePath: string): string {
   return path.resolve(globalStoragePath, "..", "..", "..");
@@ -1195,7 +1199,7 @@ async function openChat(
   }
 
   if (request.allowNewSession === false) {
-    throw new AgentHostError("workspaceMode", "The task needs one unambiguous local execution folder for a new session.");
+    throw new AgentHostError("workspaceMode", WORKSPACE_FOLDER_REQUIRED_DETAIL);
   }
 
   if (request.workspaceMode) {

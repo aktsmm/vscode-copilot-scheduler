@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Choose the existing folder or a new Git worktree for new Agent Host sessions per task, through the task form or Chat tools. Unset tasks keep the existing Host default.
-- Validate the requested isolation against the Host configuration and the created session before dispatch. Unsupported or ignored choices block the run without falling back to another chat.
+- Validate the requested isolation against the Host configuration and the created session before dispatch. Unsupported or ignored choices block the run without falling back to another chat. A global task or test prompt needs exactly one local folder in the window; otherwise the history says what to change.
 - Preserve the original location when continuing an existing session, and distinguish confirmed new-session configuration from a creation preference that does not apply to a resumed session.
 
 ### Notes
