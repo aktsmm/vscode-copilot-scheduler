@@ -327,7 +327,7 @@ suite("Configured Model Provider", () => {
     }
   });
 
-  test("effective proposal permissions control System forwarding independently of declarations", async () => {
+  test("effective proposal permissions control System response and token forwarding", async () => {
     const originalExtension = vscode.extensions.getExtension;
     const token = new vscode.CancellationTokenSource();
     try {
@@ -344,6 +344,7 @@ suite("Configured Model Provider", () => {
         assert.strictEqual(hasSystemMessageDeclaration(), true);
         assert.strictEqual(supportsSystemMessageForwarding(), enabled);
         let calls = 0;
+        let tokenCounts = 0;
         const source = {
           id: model.id,
           vendor: model.vendor,
@@ -353,6 +354,14 @@ suite("Configured Model Provider", () => {
             assert.strictEqual(Number(messages[0].role), 3);
             return { stream: (async function* () {})() };
           },
+          countTokens: async (message: string | vscode.LanguageModelChatMessage) => {
+            tokenCounts++;
+            assert.notStrictEqual(typeof message, "string");
+            if (typeof message !== "string") {
+              assert.strictEqual(Number(message.role), 3);
+            }
+            return 23;
+          },
         } as unknown as vscode.LanguageModelChat;
         const provider = new ConfiguredModelProvider(
           async () => [source],
@@ -360,23 +369,30 @@ suite("Configured Model Provider", () => {
         );
         try {
           const binding = provider.bind(model, { mode: "normal:low" });
+          const systemMessage: vscode.LanguageModelChatRequestMessage = {
+            role: 3 as vscode.LanguageModelChatMessageRole,
+            name: undefined,
+            content: [new vscode.LanguageModelTextPart("synthetic")],
+          };
           const request = () =>
             provider.provideLanguageModelChatResponse(
               binding,
-              [
-                {
-                  role: 3,
-                  name: undefined,
-                  content: [new vscode.LanguageModelTextPart("synthetic")],
-                },
-              ] as never,
+              [systemMessage],
               { toolMode: vscode.LanguageModelChatToolMode.Auto },
               { report() {} },
               token.token,
             );
-          if (enabled) await request();
-          else await assert.rejects(request, vscode.LanguageModelError);
+          const count = () =>
+            provider.provideTokenCount(binding, systemMessage, token.token);
+          if (enabled) {
+            await request();
+            assert.strictEqual(await count(), 23);
+          } else {
+            await assert.rejects(request, vscode.LanguageModelError);
+            await assert.rejects(count, vscode.LanguageModelError);
+          }
           assert.strictEqual(calls, enabled ? 1 : 0);
+          assert.strictEqual(tokenCounts, enabled ? 1 : 0);
         } finally {
           provider.dispose();
         }

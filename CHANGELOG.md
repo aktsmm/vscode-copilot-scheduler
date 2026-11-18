@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show queued messages as queued, rather than dispatched, in the execution history list.
 - Clarify in the task form and Chat tools that Host catalog membership does not prove a model/ID match.
 - Prevent duplicate Agent Host turn dispatch and fail promptly if a dispatch guard returns without sending.
+- Confirm queued messages only from the matching Agent Host dispatch, ignoring stale or unrelated acknowledgements.
 
 ## [1.9.7] - 2026-11-16
 
