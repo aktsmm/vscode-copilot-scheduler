@@ -10,6 +10,8 @@ import { withTaskStoreLock } from "./task-store-lock";
 import type {
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
+  AgentHostWorkspaceMode,
+  AgentHostWorkspaceApplication,
   ModelExecutionObservation,
 } from "./types";
 
@@ -65,6 +67,8 @@ export type ExecutionHistoryEntry = {
   turnOutcome?: AgentHostTurnOutcome;
   /** Whether non-whitespace assistant text was observed during a completed turn. */
   responseText?: AgentHostResponseTextObservation;
+  workspaceMode?: AgentHostWorkspaceMode;
+  workspaceModeApplication?: AgentHostWorkspaceApplication;
   /** Route and host/CLI model report; a matching report does not verify the backend. */
   modelExecution?: ModelExecutionObservation;
 };
@@ -319,6 +323,16 @@ function normalizeExecutionHistoryEntry(
     attachmentCount,
     turnOutcome,
     responseText,
+    workspaceMode:
+      entry.workspaceMode === "folder" || entry.workspaceMode === "worktree"
+        ? entry.workspaceMode
+        : undefined,
+    workspaceModeApplication:
+      (entry.workspaceMode === "folder" || entry.workspaceMode === "worktree") &&
+      (entry.workspaceModeApplication === "new_session_config_confirmed" ||
+        entry.workspaceModeApplication === "not_applied_resumed")
+        ? entry.workspaceModeApplication
+        : undefined,
     modelExecution,
   };
 }

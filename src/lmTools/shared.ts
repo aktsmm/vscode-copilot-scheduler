@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { messages } from "../i18n";
 
 import type {
   MutationDeleteResult,
@@ -107,6 +108,7 @@ export function formatConfirmationCode(value: string): string {
 interface AgentHostToolFields {
   agentHostModelId?: unknown;
   preventAgentHostFallback?: unknown;
+  agentHostWorkspaceMode?: unknown;
 }
 
 export function describeAgentHostFieldsForConfirmation(
@@ -114,6 +116,26 @@ export function describeAgentHostFieldsForConfirmation(
   showDefaultFallback = false,
 ): string[] {
   const details: string[] = [];
+  if (showDefaultFallback || input.agentHostWorkspaceMode !== undefined) {
+    const mode =
+      input.agentHostWorkspaceMode === undefined
+        ? "default"
+        : input.agentHostWorkspaceMode;
+    details.push(
+      `- agentHostWorkspaceMode: ${formatConfirmationCode(
+        mode === "default" || mode === "folder" || mode === "worktree"
+          ? mode
+          : messages.agentHostWorkspaceModeInvalid(),
+      )}`,
+      escapeConfirmationText(messages.agentHostWorkspaceModeNote()),
+      escapeConfirmationText(messages.agentHostWorkspaceModeInactive()),
+    );
+    if (input.agentHostWorkspaceMode === "default") {
+      details.push(
+        escapeConfirmationText(messages.agentHostWorkspaceModeReset()),
+      );
+    }
+  }
   if (input.agentHostModelId !== undefined) {
     const id =
       typeof input.agentHostModelId !== "string"
@@ -138,6 +160,18 @@ export function describeAgentHostFieldsForConfirmation(
 export function validateAgentHostToolFields(
   input: AgentHostToolFields,
 ): vscode.LanguageModelToolResult | undefined {
+  if (
+    input.agentHostWorkspaceMode !== undefined &&
+    input.agentHostWorkspaceMode !== "default" &&
+    input.agentHostWorkspaceMode !== "folder" &&
+    input.agentHostWorkspaceMode !== "worktree"
+  ) {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "validation",
+      message: messages.agentHostWorkspaceModeInvalid(),
+    });
+  }
   if (
     input.agentHostModelId !== undefined &&
     typeof input.agentHostModelId !== "string"

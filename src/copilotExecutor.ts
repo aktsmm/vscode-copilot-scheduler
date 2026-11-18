@@ -673,6 +673,16 @@ export class CopilotExecutor {
   ): Promise<ExecutePromptResult> {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
+    if (
+      options?.agentHostWorkspaceMode !== undefined &&
+      options.agentHostWorkspaceMode !== "folder" &&
+      options.agentHostWorkspaceMode !== "worktree"
+    ) {
+      return this.warnAndThrow(
+        createPromptBlockedError(messages.agentHostWorkspaceModeInvalid(), "agentHostUnavailable"),
+        processedPrompt,
+      );
+    }
 
     if (options?.targetChatId && options.useCopilotCli === true) {
       return this.warnAndThrow(
@@ -715,12 +725,14 @@ export class CopilotExecutor {
     // Get chat session behavior and command delay factor once per execution
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     if (
-      options?.targetChatId &&
+      (options?.targetChatId || options?.agentHostWorkspaceMode) &&
       resolveExecutionRoute(config) !== "agentHost"
     ) {
       return this.warnAndThrow(
         createPromptBlockedError(
-          messages.targetChatRequiresAgentHost(),
+          options?.targetChatId
+            ? messages.targetChatRequiresAgentHost()
+            : messages.agentHostWorkspaceUnavailable(""),
           "agentHostUnavailable",
         ),
         routing.legacyPrompt,
@@ -967,6 +979,7 @@ export class CopilotExecutor {
     const targetChatId = options?.targetChatId;
     const failOnFallback =
       !!targetChatId ||
+      !!options?.agentHostWorkspaceMode ||
       options?.preventAgentHostFallback === true ||
       config.get<string>("executionFallback", "chat") === "fail";
     const decline = async (rawDetail: string) => {
@@ -978,9 +991,11 @@ export class CopilotExecutor {
       if (failOnFallback) {
         await this.warnAndThrow(
           createPromptBlockedError(
-            options?.preventAgentHostFallback === true || targetChatId
-              ? messages.agentHostFallbackPrevented(detail)
-              : messages.agentHostNotUsed(detail),
+            options?.agentHostWorkspaceMode && !targetChatId
+              ? messages.agentHostWorkspaceUnavailable(detail)
+              : options?.preventAgentHostFallback === true || targetChatId
+                ? messages.agentHostFallbackPrevented(detail)
+                : messages.agentHostNotUsed(detail),
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
@@ -1082,6 +1097,10 @@ export class CopilotExecutor {
     const cwd = requestedCwd
       ? requestedCwd
       : workspaceFolders.find((candidate) => isDirectory(candidate));
+    const workspaceModeActive = !!options?.agentHostWorkspaceMode && !targetChatId;
+    if (workspaceModeActive && (!cwd || !path.isAbsolute(cwd))) {
+      return decline("the task needs one unambiguous local execution folder");
+    }
 
     const configuration = options?.modelConfiguration ?? {};
     const timeoutMinutes = Math.min(
@@ -1096,11 +1115,23 @@ export class CopilotExecutor {
     // The approval policy is fixed when a session is created, so sessions with a
     // different policy are never shared.
     const sessionKey = `${cwd ?? ""}|${autoApprove ? "auto" : "ask"}`;
+    const ambiguousWorkspaceMode =
+      workspaceModeActive && !requestedCwd && workspaceFolders.length !== 1;
+    if (
+      ambiguousWorkspaceMode &&
+      !(chatSession === "continue" && CopilotExecutor.agentHostSessions.has(sessionKey))
+    ) {
+      return decline("the task needs one unambiguous local execution folder");
+    }
     const run = () =>
       runAgentHostTurn({
         endpoint,
         text: routing.chatOpenPrompt,
         ...(cwd ? { cwdUri: toFileUri(cwd) } : {}),
+        ...(options?.agentHostWorkspaceMode
+          ? { workspaceMode: options.agentHostWorkspaceMode }
+          : {}),
+        ...(ambiguousWorkspaceMode ? { allowNewSession: false } : {}),
         ...(modelId ? { modelId } : {}),
         ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
         modelOptions: {
@@ -1219,6 +1250,10 @@ export class CopilotExecutor {
             ...(applied ? { appliedModel: applied } : {}),
             turnOutcome: "completed",
             responseText: turn.responseText,
+            ...(turn.workspaceMode ? { workspaceMode: turn.workspaceMode } : {}),
+            ...(turn.workspaceModeApplication
+              ? { workspaceModeApplication: turn.workspaceModeApplication }
+              : {}),
           },
           modelExecution: {
             route: "agentHost",
@@ -1231,6 +1266,17 @@ export class CopilotExecutor {
     } catch (error) {
       if (isPromptBlockedError(error)) {
         return this.warnAndThrow(error, routing.legacyPrompt);
+      }
+      if (error instanceof AgentHostError && error.kind === "workspaceMode") {
+        return this.warnAndThrow(
+          createPromptBlockedError(
+            messages.agentHostWorkspaceUnavailable(
+              sanitizeAbsolutePathDetails(error.message, messages.redactedPlaceholder()),
+            ),
+            "agentHostUnavailable",
+          ),
+          routing.legacyPrompt,
+        );
       }
       if (error instanceof AgentHostError && error.kind === "modelIdentity") {
         return this.warnAndThrow(

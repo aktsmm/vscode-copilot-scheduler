@@ -15,6 +15,7 @@ import type {
   ModelInfo,
   ModelSelectionFields,
   AgentHostTurnOutcome,
+  AgentHostWorkspaceMode,
 } from "./types";
 import { messages } from "./i18n";
 import { logDebug, logError } from "./logger";
@@ -307,6 +308,18 @@ function normalizeAttachmentsOrThrow(
     throw new Error(describeAttachmentRejection(rejection));
   }
   return result.attachments;
+}
+
+function normalizeAgentHostWorkspaceModeOrThrow(
+  value: unknown,
+): AgentHostWorkspaceMode | undefined {
+  if (value === undefined || value === "default") {
+    return undefined;
+  }
+  if (value === "folder" || value === "worktree") {
+    return value;
+  }
+  throw new Error(messages.agentHostWorkspaceModeInvalid());
 }
 
 function applyModelSelectionToTask(
@@ -2027,6 +2040,9 @@ export class ScheduleManager {
     ) {
       throw new Error(messages.agentHostFallbackGuardInvalid());
     }
+    const agentHostWorkspaceMode = normalizeAgentHostWorkspaceModeOrThrow(
+      input.agentHostWorkspaceMode,
+    );
     const modelSelection = normalizeModelSelection(input);
     if (!isAgentHostModelBindingCompatible(modelSelection)) {
       throw new Error(messages.agentHostModelBindingInvalid());
@@ -2128,6 +2144,9 @@ export class ScheduleManager {
         input.chatSession === "new" || input.chatSession === "continue"
           ? input.chatSession
           : undefined,
+      ...(agentHostWorkspaceMode !== undefined
+        ? { agentHostWorkspaceMode }
+        : {}),
       targetChatId:
         typeof input.targetChatId === "string" &&
         /^[a-f0-9]{64}$/i.test(input.targetChatId.trim())
@@ -2300,6 +2319,9 @@ export class ScheduleManager {
     if (updates.promptPath?.includes("\0")) {
       throw new Error(messages.templateLoadError());
     }
+    const agentHostWorkspaceMode = normalizeAgentHostWorkspaceModeOrThrow(
+      updates.agentHostWorkspaceMode,
+    );
 
     const nextRunAt =
       updates.runAt === "" ? undefined : (updates.runAt ?? task.runAt);
@@ -2517,6 +2539,13 @@ export class ScheduleManager {
           ? updates.chatSession
           : undefined;
     }
+    if (updates.agentHostWorkspaceMode !== undefined) {
+      if (agentHostWorkspaceMode === undefined) {
+        delete task.agentHostWorkspaceMode;
+      } else {
+        task.agentHostWorkspaceMode = agentHostWorkspaceMode;
+      }
+    }
     if (updates.targetChatId !== undefined) {
       const targetChatId =
         typeof updates.targetChatId === "string"
@@ -2703,6 +2732,7 @@ export class ScheduleManager {
       useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,
       chatSession: original.chatSession,
+      agentHostWorkspaceMode: original.agentHostWorkspaceMode,
       targetChatId: original.targetChatId,
       targetChatTitle: original.targetChatTitle,
       jitterSeconds: original.jitterSeconds,

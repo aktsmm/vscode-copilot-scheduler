@@ -331,9 +331,11 @@ suite("taskMutationService model resolution", () => {
     const result = await c.createTask({
       ...baseInput(),
       model: "claude-sonnet-4",
+      agentHostWorkspaceMode: "folder",
     });
 
     assertOk(result);
+    assert.strictEqual(fake.lastCreateInput?.agentHostWorkspaceMode, "folder");
     assert.deepStrictEqual(requestedKeys, [
       "agentHostModelId",
       "model",

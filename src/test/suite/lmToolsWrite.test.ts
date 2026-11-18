@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import { createSchedulerCreateTaskTool } from "../../lmTools/tools/createTask";
@@ -276,6 +278,107 @@ function confirmationMessageText(
 }
 
 suite("lmTools write wrappers", () => {
+  test("workspace location schema, create mapper and update whitelist agree", async () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
+    );
+    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
+      const tool = manifest.contributes.languageModelTools.find(
+        (item: { name: string }) => item.name === name,
+      );
+      const properties =
+        name === "scheduler_update_task"
+          ? tool.inputSchema.properties.updates.properties
+          : tool.inputSchema.properties;
+      assert.deepStrictEqual(properties.agentHostWorkspaceMode.enum, [
+        "default",
+        "folder",
+        "worktree",
+      ]);
+    }
+    for (const mode of [undefined, "default", "folder", "worktree"] as const) {
+      const client = new FakeClient(
+        fakeTask({ agentHostWorkspaceMode: "worktree" }),
+      );
+      const created = parseJson(
+        await invoke(createSchedulerCreateTaskTool(client), {
+          name: "Location",
+          cronExpression: "0 9 * * *",
+          prompt: "Review",
+          scope: "global",
+          agentHostWorkspaceMode: mode,
+        }),
+      );
+      assert.strictEqual(created.ok, true);
+      assert.strictEqual(
+        client.createInput?.agentHostWorkspaceMode,
+        mode === "default" ? undefined : mode,
+      );
+      if (mode === undefined || mode === "default") {
+        assert.ok(!Object.hasOwn(client.createInput!, "agentHostWorkspaceMode"));
+      }
+      const updates =
+        mode === undefined
+          ? { name: "Renamed" }
+          : { agentHostWorkspaceMode: mode };
+      const updated = parseJson(
+        await invoke(createSchedulerUpdateTaskTool(client), {
+          id: "task-1",
+          updates,
+        }),
+      );
+      assert.strictEqual(updated.ok, true);
+      assert.deepStrictEqual(client.updateArgs?.updates, updates);
+      if (mode === undefined) {
+        assert.strictEqual(
+          (updated.task as ScheduledTask).agentHostWorkspaceMode,
+          "worktree",
+        );
+      }
+    }
+  });
+
+  test("workspace location confirmations explain new-session-only behavior and reset", async () => {
+    for (const mode of ["folder", "worktree", "default"] as const) {
+      const created = await withConfirmationMode("always", () =>
+        prepare(createSchedulerCreateTaskTool(new FakeClient()), {
+          name: "Location",
+          cronExpression: "0 9 * * *",
+          prompt: "Review",
+          scope: "global",
+          agentHostWorkspaceMode: mode,
+        }),
+      );
+      const updated = await withConfirmationMode("always", () =>
+        prepare(createSchedulerUpdateTaskTool(new FakeClient()), {
+          id: "task-1",
+          updates: { agentHostWorkspaceMode: mode },
+        }),
+      );
+      for (const prepared of [created, updated]) {
+        const detail = confirmationMessageText(prepared);
+        assert.ok(detail.includes(formatConfirmationCode(mode)));
+        assert.ok(
+          detail.includes(
+            escapeConfirmationText(messages.agentHostWorkspaceModeNote()),
+          ),
+        );
+        assert.ok(
+          detail.includes(
+            escapeConfirmationText(messages.agentHostWorkspaceModeInactive()),
+          ),
+        );
+        if (mode === "default") {
+          assert.ok(
+            detail.includes(
+              escapeConfirmationText(messages.agentHostWorkspaceModeReset()),
+            ),
+          );
+        }
+      }
+    }
+  });
+
   test("update task rejects non-object updates without mutation", async () => {
     for (const updates of [undefined, null, [], ["name"], "name", 1, true]) {
       const client = new FakeClient();
@@ -1260,6 +1363,9 @@ suite("lmTools write wrappers", () => {
     for (const invalid of [
       { agentHostModelId: { id: "model" } },
       { preventAgentHostFallback: "false" },
+      ...[null, "", "unknown", 0, false, {}, []].map((agentHostWorkspaceMode) => ({
+        agentHostWorkspaceMode,
+      })),
     ]) {
       const client = new FakeClient();
       const create = parseJson(

@@ -63,6 +63,10 @@ async function startFakeHost(
     queueInterference?: "otherClient" | "otherSequence" | "missingOrigin";
     queueInterferenceRejected?: boolean;
     models?: unknown;
+    resolvedSessionConfig?: unknown;
+    sessionState?: Record<string, unknown>;
+    chatState?: Record<string, unknown>;
+    nullChatSnapshot?: boolean;
   } = {},
 ): Promise<FakeHost> {
   const socketPath =
@@ -128,6 +132,9 @@ async function startFakeHost(
         case "createSession":
           reply(null);
           break;
+        case "resolveSessionConfig":
+          reply(behaviour.resolvedSessionConfig);
+          break;
         case "listSessions": {
           const cursor = message.params.cursor;
           const pageIndex = cursor === "page-2" ? 1 : 0;
@@ -151,6 +158,10 @@ async function startFakeHost(
             const sessions =
               behaviour.sessionPages?.flatMap((page) => page.items) ?? [];
             const channel = String(message.params.channel);
+            if (behaviour.nullChatSnapshot && channel.startsWith("ahp-chat:")) {
+              reply(null);
+              break;
+            }
             const session = sessions.find((item) => item.resource === channel);
             const chat = sessions
               .flatMap((item) =>
@@ -189,7 +200,16 @@ async function startFakeHost(
                 },
               });
             } else {
-              reply({ snapshot: { state: { defaultChat: "ahp-chat:/chat-1" } } });
+              reply({
+                snapshot: {
+                  state: {
+                    defaultChat: "ahp-chat:/chat-1",
+                    ...(channel.startsWith("ahp-session:")
+                      ? behaviour.sessionState
+                      : behaviour.chatState),
+                  },
+                },
+              });
             }
           }
           break;
@@ -912,6 +932,11 @@ suite("Agent Host client", () => {
       assert.deepStrictEqual(create?.params.config, {
         autoApprove: "autoApprove",
       });
+      assert.deepStrictEqual(
+        host.calls.map((call) => call.method),
+        ["initialize", "createSession", "subscribe", "subscribe", "dispatchAction"],
+        "legacy runs must not negotiate workspace configuration",
+      );
       const turn = host.calls.find(
         (c) =>
           c.method === "dispatchAction" &&
@@ -937,6 +962,328 @@ suite("Agent Host client", () => {
       });
       const create = host.calls.find((c) => c.method === "createSession");
       assert.strictEqual(create?.params.config, undefined);
+    });
+
+    test("a legacy turn accepts a null chat subscription without parsing workspace metadata", async () => {
+      host = await startFakeHost(tmp, { nullChatSnapshot: true });
+      const result = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        cwdUri: pathToFileURL(tmp).href,
+      });
+      assert.strictEqual(result.chatUri, "ahp-chat:/chat-1");
+      assert.strictEqual(result.responseText, "not_observed");
+      assert.strictEqual(result.workspaceMode, undefined);
+      assert.strictEqual(result.workspaceModeApplication, undefined);
+      assert.ok(!host.calls.some((call) => call.method === "resolveSessionConfig"));
+      assert.strictEqual(
+        host.calls.filter((call) => call.method === "dispatchAction").length,
+        1,
+      );
+    });
+
+    test("an explicit folder preference rejects a null chat snapshot before dispatch", async () => {
+      const cwdUri = pathToFileURL(tmp).href;
+      host = await startFakeHost(tmp, {
+        nullChatSnapshot: true,
+        resolvedSessionConfig: {
+          schema: {
+            properties: {
+              isolation: { type: "string", enum: ["folder", "worktree"] },
+            },
+          },
+          values: { isolation: "folder" },
+        },
+        sessionState: {
+          config: { values: { isolation: "folder" } },
+          workingDirectories: [cwdUri],
+        },
+      });
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          cwdUri,
+          workspaceMode: "folder",
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError && error.kind === "workspaceMode",
+      );
+      assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
+    });
+
+    test("confirms a new folder session from session-only metadata and preserves the approval policy", async () => {
+      const cwdUri = pathToFileURL(tmp).href;
+      for (const autoApprove of [true, false]) {
+        host = await startFakeHost(tmp, {
+          resolvedSessionConfig: {
+            schema: {
+              properties: {
+                isolation: { type: "string", enum: ["folder", "worktree"] },
+              },
+            },
+            values: { isolation: "folder" },
+          },
+          sessionState: {
+            config: { values: { isolation: "folder" } },
+            workingDirectories: [
+              pathToFileURL(
+                (process.platform === "win32" ? tmp.toUpperCase() : tmp) + path.sep,
+              ).href,
+            ],
+          },
+        });
+        const result = await runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          cwdUri,
+          autoApprove,
+          workspaceMode: "folder",
+        });
+        assert.strictEqual(result.workspaceMode, "folder");
+        assert.strictEqual(
+          result.workspaceModeApplication,
+          "new_session_config_confirmed",
+        );
+        const config = {
+          isolation: "folder",
+          ...(autoApprove ? { autoApprove: "autoApprove" } : {}),
+        };
+        assert.deepStrictEqual(
+          host.calls.find((call) => call.method === "resolveSessionConfig")?.params,
+          {
+            channel: "ahp-root://",
+            provider: "copilotcli",
+            workingDirectory: cwdUri,
+            config,
+          },
+        );
+        const create = host.calls.find((call) => call.method === "createSession");
+        assert.deepStrictEqual(create?.params.config, config);
+        assert.deepStrictEqual(create?.params.workingDirectories, [cwdUri]);
+        assert.strictEqual(
+          host.calls.filter((call) => call.method === "dispatchAction").length,
+          1,
+        );
+        await host.close();
+        host = undefined;
+      }
+    });
+
+    test("refuses unconfirmed workspace configurations and folder snapshots before dispatch", async () => {
+      const cwdUri = pathToFileURL(tmp).href;
+      const schema = {
+        properties: {
+          isolation: { type: "string", enum: ["folder", "worktree"] },
+        },
+      };
+      const sessionState = {
+        config: { values: { isolation: "folder" } },
+        workingDirectories: [cwdUri],
+      };
+      const cases: Array<{
+        name: string;
+        resolvedSessionConfig?: unknown;
+        sessionState?: Record<string, unknown>;
+        chatState?: Record<string, unknown>;
+        request?: Partial<AgentHostTurnRequest>;
+        createsSession?: boolean;
+      }> = [
+        { name: "missing capability", resolvedSessionConfig: null },
+        { name: "malformed schema", resolvedSessionConfig: { schema: [] } },
+        {
+          name: "non-string isolation",
+          resolvedSessionConfig: {
+            schema: { properties: { isolation: { type: "boolean", enum: ["folder"] } } },
+            values: { isolation: "folder" },
+          },
+        },
+        {
+          name: "unsupported isolation",
+          resolvedSessionConfig: {
+            schema: { properties: { isolation: { type: "string", enum: ["worktree"] } } },
+            values: { isolation: "folder" },
+          },
+        },
+        { name: "missing resolved value", resolvedSessionConfig: { schema, values: {} } },
+        {
+          name: "ignored preference",
+          resolvedSessionConfig: { schema, values: { isolation: "worktree" } },
+        },
+        {
+          name: "invalid request enum",
+          request: { workspaceMode: "FOLDER" as never },
+        },
+        { name: "missing execution folder", request: { cwdUri: undefined } },
+        {
+          name: "snapshot mode mismatch",
+          sessionState: { ...sessionState, config: { values: { isolation: "worktree" } } },
+          createsSession: true,
+        },
+        {
+          name: "snapshot mode missing",
+          sessionState: { ...sessionState, config: { values: {} } },
+          createsSession: true,
+        },
+        {
+          name: "wrong folder",
+          sessionState: { ...sessionState, workingDirectories: [pathToFileURL(path.join(tmp, "other")).href] },
+          createsSession: true,
+        },
+        {
+          name: "missing folder",
+          sessionState: { config: sessionState.config },
+          createsSession: true,
+        },
+        {
+          name: "multiple folders",
+          sessionState: { ...sessionState, workingDirectories: [cwdUri, cwdUri] },
+          createsSession: true,
+        },
+        {
+          name: "non-local folder",
+          sessionState: { ...sessionState, workingDirectories: ["vscode-remote://ssh-remote/work"] },
+          createsSession: true,
+        },
+        {
+          name: "chat folder overrides matching session",
+          chatState: { workingDirectories: [] },
+          createsSession: true,
+        },
+      ];
+      for (const scenario of cases) {
+        host = await startFakeHost(tmp, {
+          resolvedSessionConfig: { schema, values: { isolation: "folder" } },
+          sessionState,
+          ...scenario,
+        });
+        await assert.rejects(
+          runAgentHostTurn({
+            ...baseRequest(host.endpoint),
+            cwdUri,
+            workspaceMode: "folder",
+            ...scenario.request,
+          }),
+          (error: unknown) =>
+            error instanceof AgentHostError && error.kind === "workspaceMode",
+          scenario.name,
+        );
+        assert.ok(
+          !host.calls.some((call) => call.method === "dispatchAction"),
+          scenario.name,
+        );
+        assert.strictEqual(
+          host.calls.some((call) => call.method === "createSession"),
+          scenario.createsSession === true,
+          scenario.name,
+        );
+        await host.close();
+        host = undefined;
+      }
+    });
+
+    test("resumes a worktree despite a folder creation preference without reconfiguration", async () => {
+      const cwdUri = pathToFileURL(tmp).href;
+      host = await startFakeHost(tmp, {
+        resolvedSessionConfig: {
+          schema: {
+            properties: {
+              isolation: { type: "string", enum: ["folder", "worktree"] },
+            },
+          },
+          values: { isolation: "worktree" },
+        },
+        sessionState: {
+          config: { values: { isolation: "worktree" } },
+          workingDirectories: [pathToFileURL(path.join(tmp, "isolated")).href],
+        },
+      });
+      const created = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        cwdUri,
+        workspaceMode: "worktree",
+      });
+      assert.strictEqual(created.workspaceModeApplication, "new_session_config_confirmed");
+      const callsBeforeResume = host.calls.length;
+      const resumed = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        cwdUri,
+        workspaceMode: "folder",
+        resume: { sessionUri: created.sessionUri, chatUri: created.chatUri },
+      });
+      assert.strictEqual(resumed.sessionUri, created.sessionUri);
+      assert.strictEqual(resumed.chatUri, created.chatUri);
+      assert.strictEqual(resumed.workspaceMode, "folder");
+      assert.strictEqual(resumed.workspaceModeApplication, "not_applied_resumed");
+      assert.deepStrictEqual(
+        host.calls.slice(callsBeforeResume).map((call) => call.method),
+        ["initialize", "subscribe", "subscribe", "dispatchAction"],
+      );
+    });
+
+    test("applies the folder creation preference when a resumed session has gone stale", async () => {
+      const cwdUri = pathToFileURL(tmp).href;
+      host = await startFakeHost(tmp, {
+        missingSessions: true,
+        resolvedSessionConfig: {
+          schema: {
+            properties: {
+              isolation: { type: "string", enum: ["folder", "worktree"] },
+            },
+          },
+          values: { isolation: "folder" },
+        },
+        sessionState: {
+          config: { values: { isolation: "folder" } },
+          workingDirectories: [cwdUri],
+        },
+      });
+      const result = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        cwdUri,
+        workspaceMode: "folder",
+        resume: { sessionUri: "ahp-session:/gone", chatUri: "ahp-chat:/gone" },
+      });
+      assert.notStrictEqual(result.sessionUri, "ahp-session:/gone");
+      assert.strictEqual(result.workspaceMode, "folder");
+      assert.strictEqual(result.workspaceModeApplication, "new_session_config_confirmed");
+      assert.strictEqual(
+        (host.calls.find((call) => call.method === "createSession")?.params.config as Record<string, unknown>).isolation,
+        "folder",
+      );
+      assert.ok(host.calls.some((call) => call.method === "resolveSessionConfig"));
+    });
+
+    test("an ambiguous workspace can resume but cannot create a session after a missing cached reference", async () => {
+      host = await startFakeHost(tmp, { missingSessions: true });
+      const request: AgentHostTurnRequest = {
+        ...baseRequest(host.endpoint),
+        cwdUri: pathToFileURL(tmp).href,
+        workspaceMode: "folder",
+        allowNewSession: false,
+      };
+      const resumed = await runAgentHostTurn({
+        ...request,
+        resume: { sessionUri: "ahp-session:/old", chatUri: "ahp-chat:/old" },
+      });
+      assert.strictEqual(resumed.sessionUri, "ahp-session:/old");
+      assert.strictEqual(resumed.workspaceMode, "folder");
+      assert.strictEqual(resumed.workspaceModeApplication, "not_applied_resumed");
+      assert.ok(!host.calls.some((call) => call.method === "createSession"));
+      for (const resume of [
+        undefined,
+        { sessionUri: "ahp-session:/gone", chatUri: "ahp-chat:/gone" },
+      ]) {
+        const before = host.calls.length;
+        await assert.rejects(
+          runAgentHostTurn({ ...request, resume }),
+          (error: unknown) =>
+            error instanceof AgentHostError && error.kind === "workspaceMode",
+        );
+        assert.ok(
+          !host.calls.slice(before).some((call) =>
+            ["resolveSessionConfig", "createSession", "dispatchAction"].includes(call.method),
+          ),
+          "a missing cached session must not negotiate, create or dispatch",
+        );
+      }
     });
 
     test("refuses a model the host does not offer before sending anything", async () => {

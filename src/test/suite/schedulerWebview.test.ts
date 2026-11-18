@@ -1250,6 +1250,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         modelFamily?: string;
         modelVersion?: string;
         agentHostModelId?: string;
+        agentHostWorkspaceMode?: "folder" | "worktree";
+        chatSession?: "new" | "continue";
         preventAgentHostFallback?: boolean;
       }) => void;
       handleMessage?: (message: unknown) => Promise<void>;
@@ -1262,6 +1264,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agent?: string;
           model?: string;
           agentHostModelId?: string;
+          agentHostWorkspaceMode?: "folder" | "worktree";
+          chatSession?: "new" | "continue";
           preventAgentHostFallback?: boolean;
         }
       | undefined;
@@ -1273,6 +1277,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agent: request.agent,
           model: request.model,
           agentHostModelId: request.agentHostModelId,
+          agentHostWorkspaceMode: request.agentHostWorkspaceMode,
+          chatSession: request.chatSession,
           preventAgentHostFallback: request.preventAgentHostFallback,
         };
       };
@@ -1288,6 +1294,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         modelFamily: "gpt-4o",
         modelVersion: "2026-01-01",
         agentHostModelId: "vendor/group/model",
+        agentHostWorkspaceMode: "folder",
+        chatSession: "continue",
         preventAgentHostFallback: true,
       });
 
@@ -1296,6 +1304,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agent: "@workspace",
         model: "gpt-4o",
         agentHostModelId: "vendor/group/model",
+        agentHostWorkspaceMode: "folder",
+        chatSession: "continue",
         preventAgentHostFallback: true,
       });
     } finally {
@@ -2263,7 +2273,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(!submitSource.includes('taskData.promptPath = ""'));
   });
 
-  test("task submissions carry the selected Host ID and route guard", () => {
+  test("task submissions carry the selected Host ID, route guard and workspace location", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
       "utf8",
@@ -2273,10 +2283,28 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'taskForm.addEventListener("submit", function (e) {',
     );
     const callback = submitSource.slice(submitSource.indexOf("function (e)"));
-    for (const { editing, hostId, guard } of [
-      { editing: false, hostId: "vendor/group/new", guard: true },
-      { editing: true, hostId: "vendor/group/new", guard: true },
+    for (const { editing, hostId, guard, workspaceMode, savedMode } of [
+      {
+        editing: false, hostId: "vendor/group/new", guard: true,
+        workspaceMode: "folder",
+      },
+      {
+        editing: true, hostId: "vendor/group/new", guard: true,
+        workspaceMode: "worktree", savedMode: "folder",
+      },
+      {
+        editing: true, hostId: "", guard: false,
+        workspaceMode: undefined, savedMode: "folder",
+      },
       { editing: true, hostId: "", guard: false },
+      {
+        editing: true, hostId: "", guard: false,
+        workspaceMode: "unknown", savedMode: "unknown",
+      },
+      {
+        editing: true, hostId: "", guard: false,
+        workspaceMode: undefined, savedMode: "default",
+      },
     ]) {
       const original = {
         id: "edit-task",
@@ -2288,6 +2316,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         model: "model",
         modelVendor: "vendor",
         agentHostModelId: "vendor/group/old",
+        agentHostWorkspaceMode: savedMode,
         preventAgentHostFallback: !guard,
         enabled: false,
       };
@@ -2334,6 +2363,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         useCopilotCliInput: null,
         getSelectedSkillRefForSubmit: () => null,
         getEffectivePromptSource: () => "inline",
+        getAgentHostWorkspaceModeForSubmit: () => workspaceMode,
         chatSessionSelect: null,
         targetChatSelect: { value: "" },
         jitterSecondsInput: null,
@@ -2372,6 +2402,14 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.strictEqual(posted[0].type, editing ? "updateTask" : "createTask");
       assert.strictEqual(posted[0].data.agentHostModelId, hostId);
       assert.strictEqual(posted[0].data.preventAgentHostFallback, guard);
+      assert.strictEqual(
+        posted[0].data.agentHostWorkspaceMode,
+        editing && workspaceMode === savedMode
+          ? undefined
+          : workspaceMode === undefined
+            ? "default"
+            : workspaceMode,
+      );
     }
   });
 
@@ -2451,6 +2489,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           useCopilotCliInput: null,
           getSelectedSkillRefForSubmit: () => null,
           getEffectivePromptSource: () => promptSource,
+          getAgentHostWorkspaceModeForSubmit: () => undefined,
           chatSessionSelect: null,
           targetChatSelect: { value: "" },
           jitterSecondsInput: null,
@@ -4854,6 +4893,110 @@ suite("SchedulerWebview Script Contract Tests", () => {
         `Expected unresolved model token not found: ${token}`,
       );
     }
+  });
+
+  test("workspace location edit restoration retains corrupt values until explicit repair", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"), "utf8",
+    );
+    const select = {
+      value: "default",
+      disabled: false,
+      options: [] as Array<{ value: string; remove(): void }>,
+      appendChild(option: { value: string; remove(): void }) {
+        this.options.push(option);
+      },
+    };
+    const status = { textContent: "" };
+    const cli = { checked: false };
+    const target = { value: "" };
+    let model = "";
+    const context = {
+      agentHostWorkspaceModeSelect: select,
+      agentHostWorkspaceModeStatus: status,
+      savedAgentHostWorkspaceMode: undefined,
+      useCopilotCliInput: cli,
+      targetChatSelect: target,
+      pendingModelValue: "",
+      getCurrentModelSelection: () => ({ model }),
+      strings: {
+        agentHostWorkspaceModeInvalid: "invalid",
+        agentHostWorkspaceModeInactive: "inactive",
+      },
+      document: {
+        createElement: () => {
+          const option = {
+            value: "",
+            textContent: "",
+            remove() {
+              select.options.splice(select.options.indexOf(option), 1);
+            },
+          };
+          return option;
+        },
+      },
+      editingTaskSnapshot: {} as { agentHostWorkspaceMode?: unknown },
+      editingTaskNormalizedSnapshot: null,
+      defaultJitterSeconds: 0,
+      serializeAttachments: (value: unknown) => JSON.stringify(value ?? []),
+    };
+    const factory = new Function(...Object.keys(context), [
+      ...[
+        "getAgentHostWorkspaceModeForSubmit",
+        "setAgentHostWorkspaceModeSelection",
+        "updateAgentHostWorkspaceModeAvailability",
+        "normalizeTaskForEditDiff",
+        "serializeModelConfigurationForDiff",
+        "normalizeSkillRefClient",
+        "boundedNumber",
+        "buildTaskUpdateData",
+      ].map((name) => extractFunctionSource(source, name)),
+      "return { get: getAgentHostWorkspaceModeForSubmit, set: setAgentHostWorkspaceModeSelection, update: updateAgentHostWorkspaceModeAvailability, normalize: normalizeTaskForEditDiff, diff: buildTaskUpdateData };",
+    ].join("\n"));
+    const form = factory(...Object.values(context));
+    for (const saved of [
+      undefined, "folder", "worktree", "default", "unknown", null, 0,
+      { invalid: true },
+    ]) {
+      form.set(saved);
+      context.editingTaskSnapshot.agentHostWorkspaceMode = saved;
+      assert.strictEqual(form.get(), saved);
+      assert.deepStrictEqual(form.diff({ agentHostWorkspaceMode: form.get() }), {});
+      assert.strictEqual(
+        form.normalize({ agentHostWorkspaceMode: form.get() }).agentHostWorkspaceMode,
+        form.normalize({ agentHostWorkspaceMode: saved }).agentHostWorkspaceMode,
+        "Unrelated edits must not clear saved values",
+      );
+    }
+    select.value = "default";
+    assert.strictEqual(form.get(), undefined);
+    assert.deepStrictEqual(form.diff({ agentHostWorkspaceMode: undefined }), {
+      agentHostWorkspaceMode: "default",
+    });
+    select.value = "folder";
+    cli.checked = true;
+    form.update();
+    assert.strictEqual(select.disabled, false, "CLI without a model is not an actual CLI route");
+    model = "chosen";
+    form.update();
+    assert.strictEqual(select.disabled, true);
+    assert.strictEqual(form.get(), "folder");
+    cli.checked = false;
+    target.value = "bound-chat";
+    form.update();
+    assert.strictEqual(select.disabled, true);
+    assert.strictEqual(form.get(), "folder");
+    target.value = "";
+    form.update();
+    assert.strictEqual(select.disabled, false);
+    form.set(undefined);
+    assert.strictEqual(select.value, "default");
+    assert.strictEqual(form.get(), undefined);
+    for (const token of [
+      "setAgentHostWorkspaceModeSelection(task.agentHostWorkspaceMode)",
+      "setAgentHostWorkspaceModeSelection(undefined)",
+      "agentHostWorkspaceMode: workspaceMode",
+    ]) assert.ok(sourceContainsToken(source, token));
   });
 
   test("edit submit path diffs unchanged fields before posting updateTask", () => {

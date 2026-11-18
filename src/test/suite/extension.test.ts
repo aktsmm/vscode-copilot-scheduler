@@ -3345,6 +3345,32 @@ suite("resolvePromptText Tests", () => {
 });
 
 suite("Frontmatter Resolution Tests", () => {
+  test("forwards the task workspace creation preference through prompt resolution and execution options", async () => {
+    const { __testOnly } = await import("../../extension");
+    const base = {
+      id: "workspace-mode-forwarding",
+      name: "Workspace preference",
+      cronExpression: "0 * * * *",
+      prompt: "Body",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies ScheduledTask;
+    for (const agentHostWorkspaceMode of [undefined, "folder", "worktree"] as const) {
+      const resolved = await __testOnly.resolvePromptExecution(
+        { ...base, agentHostWorkspaceMode },
+        true,
+      );
+      assert.strictEqual(resolved.agentHostWorkspaceMode, agentHostWorkspaceMode);
+      const options = __testOnly.buildPromptExecutionOptions(resolved);
+      assert.strictEqual(options.agentHostWorkspaceMode, agentHostWorkspaceMode);
+      assert.strictEqual(options.useCopilotCli, undefined);
+      assert.strictEqual(options.targetChatId, undefined);
+    }
+  });
+
   test("Uses frontmatter agent/model when task options are not set", async () => {
     const { __testOnly } = await import("../../extension");
     const resolvePromptExecution = __testOnly.resolvePromptExecution as

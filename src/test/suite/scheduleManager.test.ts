@@ -459,6 +459,191 @@ suite("ScheduleManager Dynamic Model Configuration", () => {
   });
 });
 
+suite("ScheduleManager Agent Host Workspace Mode", () => {
+  test("creates both modes and preserves them through duplicate, reload and all stores", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".workspace-mode-test-"));
+    const context = createMockContext(root);
+    const manager = new ScheduleManager(context);
+    let reloaded: ScheduleManager | undefined;
+    try {
+      await waitForStartupSave(manager);
+      for (const mode of ["folder", "worktree"] as const) {
+        const task = await manager.createTask({
+          name: mode,
+          prompt: "synthetic",
+          cronExpression: "0 9 * * *",
+          scope: "global",
+          enabled: false,
+          agentHostWorkspaceMode: mode,
+        });
+        assert.strictEqual(task.agentHostWorkspaceMode, mode);
+        const duplicate = await manager.duplicateTask(task.id);
+        assert.strictEqual(duplicate?.agentHostWorkspaceMode, mode);
+      }
+
+      const payload = JSON.parse(
+        fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8"),
+      ) as ScheduledTask[];
+      const meta = JSON.parse(
+        fs.readFileSync(path.join(root, "scheduledTasks.meta.json"), "utf8"),
+      ) as { tasksSnapshot: ScheduledTask[] };
+      const mirror = context.globalState.get<ScheduledTask[]>("scheduledTasks");
+      const mirrorMeta = context.globalState.get<{ tasksSnapshot: ScheduledTask[] }>(
+        "scheduledTasksSnapshot",
+      );
+      assert.ok(mirrorMeta);
+      reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      for (const task of manager.getAllTasks()) {
+        for (const tasks of [payload, meta.tasksSnapshot, mirror, mirrorMeta?.tasksSnapshot]) {
+          assert.strictEqual(
+            tasks?.find((saved) => saved.id === task.id)?.agentHostWorkspaceMode,
+            task.agentHostWorkspaceMode,
+          );
+        }
+        assert.strictEqual(
+          reloaded.getTask(task.id)?.agentHostWorkspaceMode,
+          task.agentHostWorkspaceMode,
+        );
+      }
+    } finally {
+      manager.stopScheduler();
+      reloaded?.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("omits default on create, preserves omitted updates and explicitly resets the override", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".workspace-mode-test-"));
+    const context = createMockContext(root);
+    const manager = new ScheduleManager(context);
+    let reloaded: ScheduleManager | undefined;
+    try {
+      await waitForStartupSave(manager);
+      for (const mode of [undefined, "default"] as const) {
+        const task = await manager.createTask({
+          name: "default",
+          prompt: "synthetic",
+          cronExpression: "0 9 * * *",
+          scope: "global",
+          enabled: false,
+          agentHostWorkspaceMode: mode,
+        });
+        assert.strictEqual(Object.hasOwn(task, "agentHostWorkspaceMode"), false);
+        await manager.updateTask(task.id, { agentHostWorkspaceMode: "folder" });
+        await manager.updateTask(task.id, { name: "renamed" });
+        await manager.updateTask(task.id, { agentHostWorkspaceMode: undefined });
+        assert.strictEqual(manager.getTask(task.id)?.agentHostWorkspaceMode, "folder");
+        await manager.updateTask(task.id, { agentHostWorkspaceMode: "worktree" });
+        assert.strictEqual(manager.getTask(task.id)?.agentHostWorkspaceMode, "worktree");
+        await manager.updateTask(task.id, { agentHostWorkspaceMode: "default" });
+        assert.strictEqual(Object.hasOwn(task, "agentHostWorkspaceMode"), false);
+      }
+      const payload = fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8");
+      const meta = fs.readFileSync(path.join(root, "scheduledTasks.meta.json"), "utf8");
+      assert.strictEqual(payload.includes('"agentHostWorkspaceMode"'), false);
+      assert.strictEqual(meta.includes('"agentHostWorkspaceMode"'), false);
+      assert.strictEqual(
+        JSON.stringify(context.globalState.get("scheduledTasks")).includes('"agentHostWorkspaceMode"'),
+        false,
+      );
+      assert.strictEqual(
+        JSON.stringify(context.globalState.get("scheduledTasksSnapshot")).includes('"agentHostWorkspaceMode"'),
+        false,
+      );
+      reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      assert.ok(reloaded.getAllTasks().every((task) => !Object.hasOwn(task, "agentHostWorkspaceMode")));
+    } finally {
+      manager.stopScheduler();
+      reloaded?.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid incoming modes before mutating tasks or either store", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".workspace-mode-test-"));
+    const context = createMockContext(root);
+    const manager = new ScheduleManager(context);
+    try {
+      await waitForStartupSave(manager);
+      const input = {
+        name: "original",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        scope: "global",
+        enabled: false,
+      } as const;
+      const task = await manager.createTask({ ...input, agentHostWorkspaceMode: "folder" });
+      const before = JSON.stringify(manager.getAllTasks());
+      const payload = fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8");
+      const meta = fs.readFileSync(path.join(root, "scheduledTasks.meta.json"), "utf8");
+      const mirror = JSON.stringify(context.globalState.get("scheduledTasks"));
+      const mirrorMeta = JSON.stringify(context.globalState.get("scheduledTasksSnapshot"));
+      for (const mode of [null, "", "Folder", "future", true, 0, {}]) {
+        await assert.rejects(
+          manager.createTask(JSON.parse(JSON.stringify({ ...input, agentHostWorkspaceMode: mode }))),
+          { message: messages.agentHostWorkspaceModeInvalid() },
+        );
+        await assert.rejects(
+          manager.updateTask(task.id, JSON.parse(JSON.stringify({
+            name: "must-not-save",
+            enabled: true,
+            agentHostWorkspaceMode: mode,
+          }))),
+          { message: messages.agentHostWorkspaceModeInvalid() },
+        );
+        assert.strictEqual(JSON.stringify(manager.getAllTasks()), before);
+      }
+      assert.strictEqual(fs.readFileSync(path.join(root, "scheduledTasks.json"), "utf8"), payload);
+      assert.strictEqual(fs.readFileSync(path.join(root, "scheduledTasks.meta.json"), "utf8"), meta);
+      assert.strictEqual(JSON.stringify(context.globalState.get("scheduledTasks")), mirror);
+      assert.strictEqual(JSON.stringify(context.globalState.get("scheduledTasksSnapshot")), mirrorMeta);
+    } finally {
+      manager.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("retains unknown stored modes through reload and unrelated saves until explicit repair", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".workspace-mode-test-"));
+    const now = new Date().toISOString();
+    const rawTasks = [null, "future", "default"].map((mode, index) => ({
+      id: `workspace-${index}`,
+      name: "stored",
+      prompt: "synthetic",
+      cronExpression: "0 9 * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: now,
+      updatedAt: now,
+      agentHostWorkspaceMode: mode,
+    }));
+    const context = createMockContextWithGlobalTasks(root, rawTasks);
+    const manager = new ScheduleManager(context);
+    let reloaded: ScheduleManager | undefined;
+    try {
+      await waitForStartupSave(manager);
+      for (const rawTask of rawTasks) {
+        assert.strictEqual(manager.getTask(rawTask.id)?.agentHostWorkspaceMode, rawTask.agentHostWorkspaceMode);
+        await manager.updateTask(rawTask.id, { name: "renamed" });
+      }
+      reloaded = new ScheduleManager(context);
+      await waitForStartupSave(reloaded);
+      for (const rawTask of rawTasks) {
+        assert.strictEqual(reloaded.getTask(rawTask.id)?.agentHostWorkspaceMode, rawTask.agentHostWorkspaceMode);
+        await reloaded.updateTask(rawTask.id, { agentHostWorkspaceMode: "default" });
+        assert.strictEqual(Object.hasOwn(reloaded.getTask(rawTask.id)!, "agentHostWorkspaceMode"), false);
+      }
+    } finally {
+      manager.stopScheduler();
+      reloaded?.stopScheduler();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 suite("ScheduleManager Time Window Helper Tests", () => {
   test("normalizeTimeWindowHHMM accepts and pads valid inputs", () => {
     const normalize = __testOnly.normalizeTimeWindowHHMM as
@@ -1401,16 +1586,19 @@ suite("ScheduleManager Committed Snapshot Tests", () => {
         cronExpression: "0 9 * * *",
         scope: "global",
         enabled: false,
+        agentHostWorkspaceMode: "folder",
       });
       const payloadPath = path.join(tmp, "scheduledTasks.json");
       fs.unlinkSync(payloadPath);
 
       const reloaded = new ScheduleManager(createMockContext(tmp));
       assert.strictEqual(reloaded.getTask(task.id)?.name, task.name);
+      assert.strictEqual(reloaded.getTask(task.id)?.agentHostWorkspaceMode, "folder");
       await waitForStartupSave(reloaded);
       const repaired = JSON.parse(fs.readFileSync(payloadPath, "utf8")) as
-        Array<{ id: string }>;
+        Array<{ id: string; agentHostWorkspaceMode?: string }>;
       assert.strictEqual(repaired[0].id, task.id);
+      assert.strictEqual(repaired[0].agentHostWorkspaceMode, "folder");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

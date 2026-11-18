@@ -193,6 +193,7 @@ function buildPromptExecutionOptions(
   return {
     agent: request.agent,
     chatSession: request.chatSession,
+    agentHostWorkspaceMode: request.agentHostWorkspaceMode,
     targetChatId: request.targetChatId,
     model: request.model,
     modelName: request.modelName,
@@ -740,6 +741,12 @@ function takeModelFallbackDetail(taskId: string): string | undefined {
           modelExecution?.verification,
         )
       : undefined,
+    agentHostRun?.workspaceMode && agentHostRun.workspaceModeApplication
+      ? messages.agentHostWorkspaceModeDetail(
+          agentHostRun.workspaceMode,
+          agentHostRun.workspaceModeApplication,
+        )
+      : undefined,
     chatRoute
       ? messages.executionHistoryChatRoute(
           chatRoute,
@@ -1248,6 +1255,8 @@ async function appendManualRunHistory(
       detail: takeModelFallbackDetail(task.id),
       turnOutcome: agentHostRun?.turnOutcome,
       responseText: agentHostRun?.responseText,
+      workspaceMode: agentHostRun?.workspaceMode,
+      workspaceModeApplication: agentHostRun?.workspaceModeApplication,
       modelExecution,
       ...promptMetadata,
     };
@@ -1300,6 +1309,8 @@ async function appendManualRunHistory(
       .join(" / "),
     turnOutcome: runResult.turnOutcome ?? agentHostRun?.turnOutcome,
     responseText: agentHostRun?.responseText,
+    workspaceMode: agentHostRun?.workspaceMode,
+    workspaceModeApplication: agentHostRun?.workspaceModeApplication,
     modelExecution,
     ...promptMetadata,
   });
@@ -1730,6 +1741,8 @@ async function executeTask(
         detail: takeModelFallbackDetail(task.id),
         turnOutcome: agentHostRun?.turnOutcome,
         responseText: agentHostRun?.responseText,
+        workspaceMode: agentHostRun?.workspaceMode,
+        workspaceModeApplication: agentHostRun?.workspaceModeApplication,
         modelExecution,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
@@ -2269,6 +2282,7 @@ async function resolvePromptExecution(
     prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
     agent: resolveExecutionOption(task.agent, parsed.agent),
     chatSession: task.chatSession,
+    agentHostWorkspaceMode: task.agentHostWorkspaceMode,
     model: resolveExecutionOption(task.model, parsed.model),
     modelName: task.modelName,
     modelVendor: task.modelVendor,

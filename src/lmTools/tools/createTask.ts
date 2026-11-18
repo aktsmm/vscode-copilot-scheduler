@@ -36,6 +36,7 @@ interface CreateTaskToolInput {
   modelConfiguration?: ModelConfiguration;
   enabled?: boolean;
   chatSession?: string;
+  agentHostWorkspaceMode?: CreateTaskInput["agentHostWorkspaceMode"];
   targetChatId?: string;
   autoMode?: boolean;
   modelFallback?: boolean;
@@ -67,6 +68,10 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
       input.modelConfiguration ?? (input.modelReasoningEffort ? undefined : {}),
     enabled: input.enabled ?? true,
     chatSession: input.chatSession as CreateTaskInput["chatSession"],
+    ...(input.agentHostWorkspaceMode !== undefined &&
+    input.agentHostWorkspaceMode !== "default"
+      ? { agentHostWorkspaceMode: input.agentHostWorkspaceMode }
+      : {}),
     targetChatId: input.targetChatId,
     autoMode: input.autoMode,
     modelFallback: input.modelFallback,
