@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validate the requested isolation against the Host configuration and the created session before dispatch. Unsupported or ignored choices block the run without falling back to another chat.
 - Preserve the original location when continuing an existing session, and distinguish confirmed new-session configuration from a creation preference that does not apply to a resumed session.
 
+### Notes
+
+- Verified with the installed package on VS Code 1.147.0 (Windows), including a one-time scheduled run, using GPT 6.2 Sol via Codex Bridge and a synthetic Git repository. VS Code 1.146 was confirmed only from the Host's configuration source. A Host-reported model ID is not independent backend verification.
+
 ## [1.12.0] - 2026-11-18
 
 ### Added
