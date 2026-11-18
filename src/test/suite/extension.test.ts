@@ -391,6 +391,41 @@ suite("Extension Test Suite", () => {
     );
   });
 
+  test("Stable refuses a request to validate a Pre-release package", () => {
+    const root = path.resolve(__dirname, "../../..");
+    const workflow = fs.readFileSync(
+      path.join(root, ".github/workflows/publish-marketplace.yml"),
+      "utf8",
+    );
+    const metadata =
+      /- name: Read package version[\s\S]*?run:\s*\|([\s\S]*?)\r?\n {6}- name:/.exec(
+        workflow,
+      );
+    assert.ok(metadata);
+    for (const packagePreRelease of [false, true]) {
+      const script: string = metadata[1]
+        .replace(/\$\{\{ inputs.publish \}\}/g, "false")
+        .replace(
+          /\$\{\{ inputs.package_pre_release \}\}/g,
+          String(packagePreRelease),
+        )
+        .replace(/ >> \$env:GITHUB_OUTPUT/g, "");
+      const result = spawnSync(
+        "pwsh",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          cwd: root,
+          env: { ...process.env, GITHUB_REF: "refs/heads/master" },
+          encoding: "utf8",
+        },
+      );
+      assert.strictEqual(result.status, packagePreRelease ? 1 : 0, result.stderr);
+      if (packagePreRelease) {
+        assert.match(result.stderr, /requires the preview workflow/);
+      }
+    }
+  });
+
   test("registry gate rejects an empty lockfile rather than reporting a vacuous pass", () => {
     const root = path.resolve(__dirname, "../../..");
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-lock-"));
@@ -1217,6 +1252,9 @@ suite("Execution History Queue Tests", () => {
     const dispatched = buildSummary("Audit task", "success", nextRun);
     assert.ok(dispatched.includes(messages.executionResultDispatched()));
 
+    const queued = buildSummary("Audit task", "success", nextRun, "queued");
+    assert.ok(queued.includes(messages.executionResultQueued()));
+
     const completed = buildSummary("Audit task", "success", nextRun, "completed");
     assert.ok(completed.includes(messages.executionResultTurnCompleted()));
 
@@ -1299,7 +1337,15 @@ suite("Execution History Queue Tests", () => {
 
   test("history quick picks distinguish Agent Host completion and uncertain outcomes", async () => {
     const { __testOnly } = await import("../../extension");
-    const [completed, unknown] = __testOnly.buildExecutionHistoryQuickPickItems([
+    const [queued, completed, unknown] = __testOnly.buildExecutionHistoryQuickPickItems([
+      {
+        taskId: "queued",
+        taskName: "Queued",
+        trigger: "manual",
+        status: "success",
+        executedAt: "2026-07-30T09:00:00.000Z",
+        turnOutcome: "queued",
+      },
       {
         taskId: "completed",
         taskName: "Completed",
@@ -1318,6 +1364,9 @@ suite("Execution History Queue Tests", () => {
         turnOutcome: "unknown",
       },
     ]);
+    assert.ok(queued.description.includes(messages.executionResultQueued()));
+    assert.ok(!queued.description.includes(messages.executionResultDispatched()));
+    assert.ok(queued.detail.includes(messages.executionHistoryTurnQueued()));
     assert.ok(completed.description.includes(messages.executionResultTurnCompleted()));
     assert.ok(completed.detail.includes(messages.executionHistoryResponseTextNotObserved()));
     assert.ok(unknown.detail.includes(messages.executionHistoryTurnUnknown()));
@@ -1981,7 +2030,9 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelVendor: "OpenAI",
       modelFamily: "gpt-5.4",
       modelVersion: "high",
+      agentHostModelId: "OpenAI/provider/gpt-5.4",
       modelReasoningEffort: "high",
+      preventAgentHostFallback: true,
       scope: "global",
       promptSource: "inline",
       createdAt: new Date(),
@@ -1996,7 +2047,9 @@ suite("Webview Test Prompt Wiring Tests", () => {
       modelVendor: "OpenAI",
       modelFamily: "gpt-5.4",
       modelVersion: "high",
+      agentHostModelId: "OpenAI/provider/gpt-5.4",
       modelReasoningEffort: "high",
+      preventAgentHostFallback: true,
       targetChatId: undefined,
       attachFilePaths: undefined,
     });

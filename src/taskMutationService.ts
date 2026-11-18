@@ -1,6 +1,7 @@
 import {
   findBestMatchingModel,
   hasModelSelection,
+  isAgentHostModelBindingCompatible,
   modelInfoToSelection,
   normalizeModelSelection,
 } from "./modelSelection";
@@ -74,6 +75,10 @@ export type ModelCatalogLoader = () => Promise<{
   models: readonly ModelInfo[];
 }>;
 
+export type AgentHostModelCatalogLoader = () => Promise<
+  readonly { id: string }[]
+>;
+
 export type TargetChatBindingResolver = (
   bindingId: string,
   expectedWorkspacePath?: string,
@@ -93,6 +98,7 @@ type ClientDependencies = {
   scheduleManager: ScheduleManager;
   /** Optional so existing callers and tests keep working without a catalog. */
   resolveModelSelection?: ModelSelectionResolver;
+  loadAgentHostModels?: AgentHostModelCatalogLoader;
   resolveTargetChatBinding?: TargetChatBindingResolver;
 };
 
@@ -125,6 +131,7 @@ const MODEL_SELECTION_KEYS = [
   "modelVendor",
   "modelFamily",
   "modelVersion",
+  "agentHostModelId",
   "modelReasoningEffort",
 ] as const;
 
@@ -146,6 +153,7 @@ function toExplicitModelSelection(
     modelVendor: selection.modelVendor ?? "",
     modelFamily: selection.modelFamily ?? "",
     modelVersion: selection.modelVersion ?? "",
+    agentHostModelId: selection.agentHostModelId ?? "",
     modelReasoningEffort: selection.modelReasoningEffort ?? "",
     modelConfiguration: selection.modelConfiguration,
   };
@@ -224,16 +232,27 @@ function mergeModelSelection(
   return merged;
 }
 
-function buildEffectiveModelSelection(
+export function buildEffectiveModelSelection(
   current: ModelSelectionFields,
   updates: ModelSelectionFields,
 ): ModelSelectionFields {
+  const bindingChanged =
+    (updates.model !== undefined && updates.model !== current.model) ||
+    (updates.modelVendor !== undefined &&
+      updates.modelVendor !== current.modelVendor) ||
+    (updates.modelFamily !== undefined &&
+      updates.modelFamily !== current.modelFamily) ||
+    (updates.modelVersion !== undefined &&
+      updates.modelVersion !== current.modelVersion);
   if (typeof updates.model === "string" && updates.model.trim().length > 0) {
     const sameIdentity =
       updates.model.trim() === current.model &&
       (updates.modelVendor === undefined ||
         updates.modelVendor === current.modelVendor);
     const requested = mergeModelSelection(sameIdentity ? current : {}, updates);
+    if (bindingChanged && updates.agentHostModelId === undefined) {
+      requested.agentHostModelId = undefined;
+    }
     requested.modelReasoningEffort =
       updates.modelReasoningEffort ??
       (updates.modelConfiguration !== undefined
@@ -249,6 +268,9 @@ function buildEffectiveModelSelection(
     return requested;
   }
   const merged = mergeModelSelection(current, updates);
+  if (bindingChanged && updates.agentHostModelId === undefined) {
+    merged.agentHostModelId = undefined;
+  }
   if (
     current.modelConfiguration !== undefined &&
     updates.modelConfiguration === undefined &&
@@ -258,6 +280,39 @@ function buildEffectiveModelSelection(
     merged.modelConfiguration = {};
   }
   return merged;
+}
+
+export async function validateAgentHostModelChoice(
+  selection: ModelSelectionFields,
+  previous: ModelSelectionFields | undefined,
+  loadCatalog: AgentHostModelCatalogLoader | undefined,
+): Promise<void> {
+  const next = normalizeModelSelection(selection);
+  if (!next.agentHostModelId) return;
+  if (!isAgentHostModelBindingCompatible(next)) {
+    throw new Error(messages.agentHostModelBindingInvalid());
+  }
+  const current = normalizeModelSelection(previous);
+  if (
+    next.agentHostModelId === current.agentHostModelId &&
+    next.model === current.model &&
+    next.modelVendor === current.modelVendor &&
+    next.modelFamily === current.modelFamily &&
+    next.modelVersion === current.modelVersion
+  ) {
+    return;
+  }
+  if (!loadCatalog) throw new Error(messages.agentHostModelsLoadFailed());
+  let models: readonly { id: string }[];
+  try {
+    models = await loadCatalog();
+  } catch {
+    throw new Error(messages.agentHostModelsLoadFailed());
+  }
+  if (models.length === 0) throw new Error(messages.agentHostModelsEmpty());
+  const matches = models.filter((model) => model.id === next.agentHostModelId);
+  if (matches.length > 1) throw new Error(messages.agentHostModelsDuplicate());
+  if (matches.length === 0) throw new Error(messages.agentHostModelNotInCatalog());
 }
 
 type ModelResolutionOutcome =
@@ -319,6 +374,13 @@ async function resolveModelFieldsForMutationUnchecked(
   }
 
   const normalizedEffective = normalizeModelSelection(effective);
+  if (!isAgentHostModelBindingCompatible(normalizedEffective)) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: messages.agentHostModelBindingInvalid(),
+    };
+  }
   if (
     normalizedEffective.modelConfiguration !== undefined &&
     normalizedEffective.modelReasoningEffort
@@ -465,8 +527,20 @@ export function createModelSelectionResolver(
       };
     }
 
+    const sameHostBinding =
+      normalized.model === matched.id &&
+      (!normalized.modelVendor || normalized.modelVendor === matched.vendor) &&
+      (!normalized.modelFamily || normalized.modelFamily === matched.family) &&
+      (!normalized.modelVersion || normalized.modelVersion === matched.version);
+    if (normalized.agentHostModelId && !sameHostBinding) {
+      return {
+        ok: false,
+        message: messages.agentHostModelBindingInvalid(),
+      };
+    }
     const matchedSelection = {
       ...modelInfoToSelection(matched),
+      agentHostModelId: normalized.agentHostModelId,
       modelReasoningEffort: normalized.modelReasoningEffort,
       modelConfiguration: normalized.modelConfiguration,
     };
@@ -541,6 +615,7 @@ export function createLmToolMutationClient(
   const {
     scheduleManager,
     resolveModelSelection,
+    loadAgentHostModels,
     resolveTargetChatBinding: resolveTargetChat,
   } = deps;
 
@@ -585,6 +660,11 @@ export function createLmToolMutationClient(
             message: modelOutcome.message,
           };
         }
+        await validateAgentHostModelChoice(
+          modelOutcome.selection ?? mergeModelSelection({}, input),
+          undefined,
+          loadAgentHostModels,
+        );
         const warning = collectCronWarning(
           scheduleManager,
           input.cronExpression,
@@ -684,10 +764,11 @@ export function createLmToolMutationClient(
           delete updates.modelConfiguration;
           for (const field of fields) delete updates[field];
         }
+        const effectiveSelection = buildEffectiveModelSelection(existing, updates);
         const modelOutcome = await resolveModelFieldsForMutation(
           resolveModelSelection,
           updates,
-          buildEffectiveModelSelection(existing, updates),
+          effectiveSelection,
         );
         if (!modelOutcome.ok) {
           return {
@@ -696,6 +777,11 @@ export function createLmToolMutationClient(
             message: modelOutcome.message,
           };
         }
+        await validateAgentHostModelChoice(
+          modelOutcome.selection ?? effectiveSelection,
+          existing,
+          loadAgentHostModels,
+        );
         const warning = collectCronWarning(
           scheduleManager,
           updates.cronExpression,

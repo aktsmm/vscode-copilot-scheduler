@@ -20,6 +20,8 @@ export type AgentHostFailureKind =
   | "unavailable"
   /** The host cannot honour part of the task; running elsewhere is safe. */
   | "unsupported"
+  /** The selected model cannot be identified safely; do not choose another route. */
+  | "modelIdentity"
   /** The run started (or may have) and failed; do not run it a second time. */
   | "failed";
 
@@ -334,10 +336,14 @@ export class AgentHostConnection {
 export interface AgentHostModelOption {
   type?: string;
   enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
 }
 
 export interface AgentHostModelInfo {
   id: string;
+  name?: string;
+  _meta?: { byokModelIdentifier?: string };
   configSchema?: { properties?: Record<string, AgentHostModelOption> };
 }
 
@@ -356,7 +362,7 @@ export function mapModelConfiguration(
   const config: Record<string, string | number> = {};
 
   for (const [key, value] of Object.entries(requested)) {
-    if (value === undefined || value === "") {
+    if (value === undefined) {
       continue;
     }
     const hostKey = hostKeys[key] ?? key;
@@ -368,14 +374,38 @@ export function mapModelConfiguration(
       );
     }
     let resolved: string | number = value;
-    if (option.type === "number" && typeof value !== "number") {
-      resolved = Number(value);
-      if (!Number.isFinite(resolved)) {
+    if (option.type === "number" || option.type === "integer") {
+      if (typeof value === "string" && !value.trim()) {
         throw new AgentHostError(
           "unsupported",
           `The "${key}" value is not a number.`,
         );
       }
+      resolved = typeof value === "number" ? value : Number(value);
+      if (
+        !Number.isFinite(resolved) ||
+        (option.type === "integer" && !Number.isInteger(resolved)) ||
+        (option.minimum !== undefined && resolved < option.minimum) ||
+        (option.maximum !== undefined && resolved > option.maximum)
+      ) {
+        throw new AgentHostError(
+          "unsupported",
+          `The "${key}" value is outside the model's accepted range.`,
+        );
+      }
+    } else if (
+      (option.type === "string" && typeof value !== "string") ||
+      (option.type !== undefined && option.type !== "string")
+    ) {
+      throw new AgentHostError(
+        "unsupported",
+        `The "${key}" value has an unsupported type.`,
+      );
+    } else if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new AgentHostError(
+        "unsupported",
+        `The "${key}" value is not a finite number.`,
+      );
     }
     if (option.enum && !option.enum.includes(resolved)) {
       throw new AgentHostError(
@@ -403,6 +433,8 @@ export interface AgentHostTurnRequest {
   text: string;
   cwdUri?: string;
   modelId?: string;
+  /** The model ID was explicitly chosen from the Agent Host catalog. */
+  hostModelIdExplicit?: boolean;
   modelOptions?: Record<string, string | number | undefined>;
   agentUri?: string;
   attachments?: AgentHostAttachment[];
@@ -437,6 +469,8 @@ export interface AgentHostQueuedMessageRequest {
   taskId?: string;
   expectedWorkspacePath?: string;
   modelId?: string;
+  /** The model ID was explicitly chosen from the Agent Host catalog. */
+  hostModelIdExplicit?: boolean;
   modelOptions?: Record<string, string | number | undefined>;
   agentUri?: string;
   attachments?: AgentHostAttachment[];
@@ -500,6 +534,122 @@ async function initializeAgentHost(
     clientInfo: { name: "copilot-scheduler", version: "1" },
   });
   return init.snapshots?.[0]?.state?.agents ?? [];
+}
+
+function requireAgentHostAgent(
+  agents: readonly Record<string, unknown>[],
+): Record<string, unknown> {
+  const agent = agents.find((candidate) => candidate.provider === PROVIDER);
+  if (!agent) {
+    throw new AgentHostError("unsupported", "The Agent Host has no Copilot agent.");
+  }
+  return agent;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+type AgentHostCatalogModel = Record<string, unknown> & { id: string };
+
+function getAgentHostModels(
+  agents: readonly Record<string, unknown>[],
+): AgentHostCatalogModel[] {
+  const agent = requireAgentHostAgent(agents);
+  if (!Array.isArray(agent.models)) {
+    throw new AgentHostError("unavailable", "The Agent Host model catalog is unavailable.");
+  }
+  return agent.models.map((value: unknown) => {
+    if (!isRecord(value) || typeof value.id !== "string" || !value.id.trim()) {
+      throw new AgentHostError("unavailable", "The Agent Host model catalog is invalid.");
+    }
+    return { ...value, id: value.id };
+  });
+}
+
+function selectAgentHostModel(
+  agents: readonly Record<string, unknown>[],
+  modelId: string,
+  explicit: boolean,
+): AgentHostModelInfo {
+  const catalog = getAgentHostModels(agents);
+  if (catalog.length === 0) {
+    throw new AgentHostError(
+      "unavailable",
+      "The Agent Host model catalog is empty or not ready.",
+    );
+  }
+  const matches = catalog.filter((model) => model.id === modelId);
+  if (matches.length > 1) {
+    throw new AgentHostError("modelIdentity", "The Agent Host model ID is ambiguous.");
+  }
+  const rawModel = matches[0];
+  if (!rawModel) {
+    throw new AgentHostError(
+      "unsupported",
+      "The Agent Host does not offer the requested model.",
+    );
+  }
+  if (rawModel._meta !== undefined && !isRecord(rawModel._meta)) {
+    throw new AgentHostError("modelIdentity", "The Agent Host model metadata is invalid.");
+  }
+  const byokId = isRecord(rawModel._meta)
+    ? rawModel._meta.byokModelIdentifier
+    : undefined;
+  if (byokId !== undefined && typeof byokId !== "string") {
+    throw new AgentHostError("modelIdentity", "The Agent Host model metadata is invalid.");
+  }
+  if (!explicit && (byokId !== undefined || modelId.includes("/"))) {
+    throw new AgentHostError(
+      "modelIdentity",
+      "The Agent Host model must be selected explicitly.",
+    );
+  }
+  const model: AgentHostModelInfo = { id: rawModel.id };
+  const schema = rawModel.configSchema;
+  const properties = isRecord(schema) ? schema.properties : undefined;
+  if (isRecord(properties)) {
+    const options: Record<string, AgentHostModelOption> = {};
+    for (const [key, option] of Object.entries(properties)) {
+      if (
+        isRecord(option) &&
+        (option.type === undefined || typeof option.type === "string") &&
+        (option.enum === undefined || Array.isArray(option.enum)) &&
+        (option.minimum === undefined ||
+          (typeof option.minimum === "number" && Number.isFinite(option.minimum))) &&
+        (option.maximum === undefined ||
+          (typeof option.maximum === "number" && Number.isFinite(option.maximum)))
+      ) {
+        options[key] = {
+          ...(typeof option.type === "string" ? { type: option.type } : {}),
+          ...(Array.isArray(option.enum) ? { enum: option.enum } : {}),
+          ...(typeof option.minimum === "number"
+            ? { minimum: option.minimum }
+            : {}),
+          ...(typeof option.maximum === "number"
+            ? { maximum: option.maximum }
+            : {}),
+        };
+      }
+    }
+    model.configSchema = { properties: options };
+  }
+  return model;
+}
+
+/** Lists model IDs actually advertised by the current Agent Host. */
+export async function listAgentHostModels(
+  endpoint: AgentHostEndpoint,
+): Promise<AgentHostModelInfo[]> {
+  const connection = await AgentHostConnection.open(endpoint);
+  try {
+    return getAgentHostModels(await initializeAgentHost(connection)).map((model) => ({
+      id: model.id,
+      ...(typeof model.name === "string" ? { name: model.name } : {}),
+    }));
+  } finally {
+    connection.close();
+  }
 }
 
 async function listSessionSummaries(
@@ -726,24 +876,14 @@ export async function queueAgentHostMessage(
   const connection = await AgentHostConnection.open(request.endpoint);
   try {
     const agents = await initializeAgentHost(connection);
-    const agent = agents.find((candidate) => candidate.provider === PROVIDER) as
-      | { models?: AgentHostModelInfo[] }
-      | undefined;
-    if (!agent) {
-      throw new AgentHostError(
-        "unsupported",
-        "The Agent Host has no Copilot agent.",
-      );
-    }
+    requireAgentHostAgent(agents);
     let model: { id: string; config?: Record<string, string | number> } | undefined;
     if (request.modelId) {
-      const info = (agent.models ?? []).find((item) => item.id === request.modelId);
-      if (!info) {
-        throw new AgentHostError(
-          "unsupported",
-          "The Agent Host does not offer the requested model.",
-        );
-      }
+      const info = selectAgentHostModel(
+        agents,
+        request.modelId,
+        request.hostModelIdExplicit === true,
+      );
       const config = mapModelConfiguration(info, request.modelOptions ?? {});
       model = {
         id: info.id,
@@ -751,7 +891,7 @@ export async function queueAgentHostMessage(
       };
     } else if (
       Object.values(request.modelOptions ?? {}).some(
-        (value) => value !== undefined && value !== "",
+        (value) => value !== undefined,
       )
     ) {
       throw new AgentHostError(
@@ -934,7 +1074,8 @@ export async function runAgentHostTurn(
       prepared = await prepareTurn(connection, request);
     } catch (error) {
       // Nothing has been sent yet, so another route can still run the task.
-      throw error instanceof AgentHostError && error.kind === "unsupported"
+      throw error instanceof AgentHostError &&
+        (error.kind === "unsupported" || error.kind === "modelIdentity")
         ? error
         : new AgentHostError(
             "unavailable",
@@ -955,29 +1096,22 @@ async function prepareTurn(
   model?: { id: string; config?: Record<string, string | number> };
 }> {
   const agents = await initializeAgentHost(connection);
-  const agent = agents.find((candidate) => candidate.provider === PROVIDER) as
-    | { models?: AgentHostModelInfo[] }
-    | undefined;
-  if (!agent) {
-    throw new AgentHostError("unsupported", "The Agent Host has no Copilot agent.");
-  }
+  requireAgentHostAgent(agents);
 
   let model: { id: string; config?: Record<string, string | number> } | undefined;
   if (request.modelId) {
-    const info = (agent.models ?? []).find((m) => m.id === request.modelId);
-    if (!info) {
-      throw new AgentHostError(
-        "unsupported",
-        "The Agent Host does not offer the requested model.",
-      );
-    }
+    const info = selectAgentHostModel(
+      agents,
+      request.modelId,
+      request.hostModelIdExplicit === true,
+    );
     const config = mapModelConfiguration(info, request.modelOptions ?? {});
     model = {
       id: info.id,
       ...(Object.keys(config).length > 0 ? { config } : {}),
     };
   } else if (
-    Object.values(request.modelOptions ?? {}).some((v) => v !== undefined && v !== "")
+    Object.values(request.modelOptions ?? {}).some((v) => v !== undefined)
   ) {
     throw new AgentHostError(
       "unsupported",
@@ -1224,7 +1358,7 @@ function runTurn(
     );
 
     const dispatch = () => {
-      if (settled) return;
+      if (settled || dispatchStarted) return;
       dispatchStarted = true;
       void connection
         .dispatch(ref.chatUri, {
@@ -1266,6 +1400,16 @@ function runTurn(
         () => {
           guardPending = false;
           if (pendingOutcome) finish(pendingOutcome);
+          else if (!dispatchStarted) {
+            finish(() =>
+              reject(
+                new AgentHostError(
+                  "failed",
+                  "The task reservation did not allow a turn.",
+                ),
+              ),
+            );
+          }
         },
         (error: unknown) =>
           finish(() =>

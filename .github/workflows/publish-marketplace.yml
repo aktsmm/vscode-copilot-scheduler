@@ -16,6 +16,11 @@ on:
         required: true
         type: boolean
         default: false
+      package_pre_release:
+        description: Verify a Marketplace Pre-release package on a preview branch
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -53,6 +58,9 @@ jobs:
           $preview = $ref.StartsWith('refs/tags/preview-v') -or $ref.StartsWith('refs/heads/preview/')
           if ($preview -and "${{ inputs.publish }}" -eq 'true') {
             throw "Preview builds cannot publish to VS Code Marketplace."
+          }
+          if ("${{ inputs.package_pre_release }}" -eq 'true') {
+            throw "Pre-release package validation requires the preview workflow."
           }
           $tagPrefix = if ($preview) { 'preview-v' } else { 'v' }
 

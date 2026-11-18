@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { ScheduleManager } from "../scheduleManager";
 import {
   createLmToolMutationClient,
+  type AgentHostModelCatalogLoader,
   type ModelSelectionResolver,
   type TargetChatBindingResolver,
 } from "../taskMutationService";
@@ -26,6 +27,7 @@ import { createSchedulerUpdateTaskTool } from "./tools/updateTask";
 export interface LmToolsRegistrationOptions {
   catalogProvider?: SchedulerCatalogProvider;
   resolveModelSelection?: ModelSelectionResolver;
+  loadAgentHostModels?: AgentHostModelCatalogLoader;
   resolveTargetChatBinding?: TargetChatBindingResolver;
   runTask?: ManualTaskRunner;
 }
@@ -48,6 +50,7 @@ export function registerLmTools(
   const mutationClient = createLmToolMutationClient({
     scheduleManager,
     resolveModelSelection: options.resolveModelSelection,
+    loadAgentHostModels: options.loadAgentHostModels,
     resolveTargetChatBinding: options.resolveTargetChatBinding,
   });
 

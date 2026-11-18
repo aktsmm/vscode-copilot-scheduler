@@ -104,6 +104,63 @@ export function formatConfirmationCode(value: string): string {
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 
+interface AgentHostToolFields {
+  agentHostModelId?: unknown;
+  preventAgentHostFallback?: unknown;
+}
+
+export function describeAgentHostFieldsForConfirmation(
+  input: AgentHostToolFields,
+  showDefaultFallback = false,
+): string[] {
+  const details: string[] = [];
+  if (input.agentHostModelId !== undefined) {
+    const id =
+      typeof input.agentHostModelId !== "string"
+        ? "(invalid)"
+        : input.agentHostModelId
+          ? formatConfirmationCode(input.agentHostModelId)
+          : "(empty)";
+    details.push(`- agentHostModelId: ${id}`);
+  }
+  if (showDefaultFallback || input.preventAgentHostFallback !== undefined) {
+    const value =
+      input.preventAgentHostFallback === undefined
+        ? "false (default)"
+        : typeof input.preventAgentHostFallback === "boolean"
+          ? String(input.preventAgentHostFallback)
+          : "(invalid)";
+    details.push(`- preventAgentHostFallback: ${value}`);
+  }
+  return details;
+}
+
+export function validateAgentHostToolFields(
+  input: AgentHostToolFields,
+): vscode.LanguageModelToolResult | undefined {
+  if (
+    input.agentHostModelId !== undefined &&
+    typeof input.agentHostModelId !== "string"
+  ) {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "validation",
+      message: "Field 'agentHostModelId' must be a string.",
+    });
+  }
+  if (
+    input.preventAgentHostFallback !== undefined &&
+    typeof input.preventAgentHostFallback !== "boolean"
+  ) {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "validation",
+      message: "Field 'preventAgentHostFallback' must be a boolean.",
+    });
+  }
+  return undefined;
+}
+
 /**
  * Attachment contents are sent to the model on every later unattended run, so
  * the confirmation has to name the files, not just how many there are.

@@ -460,7 +460,20 @@ suite("Configured Model Provider", () => {
       token.dispose();
     }
   });
-  test("unsupported message roles are blocked before source lookup or token counting", async () => {
+  test("unsupported roles are blocked before lookup for each System permission", async () => {
+    const extension = Object.getOwnPropertyDescriptor(
+      vscode.extensions,
+      "getExtension",
+    )!;
+    let systemPermission = false;
+    Object.defineProperty(vscode.extensions, "getExtension", {
+      ...extension,
+      value: () => ({
+        packageJSON: {
+          enabledApiProposals: systemPermission ? ["languageModelSystem"] : [],
+        },
+      }),
+    });
     let calls = 0;
     const provider = new ConfiguredModelProvider(async () => {
       calls++;
@@ -469,12 +482,17 @@ suite("Configured Model Provider", () => {
     const token = new vscode.CancellationTokenSource();
     try {
       const binding = provider.bind(model, { mode: "normal:low" });
-      for (const role of [3, 99]) {
-        const message = {
-          role,
+      for (const [enabled, role] of [
+        [false, 3],
+        [false, 99],
+        [true, 99],
+      ] as const) {
+        systemPermission = enabled;
+        const message: vscode.LanguageModelChatRequestMessage = {
+          role: role as vscode.LanguageModelChatMessageRole,
           name: undefined,
           content: [new vscode.LanguageModelTextPart("synthetic")],
-        } as vscode.LanguageModelChatRequestMessage;
+        };
         for (const operation of [
           () =>
             provider.provideLanguageModelChatResponse(
@@ -497,6 +515,7 @@ suite("Configured Model Provider", () => {
       assert.strictEqual(calls, 0);
       assert.deepStrictEqual(binding.configuration, { mode: "normal:low" });
     } finally {
+      Object.defineProperty(vscode.extensions, "getExtension", extension);
       provider.dispose();
       token.dispose();
     }

@@ -5,10 +5,12 @@ import * as vscode from "vscode";
 import { cleanupOrphanedAtomicWriteTemps, writeFileAtomically } from "./atomic-file-write";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import { logError } from "./logger";
+import { classifyModelReport } from "./modelSelection";
 import { withTaskStoreLock } from "./task-store-lock";
 import type {
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
+  ModelExecutionObservation,
 } from "./types";
 
 export const EXECUTION_HISTORY_KEY = "executionHistory";
@@ -63,6 +65,8 @@ export type ExecutionHistoryEntry = {
   turnOutcome?: AgentHostTurnOutcome;
   /** Whether non-whitespace assistant text was observed during a completed turn. */
   responseText?: AgentHostResponseTextObservation;
+  /** Route and host/CLI model report; a matching report does not verify the backend. */
+  modelExecution?: ModelExecutionObservation;
 };
 
 type StoreContext = Pick<vscode.ExtensionContext, "globalState"> &
@@ -252,6 +256,46 @@ function normalizeExecutionHistoryEntry(
       entry.responseText === "unknown")
       ? entry.responseText
       : undefined;
+  const observation = entry.modelExecution;
+  const route = observation?.route;
+  const validRoute =
+    route === "agentHost" ||
+    route === "chat" ||
+    route === "local" ||
+    route === "remote" ||
+    route === "copilotCli";
+  const normalizeModelId = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim()
+      ? sanitizeAbsolutePathDetails(value.trim())
+          .replace(/\s+/g, " ")
+          .slice(0, 512)
+      : undefined;
+  const requestedModel = normalizeModelId(observation?.requestedModel);
+  const reportedModel = normalizeModelId(observation?.reportedModel);
+  const rawVerification = classifyModelReport(
+    typeof observation?.requestedModel === "string"
+      ? observation.requestedModel
+      : undefined,
+    typeof observation?.reportedModel === "string"
+      ? observation.reportedModel
+      : undefined,
+  );
+  const storedVerification = classifyModelReport(requestedModel, reportedModel);
+  const modelExecution: ModelExecutionObservation | undefined =
+    validRoute && route
+      ? {
+          route,
+          ...(requestedModel ? { requestedModel } : {}),
+          ...(reportedModel ? { reportedModel } : {}),
+          verification:
+            (route === "agentHost" || route === "copilotCli") &&
+            !(route === "agentHost" && turnOutcome === "queued") &&
+            observation?.verification === rawVerification &&
+            observation.verification === storedVerification
+              ? storedVerification
+              : "unverified",
+        }
+      : undefined;
 
   return {
     taskId: entry.taskId,
@@ -275,6 +319,7 @@ function normalizeExecutionHistoryEntry(
     attachmentCount,
     turnOutcome,
     responseText,
+    modelExecution,
   };
 }
 

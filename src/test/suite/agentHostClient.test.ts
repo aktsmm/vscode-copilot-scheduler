@@ -9,6 +9,7 @@ import {
   AgentHostError,
   findAgentHostEndpoint,
   listAgentHostChats,
+  listAgentHostModels,
   mapModelConfiguration,
   queueAgentHostMessage,
   resolveUserDataDir,
@@ -58,6 +59,7 @@ async function startFakeHost(
     }>;
     queueAck?: boolean;
     queueRejected?: boolean;
+    models?: unknown;
   } = {},
 ): Promise<FakeHost> {
   const socketPath =
@@ -104,7 +106,12 @@ async function startFakeHost(
             snapshots: [
               {
                 state: {
-                  agents: [{ provider: "copilotcli", models: MODELS }],
+                  agents: [{
+                    provider: "copilotcli",
+                    models: Object.hasOwn(behaviour, "models")
+                      ? behaviour.models
+                      : MODELS,
+                  }],
                 },
               },
             ],
@@ -325,6 +332,7 @@ suite("Agent Host client", () => {
 
   test("queues a stable per-task message and refuses a workspace mismatch", async () => {
     const chatUri = "ahp-copilotcli:/chat-1";
+    const hostModelId = "vendor/group/model::variant";
     const session = {
       resource: "ahp-copilotcli:/session-1",
       provider: "copilotcli",
@@ -339,6 +347,12 @@ suite("Agent Host client", () => {
     };
     const host = await startFakeHost(tmp, {
       sessionPages: [{ items: [session] }],
+      models: [{
+        id: hostModelId,
+        configSchema: {
+          properties: { thinkingLevel: { type: "string", enum: ["high"] } },
+        },
+      }],
     });
     try {
       const request = {
@@ -347,6 +361,9 @@ suite("Agent Host client", () => {
         expectedWorkspacePath: tmp,
         taskId: "stable-task-id",
         text: "Review today's changes",
+        modelId: hostModelId,
+        hostModelIdExplicit: true,
+        modelOptions: { reasoningEffort: "high" },
       };
       const first = await queueAgentHostMessage(request);
       const second = await queueAgentHostMessage(request);
@@ -361,6 +378,10 @@ suite("Agent Host client", () => {
       const firstAction = queued[0].params.action as Record<string, unknown>;
       assert.strictEqual(firstAction.kind, "queued");
       assert.strictEqual(firstAction.id, first.messageId);
+      assert.deepStrictEqual(
+        (firstAction.message as { model: unknown }).model,
+        { id: hostModelId, config: { thinkingLevel: "high" } },
+      );
 
       await assert.rejects(
         queueAgentHostMessage({
@@ -444,6 +465,55 @@ suite("Agent Host client", () => {
         (error: unknown) => error === blocked,
       );
       assert.strictEqual(starts(), 1);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a guard that skips dispatch fails without sending a turn", async () => {
+    const host = await startFakeHost(tmp);
+    try {
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          timeoutMs: 200,
+          dispatchGuard: async () => {},
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.message === "The task reservation did not allow a turn.",
+      );
+      assert.ok(!host.calls.some(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnStarted",
+      ));
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a guard cannot dispatch the same turn twice", async () => {
+    let responseScheduled = false;
+    const host = await startFakeHost(tmp, {
+      finish: (send) => {
+        if (!responseScheduled) {
+          responseScheduled = true;
+          setTimeout(() => send({ type: "chat/turnComplete" }), 50);
+        }
+      },
+    });
+    try {
+      await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        dispatchGuard: async (dispatch) => { dispatch(); dispatch(); },
+      });
+      assert.strictEqual(host.calls.filter(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnStarted",
+      ).length, 1);
     } finally {
       await host.close();
     }
@@ -625,6 +695,32 @@ suite("Agent Host client", () => {
         {},
       );
     });
+
+    test("rejects explicit invalid types, empty numbers and out-of-range values", () => {
+      const boundedModel = {
+        id: "bounded",
+        configSchema: {
+          properties: {
+            thinkingLevel: { type: "string", enum: ["low", "high"] },
+            contextSize: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        },
+      };
+      for (const options of [
+        { reasoningEffort: 1 },
+        { reasoningEffort: "" },
+        { contextSize: "" },
+        { contextSize: 1.5 },
+        { contextSize: 101 },
+      ]) {
+        assert.throws(
+          () => mapModelConfiguration(boundedModel, options),
+          (error: unknown) =>
+            error instanceof AgentHostError && error.kind === "unsupported",
+        );
+      }
+      assert.deepStrictEqual(mapModelConfiguration(boundedModel, {}), {});
+    });
   });
 
   suite("running a turn", () => {
@@ -698,6 +794,83 @@ suite("Agent Host client", () => {
           error instanceof AgentHostError && error.kind === "unsupported",
       );
       assert.ok(!host.calls.some((c) => c.method === "dispatchAction"));
+    });
+
+    test("requires an explicit opaque BYOK ID and sends it for new and continued turns", async () => {
+      const id = "openai-codex/Codex Bridge/default::gpt-6.2-sol";
+      host = await startFakeHost(tmp, {
+        models: [{
+          id,
+          name: "Synthetic Bridge",
+          _meta: { byokModelIdentifier: "opaque-renderer-identifier" },
+          configSchema: {
+            properties: {
+              thinkingLevel: { type: "string", enum: ["high"] },
+            },
+          },
+        }],
+      });
+      assert.deepStrictEqual(await listAgentHostModels(host.endpoint), [
+        { id, name: "Synthetic Bridge" },
+      ]);
+      await assert.rejects(
+        runAgentHostTurn({ ...baseRequest(host.endpoint), modelId: id }),
+        (error: unknown) =>
+          error instanceof AgentHostError && error.kind === "modelIdentity",
+      );
+      assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
+      for (const resume of [
+        undefined,
+        { sessionUri: "ahp-session:/old", chatUri: "ahp-chat:/old" },
+      ]) {
+        await runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          modelId: id,
+          hostModelIdExplicit: true,
+          modelOptions: { reasoningEffort: "high" },
+          ...(resume ? { resume } : {}),
+        });
+      }
+      const turns = host.calls.filter(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnStarted",
+      );
+      assert.strictEqual(turns.length, 2);
+      for (const turn of turns) {
+        const action = turn.params.action as {
+          message: { model: unknown };
+        };
+        assert.deepStrictEqual(action.message.model, {
+          id,
+          config: { thinkingLevel: "high" },
+        });
+      }
+    });
+
+    test("does not dispatch on missing, malformed or duplicate live Host IDs", async () => {
+      const id = "vendor/group/model";
+      for (const models of [
+        [],
+        [{ id }, { id }],
+        [{ id: null }],
+        null,
+      ]) {
+        host = await startFakeHost(tmp, { models });
+        await assert.rejects(
+          runAgentHostTurn({
+            ...baseRequest(host.endpoint),
+            modelId: id,
+            hostModelIdExplicit: true,
+          }),
+          (error: unknown) =>
+            error instanceof AgentHostError &&
+            ["unavailable", "unsupported", "modelIdentity"].includes(error.kind),
+        );
+        assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
+        await host.close();
+        host = undefined;
+      }
     });
 
     test("reports a host that is not there as unavailable", async () => {

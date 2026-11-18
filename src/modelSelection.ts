@@ -2,6 +2,7 @@ import type {
   ModelInfo,
   ModelSelectionFields,
   ModelConfiguration,
+  ModelReportVerification,
 } from "./types";
 import { normalizeModelConfiguration } from "./model-configuration";
 import {
@@ -45,6 +46,7 @@ export type NormalizedModelSelection = {
   modelVendor?: string;
   modelFamily?: string;
   modelVersion?: string;
+  agentHostModelId?: string;
   modelReasoningEffort?: string;
   modelConfiguration?: ModelConfiguration;
 };
@@ -78,6 +80,10 @@ function normalizeKey(value: string | undefined): string {
     .replace(/[_.\s]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+export function isCopilotModelVendor(vendor: string | undefined): boolean {
+  return COPILOT_VENDOR_KEYS.has(normalizeKey(vendor));
 }
 
 function normalizeSelectionReasoningEffort(selection: {
@@ -902,12 +908,20 @@ function selectionRequestsAutoRouting(
 export function normalizeModelSelection(
   selection: ModelSelectionFields | undefined,
 ): NormalizedModelSelection {
+  const hostId = selection?.agentHostModelId;
+  if (
+    hostId !== undefined &&
+    (typeof hostId !== "string" || (hostId !== "" && (!hostId.trim() || hostId.includes("\0"))))
+  ) {
+    throw new Error("Invalid Agent Host model identifier");
+  }
   const normalized: NormalizedModelSelection = {
     model: trimOptionalText(selection?.model),
     modelName: trimOptionalText(selection?.modelName),
     modelVendor: trimOptionalText(selection?.modelVendor),
     modelFamily: trimOptionalText(selection?.modelFamily),
     modelVersion: trimOptionalText(selection?.modelVersion),
+    ...(hostId ? { agentHostModelId: hostId } : {}),
     modelReasoningEffort: trimOptionalText(selection?.modelReasoningEffort),
     ...(selection?.modelConfiguration !== undefined
       ? {
@@ -924,6 +938,47 @@ export function normalizeModelSelection(
   }
 
   return normalized;
+}
+
+export function isAgentHostModelBindingCompatible(
+  selection: ModelSelectionFields,
+): boolean {
+  const hostId = selection.agentHostModelId;
+  if (!hostId) return true;
+  return !!selection.model?.trim();
+}
+
+export function classifyModelReport(
+  requested: string | undefined,
+  reported: string | undefined,
+): ModelReportVerification {
+  if (!requested || !reported || requested === AUTO_ROUTING_MODEL_ID) {
+    return "unverified";
+  }
+  if (requested === reported) return "reported_match";
+  if (
+    requested.endsWith(`/${reported}`) ||
+    reported.endsWith(`/${requested}`)
+  ) {
+    return "unverified";
+  }
+  const requestedSlash = requested.indexOf("/");
+  const reportedSlash = reported.indexOf("/");
+  if ((requestedSlash < 0) !== (reportedSlash < 0)) return "unverified";
+  if (requestedSlash >= 0 && reportedSlash >= 0) {
+    const requestedVendor = requested.slice(0, requestedSlash);
+    const reportedVendor = reported.slice(0, reportedSlash);
+    const requestedTail = requested.slice(requestedSlash + 1);
+    const reportedTail = reported.slice(reportedSlash + 1);
+    if (
+      requestedVendor === reportedVendor &&
+      (requestedTail.endsWith(`/${reportedTail}`) ||
+        reportedTail.endsWith(`/${requestedTail}`))
+    ) {
+      return "unverified";
+    }
+  }
+  return "reported_mismatch";
 }
 
 export function hasStrictModelVariantSelection(
@@ -1087,6 +1142,7 @@ export function hasModelSelection(
     normalized.modelVendor ||
     normalized.modelFamily ||
     normalized.modelVersion ||
+    normalized.agentHostModelId ||
     normalized.modelReasoningEffort ||
     normalized.modelConfiguration !== undefined
   );
@@ -1116,6 +1172,7 @@ export function areModelSelectionsEqual(
     normalizedLeft.modelVendor === normalizedRight.modelVendor &&
     normalizedLeft.modelFamily === normalizedRight.modelFamily &&
     normalizedLeft.modelVersion === normalizedRight.modelVersion &&
+    normalizedLeft.agentHostModelId === normalizedRight.agentHostModelId &&
     normalizedLeft.modelReasoningEffort ===
       normalizedRight.modelReasoningEffort &&
     JSON.stringify(normalizedLeft.modelConfiguration) ===

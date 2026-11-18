@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.10.1",
+  "version": "1.12.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -472,11 +472,12 @@
                 "history",
                 "preview_cron",
                 "list_models",
+                "list_agent_host_models",
                 "list_agents",
                 "list_skills",
                 "list_sessions"
               ],
-              "description": "Which kind of read to perform. Use list_models before setting 'model', list_agents before setting 'agent', list_skills before writing a '/<skill>' prompt, and list_sessions before binding a task to an existing Copilot chat."
+              "description": "Which kind of read to perform. Use list_models before setting 'model', list_agent_host_models before setting 'agentHostModelId', list_agents before setting 'agent', list_skills before writing a '/<skill>' prompt, and list_sessions before binding a task to an existing Copilot chat. Never infer an Agent Host ID from another catalog."
             },
             "scope": {
               "type": "string",
@@ -595,6 +596,10 @@
               "type": "string",
               "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
             },
+            "agentHostModelId": {
+              "type": "string",
+              "description": "Exact opaque id explicitly selected from scheduler_query kind=list_agent_host_models. Copy it unchanged; never infer or construct it from model, vendor, name, or a suffix. The catalog does not verify correspondence with model; if unclear, ask the user to select the matching ID. Omit when no Agent Host ID is selected."
+            },
             "modelConfiguration": {
               "type": "object",
               "description": "Model-specific enum values from list_models configurationOptions. Empty object inherits shared Chat settings. Explicit options execute through a fixed per-request model on VS Code 1.141 or later without changing shared settings. Requires source-provider authorization. Do not combine with modelReasoningEffort.",
@@ -653,6 +658,10 @@
             "modelFallback": {
               "type": "boolean",
               "description": "Opt in to the copilotScheduler.modelFallbackChain when the selected model is unavailable. Default false: an unavailable model stops the run. Detailed model options are not carried over."
+            },
+            "preventAgentHostFallback": {
+              "type": "boolean",
+              "description": "When true, block fallback from Agent Host to Chat. Default false; existing fallback policy still applies. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models."
             },
             "jitterSeconds": {
               "type": "number",
@@ -772,6 +781,10 @@
                   "type": "string",
                   "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
                 },
+                "agentHostModelId": {
+                  "type": "string",
+                  "description": "Exact opaque id explicitly selected from scheduler_query kind=list_agent_host_models. Copy it unchanged; never infer or construct it from model, vendor, name, or a suffix. The catalog does not verify correspondence with model; if unclear, ask the user to select the matching ID. Omission preserves the binding when the model identity is unchanged; clearing model clears its binding."
+                },
                 "modelConfiguration": {
                   "type": "object",
                   "description": "Model enum values from list_models. Omission preserves existing task options; {} clears task overrides and inherits shared Chat settings. Explicit options are fixed per request on VS Code 1.141 or later without shared-setting writes. Do not combine with modelReasoningEffort.",
@@ -833,6 +846,10 @@
                 "modelFallback": {
                   "type": "boolean",
                   "description": "Opt in to the copilotScheduler.modelFallbackChain when the selected model is unavailable."
+                },
+                "preventAgentHostFallback": {
+                  "type": "boolean",
+                  "description": "When true, block fallback from Agent Host to Chat. False leaves existing fallback policy in effect. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models. Omission preserves the current setting."
                 },
                 "jitterSeconds": {
                   "type": "number",

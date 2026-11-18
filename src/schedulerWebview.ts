@@ -719,9 +719,14 @@ export class SchedulerWebview {
             modelVendor: message.modelVendor,
             modelFamily: message.modelFamily,
             modelVersion: message.modelVersion,
+            agentHostModelId: message.agentHostModelId,
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
             targetChatId: message.targetChatId,
+            ...(message.modelFallback === true ? { modelFallback: true } : {}),
+            ...(message.preventAgentHostFallback === true
+              ? { preventAgentHostFallback: true }
+              : {}),
             ...(message.useCopilotCli === true ? { useCopilotCli: true } : {}),
           });
         }
@@ -791,6 +796,25 @@ export class SchedulerWebview {
             type: "updateAgentHostChats",
             chats: [],
             error: messages.targetChatLoadFailed(),
+          });
+        }
+        break;
+
+      case "refreshAgentHostModels":
+        try {
+          const models = await CopilotExecutor.listAvailableAgentHostModels();
+          this.postMessage({
+            type: "updateAgentHostModels",
+            models: models.map((model) => ({ id: model.id, name: model.name })),
+          });
+        } catch (error) {
+          logDebug(
+            `[CopilotScheduler] Could not load Agent Host models: ${sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error ?? ""))}`,
+          );
+          this.postMessage({
+            type: "updateAgentHostModels",
+            models: [],
+            error: messages.agentHostModelsLoadFailed(),
           });
         }
         break;
@@ -1761,6 +1785,17 @@ export class SchedulerWebview {
       skillKindExplicit: messages.skillKindExplicit(),
       skillKindAuto: messages.skillKindAuto(),
       labelModelFallback: messages.labelModelFallback(),
+      labelAgentHostModel: messages.labelAgentHostModel(),
+      agentHostModelUnpinned: messages.agentHostModelUnpinned(),
+      agentHostModelNote: messages.agentHostModelNote(),
+      agentHostModelsLoading: messages.agentHostModelsLoading(),
+      agentHostModelsLoadFailed: messages.agentHostModelsLoadFailed(),
+      agentHostModelsEmpty: messages.agentHostModelsEmpty(),
+      agentHostModelsDuplicate: messages.agentHostModelsDuplicate(),
+      agentHostModelSavedUnverified: messages.agentHostModelSavedUnverified(),
+      labelPreventAgentHostFallback: messages.labelPreventAgentHostFallback(),
+      webviewPreventAgentHostFallbackNote:
+        messages.webviewPreventAgentHostFallbackNote(),
       labelUseCopilotCli: messages.labelUseCopilotCli(),
       webviewUseCopilotCliNote: messages.webviewUseCopilotCliNote(),
       labelChatSession: messages.labelChatSession(),
@@ -2973,11 +3008,31 @@ export class SchedulerWebview {
             </div>
 
             <div class="form-group col-12">
+              <label for="agent-host-model">${escapeHtml(strings.labelAgentHostModel)}</label>
+              <div class="template-row">
+                <select id="agent-host-model" aria-describedby="agent-host-model-note agent-host-model-status">
+                  <option value="">${escapeHtml(strings.agentHostModelUnpinned)}</option>
+                </select>
+                <button type="button" class="btn-secondary" id="agent-host-model-refresh">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+              <p class="note" id="agent-host-model-note">${escapeHtml(strings.agentHostModelNote)}</p>
+              <p class="note" id="agent-host-model-status" role="status"></p>
+            </div>
+
+            <div class="form-group col-12">
               <div class="checkbox-group">
                 <input type="checkbox" id="model-fallback">
                 <label for="model-fallback">${escapeHtml(strings.labelModelFallback)}</label>
               </div>
               <p class="note">${escapeHtml(strings.webviewModelFallbackNote)}</p>
+            </div>
+
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="prevent-agent-host-fallback">
+                <label for="prevent-agent-host-fallback">${escapeHtml(strings.labelPreventAgentHostFallback)}</label>
+              </div>
+              <p class="note">${escapeHtml(strings.webviewPreventAgentHostFallbackNote)}</p>
             </div>
 
             <div class="form-group col-12">

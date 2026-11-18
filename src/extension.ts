@@ -63,7 +63,11 @@ import {
 } from "./executionHistoryStore";
 import { registerLmTools } from "./lmTools/registry";
 import { registerConfiguredModelProvider } from "./configured-model-provider";
-import { createModelSelectionResolver } from "./taskMutationService";
+import {
+  buildEffectiveModelSelection,
+  createModelSelectionResolver,
+  validateAgentHostModelChoice,
+} from "./taskMutationService";
 import {
   getAttachmentDisplayName,
   resolveAttachments,
@@ -82,6 +86,7 @@ import type {
   AgentHostRunInfo,
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
+  ModelExecutionObservation,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
@@ -194,8 +199,12 @@ function buildPromptExecutionOptions(
     modelVendor: request.modelVendor,
     modelFamily: request.modelFamily,
     modelVersion: request.modelVersion,
+    agentHostModelId: request.agentHostModelId,
     modelReasoningEffort: request.modelReasoningEffort,
     ...(request.modelFallback === true ? { modelFallback: true } : {}),
+    ...(request.preventAgentHostFallback === true
+      ? { preventAgentHostFallback: true }
+      : {}),
     ...(request.useCopilotCli === true ? { useCopilotCli: true } : {}),
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(request.modelConfiguration !== undefined
@@ -472,25 +481,30 @@ function formatNextRunText(date?: Date): string {
   return messages.formatDateTime(date);
 }
 
+function executionResultLabel(
+  status: ExecutionHistoryStatus,
+  turnOutcome?: AgentHostTurnOutcome,
+): string {
+  return status === "success"
+    ? turnOutcome === "queued"
+      ? messages.executionResultQueued()
+      : turnOutcome === "completed"
+        ? messages.executionResultTurnCompleted()
+        : messages.executionResultDispatched()
+    : status === "blocked"
+      ? messages.executionResultBlocked()
+      : messages.executionResultFailed();
+}
+
 function buildExecutionSummary(
   taskName: string,
   status: ExecutionHistoryStatus,
   nextRunDate?: Date,
   turnOutcome?: AgentHostTurnOutcome,
 ): string {
-  const resultLabel =
-    status === "success"
-      ? turnOutcome === "queued"
-        ? messages.executionResultQueued()
-        : turnOutcome === "completed"
-          ? messages.executionResultTurnCompleted()
-          : messages.executionResultDispatched()
-      : status === "blocked"
-        ? messages.executionResultBlocked()
-        : messages.executionResultFailed();
   return messages.taskExecutionSummary(
     taskName,
-    resultLabel,
+    executionResultLabel(status, turnOutcome),
     formatNextRunText(nextRunDate),
   );
 }
@@ -629,14 +643,7 @@ function buildExecutionHistoryQuickPickItems(
         : entry.status === "blocked"
           ? "⛔"
           : "❌";
-    const statusLabel =
-      entry.status === "success"
-        ? entry.turnOutcome === "completed"
-          ? messages.executionResultTurnCompleted()
-          : messages.executionResultDispatched()
-        : entry.status === "blocked"
-          ? messages.executionResultBlocked()
-          : messages.executionResultFailed();
+    const statusLabel = executionResultLabel(entry.status, entry.turnOutcome);
     const triggerLabel =
       entry.trigger === "manual"
         ? messages.executionTriggerManual()
@@ -697,6 +704,7 @@ const manualRunInFlightTaskIds = new Set<string>();
 const lastModelFallbackByTaskId = new Map<string, ModelFallbackInfo>();
 const lastCopilotCliRunByTaskId = new Map<string, CopilotCliRunInfo>();
 const lastAgentHostRunByTaskId = new Map<string, AgentHostRunInfo>();
+const lastModelExecutionByTaskId = new Map<string, ModelExecutionObservation>();
 
 function takeModelFallbackDetail(taskId: string): string | undefined {
   const fallback = lastModelFallbackByTaskId.get(taskId);
@@ -705,6 +713,14 @@ function takeModelFallbackDetail(taskId: string): string | undefined {
   lastCopilotCliRunByTaskId.delete(taskId);
   const agentHostRun = lastAgentHostRunByTaskId.get(taskId);
   lastAgentHostRunByTaskId.delete(taskId);
+  const modelExecution = lastModelExecutionByTaskId.get(taskId);
+  lastModelExecutionByTaskId.delete(taskId);
+  const chatRoute =
+    modelExecution?.route === "chat" ||
+    modelExecution?.route === "local" ||
+    modelExecution?.route === "remote"
+      ? modelExecution.route
+      : undefined;
   const details = [
     fallback
       ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
@@ -716,11 +732,19 @@ function takeModelFallbackDetail(taskId: string): string | undefined {
           cliRun.premiumRequests,
         )
       : undefined,
-    agentHostRun
+    agentHostRun && !chatRoute
       ? messages.executionHistoryAgentHost(
           agentHostRun.requestedModel,
           agentHostRun.appliedModel,
           agentHostRun.fallbackReason,
+          modelExecution?.verification,
+        )
+      : undefined,
+    chatRoute
+      ? messages.executionHistoryChatRoute(
+          chatRoute,
+          modelExecution?.requestedModel,
+          agentHostRun?.fallbackReason,
         )
       : undefined,
   ].filter((item): item is string => !!item);
@@ -1189,6 +1213,7 @@ async function appendManualRunHistory(
     takePromptResolution(task.id),
   );
   const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
+  const modelExecution = lastModelExecutionByTaskId.get(task.id);
 
   if (runResult.ok) {
     const latestTask = scheduleManager.getTask(task.id) ?? task;
@@ -1223,6 +1248,7 @@ async function appendManualRunHistory(
       detail: takeModelFallbackDetail(task.id),
       turnOutcome: agentHostRun?.turnOutcome,
       responseText: agentHostRun?.responseText,
+      modelExecution,
       ...promptMetadata,
     };
     if (task.runAt && task.afterRun === "delete") {
@@ -1274,6 +1300,7 @@ async function appendManualRunHistory(
       .join(" / "),
     turnOutcome: runResult.turnOutcome ?? agentHostRun?.turnOutcome,
     responseText: agentHostRun?.responseText,
+    modelExecution,
     ...promptMetadata,
   });
 }
@@ -1356,11 +1383,13 @@ export function activate(context: vscode.ExtensionContext): void {
   registerLmTools(context, scheduleManager, {
     catalogProvider: {
       listModels: loadPickerModelCatalog,
+      listAgentHostModels: () => CopilotExecutor.listAvailableAgentHostModels(),
       listAgents: () => CopilotExecutor.getAllAgents(),
       listSkills: discoverWorkspaceSkills,
       listSessions: () => CopilotExecutor.listAvailableAgentHostChats(),
     },
     resolveModelSelection: createModelSelectionResolver(loadPickerModelCatalog),
+    loadAgentHostModels: () => CopilotExecutor.listAvailableAgentHostModels(),
     resolveTargetChatBinding: (bindingId, expectedWorkspacePath) =>
       CopilotExecutor.resolveTargetAgentHostChat(
         bindingId,
@@ -1626,6 +1655,7 @@ async function executeTask(
   lastModelFallbackByTaskId.delete(task.id);
   lastCopilotCliRunByTaskId.delete(task.id);
   lastAgentHostRunByTaskId.delete(task.id);
+  lastModelExecutionByTaskId.delete(task.id);
 
   try {
     const resolved = await resolvePromptExecution(task);
@@ -1654,6 +1684,9 @@ async function executeTask(
       if (executionResult?.agentHostRun) {
         lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
       }
+      if (executionResult?.modelExecution) {
+        lastModelExecutionByTaskId.set(task.id, executionResult.modelExecution);
+      }
       if (executionResult?.modelFallback) {
         lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
         notifyInfo(
@@ -1675,6 +1708,7 @@ async function executeTask(
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
       const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
+      const modelExecution = lastModelExecutionByTaskId.get(task.id);
       notifyInfo(
         buildExecutionSummary(
           task.name,
@@ -1696,6 +1730,7 @@ async function executeTask(
         detail: takeModelFallbackDetail(task.id),
         turnOutcome: agentHostRun?.turnOutcome,
         responseText: agentHostRun?.responseText,
+        modelExecution,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
@@ -1734,6 +1769,8 @@ async function executeTask(
       if (trigger === "auto") {
         const nextRunDate = getNotificationNextRun(task, new Date());
         const turnOutcome = getAgentHostTurnFailure(error);
+        const modelExecution = lastModelExecutionByTaskId.get(task.id);
+        const executionDetail = takeModelFallbackDetail(task.id);
         const status = turnOutcome ? "failed" : "blocked";
         const summary = buildExecutionSummary(
           task.name,
@@ -1750,10 +1787,16 @@ async function executeTask(
           dueAt,
           runAt: task.runAt,
           nextRunAt: nextRunDate?.toISOString(),
-          detail: resolveDisplayErrorMessage(
-            error instanceof Error ? error.message : String(error),
-          ),
+          detail: [
+            resolveDisplayErrorMessage(
+              error instanceof Error ? error.message : String(error),
+            ),
+            executionDetail,
+          ]
+            .filter((item): item is string => !!item)
+            .join(" / "),
           turnOutcome,
+          modelExecution,
           ...buildPromptHistoryMetadata(
             lastPromptResolutionByTaskId.get(task.id),
           ),
@@ -1773,6 +1816,8 @@ async function executeTask(
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
+      const modelExecution = lastModelExecutionByTaskId.get(task.id);
+      const executionDetail = takeModelFallbackDetail(task.id);
       const summary = buildExecutionSummary(task.name, "failed", nextRunDate);
       vscode.window.setStatusBarMessage(`⚠ ${summary}`, 6000);
       void recordExecutionHistoryBestEffort({
@@ -1784,7 +1829,13 @@ async function executeTask(
         dueAt,
         runAt: task.runAt,
         nextRunAt: nextRunDate?.toISOString(),
-        detail: resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
+        detail: [
+          resolveDisplayErrorMessageFromSanitized(safeErrorMessage),
+          executionDetail,
+        ]
+          .filter((item): item is string => !!item)
+          .join(" / "),
+        modelExecution,
         ...buildPromptHistoryMetadata(
           lastPromptResolutionByTaskId.get(task.id),
         ),
@@ -2223,9 +2274,13 @@ async function resolvePromptExecution(
     modelVendor: task.modelVendor,
     modelFamily: task.modelFamily,
     modelVersion: task.modelVersion,
+    agentHostModelId: task.agentHostModelId,
     modelReasoningEffort: task.modelReasoningEffort,
     modelConfiguration: task.modelConfiguration,
     ...(task.modelFallback === true ? { modelFallback: true } : {}),
+    ...(task.preventAgentHostFallback === true
+      ? { preventAgentHostFallback: true }
+      : {}),
     ...(task.useCopilotCli === true ? { useCopilotCli: true } : {}),
     attachments: task.attachments,
   };
@@ -2562,6 +2617,15 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
           action.taskId === "__create__"
             ? undefined
             : scheduleManager.getTask(action.taskId);
+        if (action.data) {
+          await validateAgentHostModelChoice(
+            action.data.model === ""
+              ? {}
+              : buildEffectiveModelSelection(current ?? {}, action.data),
+            current,
+            () => CopilotExecutor.listAvailableAgentHostModels(),
+          );
+        }
         if (
           action.data &&
           (action.data.modelConfiguration !== undefined ||
@@ -2582,6 +2646,8 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             modelVendor: action.data.modelVendor ?? current?.modelVendor,
             modelFamily: action.data.modelFamily ?? current?.modelFamily,
             modelVersion: action.data.modelVersion ?? current?.modelVersion,
+            agentHostModelId:
+              action.data.agentHostModelId ?? current?.agentHostModelId,
             modelReasoningEffort:
               action.data.modelReasoningEffort ?? current?.modelReasoningEffort,
             modelConfiguration:

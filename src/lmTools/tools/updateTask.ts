@@ -5,11 +5,13 @@ import type { CreateTaskInput } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
   formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
+  validateAgentHostToolFields,
 } from "../shared";
 
 interface UpdateTaskToolInput {
@@ -32,6 +34,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "agent",
   "model",
   "modelVendor",
+  "agentHostModelId",
   "modelReasoningEffort",
   "modelConfiguration",
   "scope",
@@ -39,6 +42,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "targetChatId",
   "autoMode",
   "modelFallback",
+  "preventAgentHostFallback",
   "jitterSeconds",
   "maxExecutionsPerDay",
   "allowedTimeStart",
@@ -60,6 +64,9 @@ export function createSchedulerUpdateTaskTool(
     ): Promise<vscode.PreparedToolInvocation> {
       const input = options.input ?? {};
       const updateKeys = input.updates ? Object.keys(input.updates) : [];
+      const agentHostDetails = describeAgentHostFieldsForConfirmation(
+        input.updates ?? {},
+      );
       const attachmentDetail = Object.prototype.hasOwnProperty.call(
         input.updates ?? {},
         "attachments",
@@ -82,6 +89,9 @@ export function createSchedulerUpdateTaskTool(
                       .join(", ")
                   : "(none)"
               }`,
+              agentHostDetails.length
+                ? `\n\n${agentHostDetails.join("\n")}`
+                : "",
               attachmentDetail
                 ? `\n\nThe attachment list is replaced by:\n${attachmentDetail}`
                 : "",
@@ -128,6 +138,10 @@ export function createSchedulerUpdateTaskTool(
           reason: "validation",
           message: `Fields not allowed in 'updates': ${unexpected.join(", ")}. Remove them and retry.`,
         });
+      }
+      const fieldError = validateAgentHostToolFields(input.updates);
+      if (fieldError) {
+        return fieldError;
       }
       const result = await client.updateTask(input.id, input.updates);
       if (!result.ok) {

@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import { createSchedulerQueryTool } from "../../lmTools/tools/query";
@@ -368,8 +370,65 @@ suite("lmTools scheduler_query", () => {
     const payload = parseJson(await invoke(tool, { kind: "bogus" }));
     assert.strictEqual(payload.ok, false);
     assert.match(String(payload.message), /list_models/);
+    assert.match(String(payload.message), /list_agent_host_models/);
     assert.match(String(payload.message), /list_agents/);
     assert.match(String(payload.message), /list_skills/);
+  });
+
+  test("manifest advertises Host discovery and both task controls", () => {
+    interface SchemaProperty {
+      type?: string;
+      enum?: string[];
+      description?: string;
+      properties?: Record<string, SchemaProperty>;
+    }
+    const root = path.resolve(__dirname, "../../..");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as {
+      contributes: {
+        languageModelTools: Array<{
+          name: string;
+          inputSchema: { properties: Record<string, SchemaProperty> };
+        }>;
+      };
+    };
+    const tools = manifest.contributes.languageModelTools;
+    const schema = (name: string) =>
+      tools.find((tool) => tool.name === name)?.inputSchema.properties;
+    assert.ok(
+      schema("scheduler_query")?.kind.enum?.includes("list_agent_host_models"),
+    );
+    const create = schema("scheduler_create_task");
+    const update = schema("scheduler_update_task")?.updates.properties;
+    for (const properties of [create, update]) {
+      assert.strictEqual(properties?.agentHostModelId?.type, "string");
+      assert.strictEqual(properties?.preventAgentHostFallback?.type, "boolean");
+      assert.match(properties?.agentHostModelId?.description ?? "", /does not verify correspondence with model/);
+      assert.match(properties?.agentHostModelId?.description ?? "", /ask the user to select/);
+    }
+    for (const file of ["package.nls.json", "package.nls.ja.json"]) {
+      const nls = JSON.parse(
+        fs.readFileSync(path.join(root, file), "utf8"),
+      ) as Record<string, string>;
+      for (const tool of [
+        "scheduler_query",
+        "scheduler_create_task",
+        "scheduler_update_task",
+      ]) {
+        assert.ok(
+          nls[`tool.${tool}.modelDescription`]?.includes(
+            "list_agent_host_models",
+          ),
+        );
+      }
+      for (const tool of ["scheduler_create_task", "scheduler_update_task"]) {
+        const description = nls[`tool.${tool}.modelDescription`] ?? "";
+        assert.match(description, file.endsWith(".ja.json")
+          ? /対応関係を検証しません.*ユーザーに対応する ID を選んでもらってください/
+          : /does not verify correspondence with model.*ask the user to select/);
+      }
+    }
   });
 
   test("kind=list_skills returns names and descriptions without folder paths", async () => {
@@ -440,8 +499,24 @@ suite("lmTools scheduler_query", () => {
       provider,
       "hasSystemMessageDeclaration",
     )!;
+    const systemPermission = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsSystemMessageForwarding",
+    )!;
+    const configuredExecution = Object.getOwnPropertyDescriptor(
+      provider,
+      "supportsConfiguredModelExecution",
+    )!;
     Object.defineProperty(provider, "hasSystemMessageDeclaration", {
       ...declaration,
+      value: () => true,
+    });
+    Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+      ...systemPermission,
+      value: () => false,
+    });
+    Object.defineProperty(provider, "supportsConfiguredModelExecution", {
+      ...configuredExecution,
       value: () => true,
     });
     try {
@@ -486,11 +561,32 @@ suite("lmTools scheduler_query", () => {
           ["copilot-utility", []],
         ],
       );
+      Object.defineProperty(provider, "supportsSystemMessageForwarding", {
+        ...systemPermission,
+        value: () => true,
+      });
+      const allowed = parseJson(await invoke(tool, { kind: "list_models" }));
+      assert.deepStrictEqual(allowed.configurationExecutionRequirements, {
+        explicitChatParticipant: false,
+        forwardedMessageRoles: ["user", "assistant", "system"],
+        systemMessages: "allowed",
+        inheritedSettings: "shared_values_not_reset",
+      });
     } finally {
       Object.defineProperty(
         provider,
         "hasSystemMessageDeclaration",
         declaration,
+      );
+      Object.defineProperty(
+        provider,
+        "supportsSystemMessageForwarding",
+        systemPermission,
+      );
+      Object.defineProperty(
+        provider,
+        "supportsConfiguredModelExecution",
+        configuredExecution,
       );
     }
   });
@@ -524,6 +620,84 @@ suite("lmTools scheduler_query", () => {
         "hasSystemMessageDeclaration",
         declaration,
       );
+    }
+  });
+
+  test("kind=list_agent_host_models returns exact IDs and names without other catalog data", async () => {
+    const hostId = "openai-codex/Codex Bridge/default::gpt-6.2-sol/nested";
+    const provider = fakeCatalogProvider();
+    let otherCatalogCalls = 0;
+    provider.listModels = async () => {
+      otherCatalogCalls += 1;
+      throw new Error("must not infer Host IDs from this catalog");
+    };
+    const hostModels = [
+      {
+        id: hostId,
+        name: "Codex Bridge model",
+        configSchema: { secret: "private-options" },
+        _meta: { token: "private-metadata" },
+      },
+      { id: "vendor/group/model::variant" },
+      { id: "vendor/model::variant", name: "Other group" },
+    ];
+    provider.listAgentHostModels = async () => hostModels;
+    const tool = createSchedulerQueryTool(
+      new FakeScheduleManager([]) as unknown as ScheduleManager,
+      provider,
+    );
+    const payload = parseJson(
+      await invoke(tool, { kind: "list_agent_host_models" }),
+    );
+    assert.strictEqual(payload.ok, true);
+    assert.strictEqual(payload.count, 3);
+    assert.deepStrictEqual(payload.models, [
+      { id: hostId, name: "Codex Bridge model" },
+      { id: "vendor/group/model::variant" },
+      { id: "vendor/model::variant", name: "Other group" },
+    ]);
+    assert.strictEqual(otherCatalogCalls, 0);
+    assert.ok(!JSON.stringify(payload).includes("private-options"));
+    assert.ok(!JSON.stringify(payload).includes("private-metadata"));
+  });
+
+  test("Host discovery distinguishes an empty catalog from an unavailable one without leaking errors", async () => {
+    const manager = new FakeScheduleManager([]) as unknown as ScheduleManager;
+    const provider = fakeCatalogProvider();
+    provider.listAgentHostModels = async () => [];
+    const empty = parseJson(
+      await invoke(createSchedulerQueryTool(manager, provider), {
+        kind: "list_agent_host_models",
+      }),
+    );
+    assert.deepStrictEqual(empty, { ok: true, count: 0, models: [] });
+
+    const unavailableProviders = [
+      undefined,
+      fakeCatalogProvider(),
+      {
+        ...fakeCatalogProvider(),
+        listAgentHostModels: async () => {
+          throw new Error("private-token C:\\private\\catalog.json");
+        },
+      },
+      {
+        ...fakeCatalogProvider(),
+        listAgentHostModels: async () => [{ id: "" }],
+      },
+    ];
+    for (const unavailableProvider of unavailableProviders) {
+      const payload = parseJson(
+        await invoke(createSchedulerQueryTool(manager, unavailableProvider), {
+          kind: "list_agent_host_models",
+        }),
+      );
+      assert.strictEqual(payload.ok, false);
+      assert.strictEqual(payload.reason, "agent_host_unavailable");
+      assert.match(String(payload.message), /unavailable/i);
+      assert.strictEqual(payload.models, undefined);
+      assert.ok(!JSON.stringify(payload).includes("private-token"));
+      assert.ok(!JSON.stringify(payload).includes("private\\\\catalog"));
     }
   });
 
@@ -576,11 +750,13 @@ suite("lmTools scheduler_query", () => {
       new FakeScheduleManager([]) as unknown as ScheduleManager,
       fakeCatalogProvider(),
     );
-    const payload = parseJson(
-      await invoke(tool, { kind: "list_models", scope: "global" }),
-    );
-    assert.strictEqual(payload.ok, false);
-    assert.strictEqual(payload.reason, "validation");
+    for (const kind of ["list_models", "list_agent_host_models"]) {
+      const payload = parseJson(
+        await invoke(tool, { kind, scope: "global" }),
+      );
+      assert.strictEqual(payload.ok, false);
+      assert.strictEqual(payload.reason, "validation");
+    }
   });
 
   test("discovery kinds fail cleanly when no catalog is injected", async () => {

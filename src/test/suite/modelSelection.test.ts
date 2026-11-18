@@ -1,10 +1,12 @@
 import * as assert from "assert";
 import {
   buildModelPickerGroups,
+  classifyModelReport,
   filterExpandedPickerModelCatalog,
   filterPickerModelCatalog,
   findBestMatchingModel,
   findFallbackModel,
+  isAgentHostModelBindingCompatible,
   MODEL_FALLBACK_CHAIN_MAX,
   normalizeModelFallbackChain,
   normalizeModelSelection,
@@ -12,6 +14,49 @@ import {
 } from "../../modelSelection";
 
 suite("Model Selection Catalog Tests", () => {
+  test("preserves an explicitly chosen opaque Host ID without inferring its boundary", () => {
+    assert.strictEqual(
+      isAgentHostModelBindingCompatible({
+        model: "a/b",
+        modelVendor: "vendor",
+        agentHostModelId: "vendor/a/b",
+      }),
+      true,
+    );
+    assert.strictEqual(
+      isAgentHostModelBindingCompatible({
+        model: "different-local-id",
+        modelVendor: "vendor",
+        agentHostModelId: "vendor/group/opaque-id",
+      }),
+      true,
+    );
+    assert.strictEqual(
+      isAgentHostModelBindingCompatible({ agentHostModelId: "vendor/a/b" }),
+      false,
+    );
+  });
+
+  test("distinguishes exact, conflicting and ambiguous model reports", () => {
+    assert.strictEqual(
+      classifyModelReport("vendor/group/a/b", "vendor/group/a/b"),
+      "reported_match",
+    );
+    assert.strictEqual(
+      classifyModelReport("vendor/group/a/b", "vendor/group/a/c"),
+      "reported_mismatch",
+    );
+    assert.strictEqual(
+      classifyModelReport("vendor/group/a/b", "a/b"),
+      "unverified",
+    );
+    assert.strictEqual(
+      classifyModelReport("vendor/group/model", "vendor/model"),
+      "unverified",
+    );
+    assert.strictEqual(classifyModelReport("auto", "other"), "unverified");
+    assert.strictEqual(classifyModelReport("model", undefined), "unverified");
+  });
   test("normalizeModelCatalog removes exact duplicates and labels id variants", () => {
     const catalog = normalizeModelCatalog([
       {
