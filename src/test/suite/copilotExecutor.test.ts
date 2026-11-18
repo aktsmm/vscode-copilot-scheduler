@@ -182,7 +182,14 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
           agentHostWorkspaceMode: "folder",
           chatSession: "new",
         }),
-        (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+        (error: unknown) => {
+          assert.strictEqual(getPromptBlockedReason(error), "agentHostUnavailable");
+          const text = (error as Error).message;
+          // The reason must say the prompt was not sent and what to change.
+          assert.ok(text.includes(messages.agentHostWorkspaceUnavailable("").trim()), text);
+          assert.ok(text.includes(agentHostClient.WORKSPACE_FOLDER_REQUIRED_DETAIL), text);
+          return true;
+        },
       );
       assert.strictEqual(hostCalls, beforeAmbiguousRun, "multiple local roots must not select the first folder");
     } finally {
