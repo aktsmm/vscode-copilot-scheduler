@@ -2540,6 +2540,55 @@ suite("ScheduleManager Auto Mode Tests", () => {
     }
   });
 
+  test("Host ID and route guard survive persistence and clear on source changes", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const hostId = "vendor/group/model::variant";
+      const created = await manager.createTask({
+        name: "host-model",
+        prompt: "synthetic",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: false,
+        model: "model::variant",
+        modelVendor: "vendor",
+        agentHostModelId: hostId,
+        preventAgentHostFallback: true,
+      });
+      const stored = JSON.parse(
+        fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8"),
+      ) as ScheduledTask[];
+      assert.strictEqual(stored.find((task) => task.id === created.id)?.agentHostModelId, hostId);
+      assert.strictEqual(stored.find((task) => task.id === created.id)?.preventAgentHostFallback, true);
+
+      const copy = await manager.duplicateTask(created.id);
+      assert.strictEqual(copy?.agentHostModelId, hostId);
+      assert.strictEqual(copy?.preventAgentHostFallback, true);
+      assert.strictEqual(
+        (await manager.updateTask(created.id, { model: "model::variant" }))?.agentHostModelId,
+        hostId,
+      );
+      const changed = await manager.updateTask(created.id, { model: "other" });
+      assert.strictEqual(changed?.agentHostModelId, undefined);
+      assert.strictEqual(changed?.preventAgentHostFallback, true);
+      const cleared = await manager.updateTask(created.id, {
+        model: "",
+        preventAgentHostFallback: false,
+      });
+      assert.strictEqual(cleared?.model, undefined);
+      assert.strictEqual(cleared?.agentHostModelId, undefined);
+      assert.strictEqual(cleared?.preventAgentHostFallback, undefined);
+      await assert.rejects(
+        manager.updateTask(created.id, { agentHostModelId: hostId }),
+        /model|モデル/i,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   test("skill reference persists through create, update, clear and duplicate, and malformed ones are dropped", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {

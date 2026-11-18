@@ -5,8 +5,125 @@ import * as agentHostClient from "../../agentHostClient";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
 import { createPromptBlockedError } from "../../promptExecutionErrors";
+import type { ExecuteOptions } from "../../types";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("the task guard blocks only Host-to-Chat fallback and unresolved identity", async () => {
+    const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+    const originalWarning = vscode.window.showWarningMessage;
+    Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => undefined,
+    });
+    try {
+      const executor = new CopilotExecutor() as unknown as {
+        tryExecuteViaAgentHost(
+          routing: ReturnType<typeof __testOnly.buildPromptRouting>,
+          options: ExecuteOptions,
+          config: vscode.WorkspaceConfiguration,
+          chatSession: "new",
+        ): Promise<{ fallbackReason?: string }>;
+      };
+      const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
+      const config = (fallback: "chat" | "fail") =>
+        ({
+          get: (key: string, defaultValue: unknown) =>
+            key === "executionFallback" ? fallback : defaultValue,
+        }) as vscode.WorkspaceConfiguration;
+      assert.ok(
+        (await executor.tryExecuteViaAgentHost(routing, {}, config("chat"), "new"))
+          .fallbackReason,
+      );
+      await assert.rejects(
+        executor.tryExecuteViaAgentHost(
+          routing,
+          { preventAgentHostFallback: true },
+          config("chat"),
+          "new",
+        ),
+        /Agent Host|エージェントホスト/,
+      );
+      await assert.rejects(
+        executor.tryExecuteViaAgentHost(routing, {}, config("fail"), "new"),
+        /Agent Host|エージェントホスト/,
+      );
+      await assert.rejects(
+        executor.tryExecuteViaAgentHost(
+          routing,
+          { targetChatId: "bound-chat" },
+          config("chat"),
+          "new",
+        ),
+        /Agent Host|エージェントホスト/,
+      );
+      for (const selection of [
+        { model: "model", modelVendor: "vendor" },
+        { model: "vendor/a/b" },
+        { modelName: "name-only" },
+      ]) {
+        await assert.rejects(
+          executor.tryExecuteViaAgentHost(routing, selection, config("chat"), "new"),
+          (error: unknown) =>
+            error instanceof Error &&
+            error.message === messages.agentHostModelSelectionRequired(),
+        );
+      }
+    } finally {
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+    }
+  });
+
+  test("direct Chat and Local routes ignore the Host fallback guard and remain unverified", async () => {
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+    let local = false;
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: ((section?: string) => {
+        const config = originalGetConfiguration.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            if (key === "executionRoute") return (local ? "agentHost" : "chat") as T;
+            if (key === "sessionHarness") return (local ? "local" : "auto") as T;
+            return config.get<T>(key, defaultValue as T);
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration,
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(): Promise<never>;
+        tryOpenChatWithPrompt(): Promise<{ opened: true }>;
+      };
+      internals.tryExecuteViaAgentHost = async () => assert.fail("Host must not run");
+      internals.tryOpenChatWithPrompt = async () => ({ opened: true });
+      for (const route of ["chat", "local"] as const) {
+        local = route === "local";
+        const result = await executor.executePrompt("synthetic", {
+          preventAgentHostFallback: true,
+          chatSession: "continue",
+        });
+        assert.strictEqual(result?.modelExecution?.route, route);
+        assert.strictEqual(result?.modelExecution?.verification, "unverified");
+      }
+    } finally {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: originalGetConfiguration,
+      });
+    }
+  });
+
   test("Agent Host uses its default model for an empty configuration", async () => {
     const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
     const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
@@ -46,10 +163,14 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       assert.strictEqual(requests.length, 1);
       assert.strictEqual(requests[0].modelId, undefined);
 
-      const rejected = await internals.tryExecuteViaAgentHost(
-        routing, { modelConfiguration: { temperature: 1 } }, config, "new",
+      await assert.rejects(
+        internals.tryExecuteViaAgentHost(
+          routing, { modelConfiguration: { temperature: 1 } }, config, "new",
+        ),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === messages.dynamicConfigurationUnavailable(),
       );
-      assert.ok(rejected.fallbackReason);
       assert.strictEqual(requests.length, 1);
     } finally {
       Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
@@ -106,6 +227,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     await executor.executePrompt("synthetic", {
       dispatchGuard: async (dispatch) => { dispatch(); },
       allowUnguardedFallback: true,
+      preventAgentHostFallback: true,
       useCopilotCli: true,
       model: "test",
     });
@@ -444,11 +566,19 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       });
     }
   });
-  test("system-bearing chat routes block advertised overrides across vendors before commands", async () => {
+  test("system-bearing chat routes block advertised overrides without System permission", async () => {
     const originalModels = CopilotExecutor.getAvailableModelsWithSource;
     const originalCommand = vscode.commands.executeCommand;
+    const systemPermission = Object.getOwnPropertyDescriptor(
+      configuredModels,
+      "supportsSystemMessageForwarding",
+    )!;
     const calls: string[] = [];
     let vendor = "copilot";
+    Object.defineProperty(configuredModels, "supportsSystemMessageForwarding", {
+      ...systemPermission,
+      value: () => false,
+    });
     CopilotExecutor.getAvailableModelsWithSource = async () => ({
       source: "api",
       models: [
@@ -548,6 +678,11 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       );
     } finally {
       CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(
+        configuredModels,
+        "supportsSystemMessageForwarding",
+        systemPermission,
+      );
       Object.defineProperty(vscode.commands, "executeCommand", {
         configurable: true,
         value: originalCommand,
@@ -1133,6 +1268,115 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         from: "gone",
         to: "HydraFusion",
       });
+    });
+
+    test("model fallback never overrides the Host route guard or resends an unknown turn", async () => {
+      const getConfig = vscode.workspace.getConfiguration;
+      const warning = vscode.window.showWarningMessage;
+      const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+      const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+      const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+      let hostAvailable = false;
+      let hostCalls = 0;
+      let chatCalls = 0;
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: ((section?: string) => {
+          const config = getConfig.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "executionRoute") return "agentHost" as T;
+              if (key === "sessionHarness") return "auto" as T;
+              if (key === "executionFallback") return "chat" as T;
+              return config.get<T>(key, defaultValue as T);
+            },
+          } as vscode.WorkspaceConfiguration;
+        }) as typeof vscode.workspace.getConfiguration,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async () => undefined,
+      });
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
+        configurable: true,
+        value: "test",
+      });
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true,
+        value: () =>
+          hostAvailable
+            ? { socketPath: "test", token: "test", protocolVersion: "1.0.0" }
+            : undefined,
+      });
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async () => {
+          hostCalls++;
+          throw new agentHostClient.AgentHostError("failed", "uncertain", "unknown");
+        },
+      });
+      try {
+        const executor = new CopilotExecutor();
+        const internals = executor as unknown as {
+          tryOpenChatWithPrompt(): Promise<{ opened: true }>;
+        };
+        internals.tryOpenChatWithPrompt = async () => {
+          chatCalls++;
+          return { opened: true };
+        };
+        const options: ExecuteOptions = {
+          model: "gone",
+          modelVendor: "ollama",
+          agentHostModelId: "ollama/group/gone",
+          chatSession: "continue",
+        };
+        await assert.rejects(
+          executor.executePrompt("synthetic", {
+            ...options,
+            modelFallback: true,
+            preventAgentHostFallback: true,
+          }),
+        );
+        await assert.rejects(
+          executor.executePrompt("synthetic", { ...options, modelFallback: false }),
+        );
+        assert.strictEqual(chatCalls, 0);
+
+        const fallback = await executor.executePrompt("synthetic", {
+          ...options,
+          modelFallback: true,
+        });
+        assert.strictEqual(fallback.modelFallback?.to, "HydraFusion");
+        assert.strictEqual(fallback.modelExecution?.route, "chat");
+        assert.strictEqual(chatCalls, 1);
+
+        hostAvailable = true;
+        for (const preventAgentHostFallback of [false, true]) {
+          await assert.rejects(
+            executor.executePrompt("synthetic", {
+              ...options,
+              modelFallback: true,
+              preventAgentHostFallback,
+            }),
+          );
+        }
+        assert.strictEqual(hostCalls, 2);
+        assert.strictEqual(chatCalls, 1);
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          configurable: true,
+          value: getConfig,
+        });
+        Object.defineProperty(vscode.window, "showWarningMessage", {
+          configurable: true,
+          value: warning,
+        });
+        Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+        Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+        Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+      }
     });
 
     test("fallback continues to Auto when HydraFusion is unavailable", async () => {

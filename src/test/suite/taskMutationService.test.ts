@@ -3,11 +3,14 @@ import * as assert from "assert";
 import { filterPickerModelCatalog } from "../../modelSelection";
 import type { ScheduleManager } from "../../scheduleManager";
 import {
+  buildEffectiveModelSelection,
   createLmToolMutationClient,
   createModelSelectionResolver,
+  validateAgentHostModelChoice,
   type ModelSelectionResolver,
   type MutationResult,
 } from "../../taskMutationService";
+import { messages } from "../../i18n";
 import type { CreateTaskInput, ModelInfo, ScheduledTask } from "../../types";
 
 type MutableTask = ScheduledTask;
@@ -69,6 +72,7 @@ class FakeScheduleManager {
       modelVendor: input.modelVendor || undefined,
       modelFamily: input.modelFamily || undefined,
       modelVersion: input.modelVersion || undefined,
+      agentHostModelId: input.agentHostModelId || undefined,
       modelReasoningEffort: input.modelReasoningEffort || undefined,
       ...(input.modelConfiguration !== undefined
         ? { modelConfiguration: input.modelConfiguration }
@@ -331,6 +335,7 @@ suite("taskMutationService model resolution", () => {
 
     assertOk(result);
     assert.deepStrictEqual(requestedKeys, [
+      "agentHostModelId",
       "model",
       "modelFamily",
       "modelName",
@@ -338,6 +343,97 @@ suite("taskMutationService model resolution", () => {
       "modelVendor",
       "modelVersion",
     ]);
+  });
+
+  test("new Host IDs must occur exactly once in the live catalog", async () => {
+    const hostId = "openai-codex/Codex Bridge/default::gpt-6.2-sol";
+    const input = {
+      ...baseInput(),
+      model: "default::gpt-6.2-sol",
+      modelVendor: "openai-codex",
+      agentHostModelId: hostId,
+    };
+    const outcomes = [
+      { models: [], message: messages.agentHostModelsEmpty() },
+      {
+        models: [{ id: "other" }],
+        message: messages.agentHostModelNotInCatalog(),
+      },
+      {
+        models: [{ id: hostId }, { id: hostId }],
+        message: messages.agentHostModelsDuplicate(),
+      },
+    ];
+    for (const { models, message } of outcomes) {
+      const fake = new FakeScheduleManager();
+      const c = createLmToolMutationClient({
+        scheduleManager: fake as unknown as ScheduleManager,
+        loadAgentHostModels: async () => models,
+      });
+      const result = await c.createTask(input);
+      assertFail(result);
+      assert.strictEqual(result.message, message);
+      assert.strictEqual(fake.lastCreateInput, undefined);
+    }
+    const unavailable = new FakeScheduleManager();
+    const offline = createLmToolMutationClient({
+      scheduleManager: unavailable as unknown as ScheduleManager,
+      loadAgentHostModels: async () => {
+        throw new Error("offline");
+      },
+    });
+    const failure = await offline.createTask(input);
+    assertFail(failure);
+    assert.strictEqual(failure.message, messages.agentHostModelsLoadFailed());
+    assert.strictEqual(unavailable.lastCreateInput, undefined);
+
+    const fake = new FakeScheduleManager();
+    const c = createLmToolMutationClient({
+      scheduleManager: fake as unknown as ScheduleManager,
+      loadAgentHostModels: async () => [{ id: hostId }],
+    });
+    const result = await c.createTask(input);
+    assertOk(result);
+    assert.strictEqual(result.task.agentHostModelId, hostId);
+  });
+
+  test("offline saves preserve existing Host bindings and permit clearing them", async () => {
+    const previous = {
+      ...baseInput(),
+      id: "existing",
+      model: "model",
+      modelVendor: "vendor",
+      agentHostModelId: "vendor/group/model",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as ScheduledTask;
+    let catalogCalls = 0;
+    const loadAgentHostModels = async () => {
+      catalogCalls++;
+      throw new Error("offline");
+    };
+    const fake = new FakeScheduleManager([previous]);
+    const c = createLmToolMutationClient({
+      scheduleManager: fake as unknown as ScheduleManager,
+      loadAgentHostModels,
+    });
+    assertOk(await c.updateTask(previous.id, { name: "renamed" }));
+    assertOk(await c.updateTask(previous.id, { agentHostModelId: "" }));
+    assert.strictEqual(catalogCalls, 0);
+
+    const changed = buildEffectiveModelSelection(previous, { model: "other" });
+    assert.strictEqual(changed.agentHostModelId, undefined);
+    await validateAgentHostModelChoice(changed, previous, loadAgentHostModels);
+    assert.strictEqual(catalogCalls, 0);
+    await assert.rejects(
+      validateAgentHostModelChoice(
+        { ...previous, agentHostModelId: "vendor/group/new" },
+        previous,
+        loadAgentHostModels,
+      ),
+      { message: messages.agentHostModelsLoadFailed() },
+    );
+    assert.strictEqual(catalogCalls, 1);
   });
 
   test("createTask expands a bare model id into the full selection", async () => {

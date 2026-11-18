@@ -12,13 +12,19 @@ import {
 } from "../../lmTools/shared";
 import { messages } from "../../i18n";
 import { registerLmTools } from "../../lmTools/registry";
-import type {
-  LmToolMutationClient,
-  MutationDeleteResult,
-  MutationResult,
+import {
+  createLmToolMutationClient,
+  type LmToolMutationClient,
+  type ModelSelectionResolver,
+  type MutationDeleteResult,
+  type MutationResult,
 } from "../../taskMutationService";
 import type { ScheduleManager } from "../../scheduleManager";
-import type { CreateTaskInput, ScheduledTask } from "../../types";
+import type {
+  CreateTaskInput,
+  ModelSelectionFields,
+  ScheduledTask,
+} from "../../types";
 
 function fakeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -1113,9 +1119,11 @@ suite("lmTools write wrappers", () => {
       scope: "workspace",
       model: "claude-sonnet-4",
       modelVendor: "openai-codex",
+      agentHostModelId: "openai-codex/Codex Bridge/default::gpt-6.2-sol",
       modelReasoningEffort: "high",
       autoMode: true,
       modelFallback: true,
+      preventAgentHostFallback: true,
       jitterSeconds: 120,
       maxExecutionsPerDay: 3,
       allowedTimeStart: "09:00",
@@ -1124,9 +1132,14 @@ suite("lmTools write wrappers", () => {
     assert.strictEqual(parseJson(result).ok, true);
     assert.strictEqual(client.createInput?.model, "claude-sonnet-4");
     assert.strictEqual(client.createInput?.modelVendor, "openai-codex");
+    assert.strictEqual(
+      client.createInput?.agentHostModelId,
+      "openai-codex/Codex Bridge/default::gpt-6.2-sol",
+    );
     assert.strictEqual(client.createInput?.modelReasoningEffort, "high");
     assert.strictEqual(client.createInput?.autoMode, true);
     assert.strictEqual(client.createInput?.modelFallback, true);
+    assert.strictEqual(client.createInput?.preventAgentHostFallback, true);
     assert.strictEqual(client.createInput?.jitterSeconds, 120);
     assert.strictEqual(client.createInput?.maxExecutionsPerDay, 3);
     assert.strictEqual(client.createInput?.allowedTimeStart, "09:00");
@@ -1148,6 +1161,42 @@ suite("lmTools write wrappers", () => {
       confirmationMessageText(prepared).includes(
         escapeConfirmationText("claude-sonnet-4"),
       ),
+    );
+  });
+
+  test("create and update confirmations show the exact selected Host ID safely", async () => {
+    const hostId = "vendor/group/model`name\n- injected: true";
+    const created = await withConfirmationMode("always", () =>
+      prepare(createSchedulerCreateTaskTool(new FakeClient()), {
+        name: "Daily review",
+        cronExpression: "0 9 * * *",
+        prompt: "Review",
+        scope: "global",
+        agentHostModelId: hostId,
+        preventAgentHostFallback: true,
+      }),
+    );
+    const updated = await withConfirmationMode("always", () =>
+      prepare(createSchedulerUpdateTaskTool(new FakeClient()), {
+        id: "task-1",
+        updates: {
+          agentHostModelId: hostId,
+          preventAgentHostFallback: false,
+        },
+      }),
+    );
+    for (const prepared of [created, updated]) {
+      const message = confirmationMessageText(prepared);
+      assert.ok(message.includes(formatConfirmationCode(hostId)));
+      assert.ok(!message.includes("\n- injected: true"));
+    }
+    assert.match(
+      confirmationMessageText(created),
+      /preventAgentHostFallback: true/,
+    );
+    assert.match(
+      confirmationMessageText(updated),
+      /preventAgentHostFallback: false/,
     );
   });
 
@@ -1191,13 +1240,137 @@ suite("lmTools write wrappers", () => {
     const client = new FakeClient();
     const result = await invoke(createSchedulerUpdateTaskTool(client), {
       id: "task-1",
-      updates: { model: "shared", modelVendor: "ollama" },
+      updates: {
+        model: "shared",
+        modelVendor: "ollama",
+        agentHostModelId: "ollama/group/shared::variant",
+        preventAgentHostFallback: false,
+      },
     });
     assert.strictEqual(parseJson(result).ok, true);
     assert.deepStrictEqual(client.updateArgs?.updates, {
       model: "shared",
       modelVendor: "ollama",
+      agentHostModelId: "ollama/group/shared::variant",
+      preventAgentHostFallback: false,
     });
+  });
+
+  test("Host fields reject invalid types without mutations", async () => {
+    for (const invalid of [
+      { agentHostModelId: { id: "model" } },
+      { preventAgentHostFallback: "false" },
+    ]) {
+      const client = new FakeClient();
+      const create = parseJson(
+        await invoke(createSchedulerCreateTaskTool(client), {
+          name: "Daily review",
+          cronExpression: "0 9 * * *",
+          prompt: "Review",
+          scope: "global",
+          ...invalid,
+        } as never),
+      );
+      const update = parseJson(
+        await invoke(createSchedulerUpdateTaskTool(client), {
+          id: "task-1",
+          updates: invalid,
+        } as never),
+      );
+      assert.strictEqual(create.reason, "validation");
+      assert.strictEqual(update.reason, "validation");
+      assert.strictEqual(client.createInput, undefined);
+      assert.strictEqual(client.updateArgs, undefined);
+    }
+  });
+
+  test("opaque Host selection survives model-only resolution without exposing task input", async () => {
+    const hostId = "openai-codex/Codex Bridge/opaque/model::chosen";
+    const model = "default::gpt-6.2-sol";
+    const existing = fakeTask({
+      model,
+      modelVendor: "openai-codex",
+      agentHostModelId: hostId,
+      preventAgentHostFallback: true,
+    });
+    const captured: {
+      createdInput?: CreateTaskInput;
+      updatedInput?: Partial<CreateTaskInput>;
+    } = {};
+    const manager = {
+      isDisclaimerAccepted: () => true,
+      checkMinimumInterval: () => undefined,
+      getTask: () => existing,
+      createTask: async (input: CreateTaskInput) => {
+        captured.createdInput = input;
+        return { ...existing, ...input } as ScheduledTask;
+      },
+      updateTask: async (_id: string, updates: Partial<CreateTaskInput>) => {
+        captured.updatedInput = updates;
+        return { ...existing, ...updates } as ScheduledTask;
+      },
+    } as unknown as ScheduleManager;
+    const selections: ModelSelectionFields[] = [];
+    const resolver: ModelSelectionResolver = async (selection) => {
+      selections.push({ ...selection });
+      return { ok: true, selection: { ...selection }, warnings: [] };
+    };
+    const client = createLmToolMutationClient({
+      scheduleManager: manager,
+      resolveModelSelection: resolver,
+      loadAgentHostModels: async () => [{ id: hostId }],
+    });
+    const create = parseJson(
+      await invoke(createSchedulerCreateTaskTool(client), {
+        name: "Private task",
+        cronExpression: "0 9 * * *",
+        prompt: "private create prompt",
+        scope: "global",
+        model,
+        modelVendor: "openai-codex",
+        agentHostModelId: hostId,
+        preventAgentHostFallback: true,
+      }),
+    );
+    const update = parseJson(
+      await invoke(createSchedulerUpdateTaskTool(client), {
+        id: "task-1",
+        updates: {
+          prompt: "private update prompt",
+          model,
+          preventAgentHostFallback: false,
+        },
+      }),
+    );
+    assert.strictEqual(create.ok, true);
+    assert.strictEqual(update.ok, true);
+    assert.strictEqual(selections.length, 2);
+    const modelFields = new Set([
+      "model",
+      "modelName",
+      "modelVendor",
+      "modelFamily",
+      "modelVersion",
+      "modelReasoningEffort",
+      "modelConfiguration",
+      "agentHostModelId",
+    ]);
+    for (const selection of selections) {
+      assert.strictEqual(selection.agentHostModelId, hostId);
+      assert.ok(Object.keys(selection).every((key) => modelFields.has(key)));
+      assert.ok(!Object.prototype.hasOwnProperty.call(selection, "prompt"));
+      assert.ok(!Object.prototype.hasOwnProperty.call(selection, "name"));
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(
+          selection,
+          "preventAgentHostFallback",
+        ),
+      );
+    }
+    assert.strictEqual(captured.createdInput?.agentHostModelId, hostId);
+    assert.strictEqual(captured.createdInput?.preventAgentHostFallback, true);
+    assert.strictEqual(captured.updatedInput?.agentHostModelId, hostId);
+    assert.strictEqual(captured.updatedInput?.preventAgentHostFallback, false);
   });
 
   test("update task rejects unknown fields in updates", async () => {

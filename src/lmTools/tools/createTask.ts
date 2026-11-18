@@ -9,12 +9,14 @@ import type {
 import {
   assertWriteToolGates,
   buildJsonTextResult,
+  describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
   escapeConfirmationText,
   formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
+  validateAgentHostToolFields,
 } from "../shared";
 
 interface CreateTaskToolInput {
@@ -29,6 +31,7 @@ interface CreateTaskToolInput {
   agent?: string;
   model?: string;
   modelVendor?: string;
+  agentHostModelId?: string;
   modelReasoningEffort?: string;
   modelConfiguration?: ModelConfiguration;
   enabled?: boolean;
@@ -36,6 +39,7 @@ interface CreateTaskToolInput {
   targetChatId?: string;
   autoMode?: boolean;
   modelFallback?: boolean;
+  preventAgentHostFallback?: boolean;
   jitterSeconds?: number;
   maxExecutionsPerDay?: number;
   allowedTimeStart?: string;
@@ -57,6 +61,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     agent: input.agent,
     model: input.model,
     modelVendor: input.modelVendor,
+    agentHostModelId: input.agentHostModelId,
     modelReasoningEffort: input.modelReasoningEffort,
     modelConfiguration:
       input.modelConfiguration ?? (input.modelReasoningEffort ? undefined : {}),
@@ -65,6 +70,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     targetChatId: input.targetChatId,
     autoMode: input.autoMode,
     modelFallback: input.modelFallback,
+    preventAgentHostFallback: input.preventAgentHostFallback,
     jitterSeconds: input.jitterSeconds,
     maxExecutionsPerDay: input.maxExecutionsPerDay,
     allowedTimeStart: input.allowedTimeStart,
@@ -100,6 +106,7 @@ export function createSchedulerCreateTaskTool(
         input.modelVendor
           ? `- modelVendor: ${escapeConfirmationText(input.modelVendor)}`
           : undefined,
+        ...describeAgentHostFieldsForConfirmation(input, true),
         describeAttachmentsForConfirmation(input.attachments),
         input.targetChatId
           ? `- existing chat: ${formatConfirmationCode(String(input.targetChatId).slice(0, 12))}… (prompts are queued into that chat)`
@@ -144,6 +151,10 @@ export function createSchedulerCreateTaskTool(
           message:
             "Missing required fields: name, cronExpression or runAt, prompt, scope.",
         });
+      }
+      const fieldError = validateAgentHostToolFields(input);
+      if (fieldError) {
+        return fieldError;
       }
       const result = await client.createTask(toCreateInput(input));
       if (!result.ok) {

@@ -116,7 +116,7 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 単発タスクの手動実行後、ツールは `enabledStateChanged` と `taskDeleted` を返します。実行済みの単発タスクは `oneTimeCompleted` と再設定の案内を返し、再送信しません。
 
-`kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、`statusSemantics`、新しい順の `entries` が含まれます。`status: "success"` はプロンプトの送信またはチャットキューへの受理を示します。Agent Host で観測できた場合は `turnOutcome`（`queued` / `completed` / `failed` / `cancelled` / `unknown`）と、完了時の `responseText`（`observed` / `not_observed` / `unknown`）も返します。項目がない場合は未記録で、古い履歴も含まれます。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
+`kind=history` のレスポンスには全件数 `total`、返却件数 `count`、続きの有無 `hasMore`、`statusSemantics`、新しい順の `entries` が含まれます。`status: "success"` はプロンプトの送信またはチャットキューへの受理を示します。Agent Host で観測できた場合は `turnOutcome`（`queued` / `completed` / `failed` / `cancelled` / `unknown`）と、完了時の `responseText`（`observed` / `not_observed` / `unknown`）も返します。`modelExecution` は経路、要求した ID、報告された ID と `reported_match` / `reported_mismatch` / `unverified` を区別します。報告が一致してもバックエンドやアカウントの確認にはなりません。項目がない場合は未記録で、古い履歴も含まれます。legacy の不正日時は監査時刻を推測せず保持または省略し、該当時は `executedAtInvalid` / `nextRunAtInvalid` で示します。
 
 単発タスクの作成では `cronExpression` の代わりにタイムゾーンオフセット付き ISO 8601 日時の `runAt`（例: `2030-09-26T21:00:00+09:00`）を指定し、必要なら `afterRun: "disable" | "delete"` を渡します。更新でも同じ項目を使えます。Cron に戻す場合は `runAt: ""` と `cronExpression` を同時に指定します。`kind=list` / `kind=get` に設定が含まれ、`kind=history` は自動削除後もタスク名と `runAt` を保持します。Webview の日時選択はマシンのローカルタイムゾーンです。
 
@@ -127,6 +127,8 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 `Auto` および内部 utility モデルの ID は選択肢に残しますが、メタデータ上のモデル名から推論レベルの候補を引き継ぎません。
 
 Codex Bridge、BYOK、Local LLM などの追加 provider が VS Code Chat に登録したモデルも、Copilot モデルと同じ一覧から選択できます。モデル選択欄は提供元ごとに分かれ、品質バリエーションは別の選択欄に表示します。`kind=list_models` が返す `vendor` を作成・更新時の `modelVendor` に指定すると、提供元間で重複するモデル ID を区別できます。完全一致 ID を正規化した別名より優先し、ID・別名・モデル名の照合で提供元が曖昧な場合は `modelVendor` を要求します。保存した提供元をモデル解決時にも維持します。Copilot 専用カタログの照会が失敗しても他の提供元の検出を続け、全体カタログの照会が失敗しても取得済みの Copilot モデルは保持します。
+
+外部モデルを Agent Host で実行する場合は、提供元のモデルを選んでから **Agent Host のモデル ID** を更新し、Host の一覧にある完全な ID を明示的に選びます。選んだ Host ID が提供元のモデルに対応していることを確認してください。Scheduler はこの対応関係を自動検証できません。一覧は稼働中の Host に依存し、起動直後は空の場合があります。ID は送信前に再確認します。古い BYOK タスクで対応関係を特定できない場合は、候補が 1 件でも自動選択せず停止します。`scheduler_query` の `kind=list_agent_host_models` でも同じ ID を取得でき、`scheduler_create_task` / `scheduler_update_task` は `agentHostModelId` を受け付けます。提供元のモデルを変更すると、新しい ID を明示しない限り古い紐付けは解除されます。この ID は Host への要求を指定するもので、実際に処理するバックエンドやアカウントの証明ではありません。
 
 追加 provider を明示選択した場合、モデル不在や Chat への送信失敗時には停止し、既定モデルや別の提供元に切り替えて再試行しません。提供元の認証・接続と、選択した Chat / Agent モードへの対応は必要です。送信成功は提供元の応答完了を保証しません。独立した Claude / Codex のエージェント実行環境のスケジュールは対象外です。
 
@@ -175,12 +177,12 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 
 #### Agent Host 経由での実行（既定）
 
-1.10.0 から、タスクはチャット画面に入力するのではなく、VS Code が Copilot harness 用にすでに動かしている **Agent Host** へ送って実行します。これにより、タスクに設定した内容が反映されます。
+1.10.0 から、タスクはチャット画面に入力するのではなく、VS Code が Copilot harness 用にすでに動かしている **Agent Host** へ送って実行します。
 
-- **反映されるもの**: モデル、reasoning effort とコンテキストサイズ（モデルが対応している場合）、カスタムエージェント、添付ファイル。実行履歴には、指定したモデルと Agent Host が報告した実際のモデルを記録し、異なる場合は警告を表示します（Auto は比較しません）。
+- **要求するもの**: モデル、reasoning effort とコンテキストサイズ（モデルが対応している場合）、カスタムエージェント、添付ファイル。履歴には要求した ID と Host の報告を記録します。報告が完全一致してもバックエンドの独立確認にはなりません。明確に異なる報告は警告し、報告がない場合や曖昧な場合は未確認とします。
 - **実行場所**: タスクのワークスペースフォルダー（グローバルのタスクは最初のローカルワークスペースフォルダー）です。通常の Copilot セッションとして、自分で始めたチャットと同じようにそのフォルダーのセッション一覧に表示されます。Scheduler は、実行を開始した後に、そのセッションをエディタのタブとして開くため、実行の様子を見られます（VS Code のコマンド `workbench.action.chat.openSessionInEditorGroup` を使います。VS Code 側で変わっても、実行には影響せず、タブが開かないだけです）。**継続**（`copilotScheduler.chatSession` またはタスクごとの指定）は、VS Code を開いている間、そのフォルダーで最後に Scheduler が使ったセッションに続けて送ります。再起動後は新しいセッションから始まります。
 - **ツール**: 無人の実行は承認の確認に答えられないため、`copilotScheduler.agentHostAutoApprove`（既定オン）で承認なしにツールを使えるようにしています。ファイル編集やコマンド実行が必要なタスクが拒否されることを受け入れる場合だけオフにしてください。ユーザー／リモート設定のみ有効です。
-- **定期タスクを Agent Host で実行できないとき**（実行中のホストがない、または適用できないモデル・カスタムエージェント・オプション・添付がある。例: `@workspace` 系のエージェント、`/ask`、`/edit`、Codex ブリッジのモデル）: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を実行履歴に記録します。`fail` は実行せず警告を表示するため、指定外のモデルでタスクが動くことがありません。既存チャットに紐付けたタスクは設定にかかわらず代替経路へ送らず停止します。Agent Host で実行を開始した後に失敗した場合は、二重に実行しません。
+- **定期タスクを Agent Host で実行できないとき**: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を記録します。この経路でのモデル適用は未確認です。`fail` は停止します。タスク単位の **Agent Host から Chat へ自動で切り替えない**（Chat ツールでは `preventAgentHostFallback`）は既定オフで、オンにすると `chat` より優先して切替を禁止します。最初から Chat・Local・リモート・CLI を選ぶ場合は対象外です。既存チャットへの紐付けや Host ID が未解決の旧タスクも代替経路へ送らず停止します。送信済みまたは結果不明の場合は自動再送しません。
 - **経路の選択**: `copilotScheduler.executionRoute` の既定は `agentHost` です。Copilot Chat セッションを開く従来の経路を使うには `chat` にします。定期タスク個別の Copilot CLI 指定は、どちらよりも優先されます。`sessionHarness` が `local` の場合とリモートのウィンドウでは、Agent Host の登録情報がローカルのものなので、定期タスクはチャット経路を使います。
 - 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、通常の定期タスクでは `executionFallback` に従います。既存チャットに紐付けたタスクは代替経路へ送らず停止します。`copilotScheduler.agentHostTimeoutMinutes`（既定 60）を超えるとキャンセルを要求します。確認できなければ結果は不明で、実行が続く可能性があります。
 - **単発タスク**は、送信直前に共有ロック内で予約を確認するため Agent Host が必要です。Chat・CLI 経路へのフォールバック、リモートウィンドウ、local session harness では実行しません。予約後に送信が中止された場合は、タスクを確認して日時を再設定してから再実行してください。
@@ -188,7 +190,7 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 
 #### Copilot CLI での実行
 
-上記の Agent Host 経路でもモデルは反映されます。定期タスクを Copilot セッションではなくバックグラウンドの `copilot` プロセスで実行したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`（プロンプトは標準入力）として実行します。
+上記の Agent Host 経路ではモデルを指定して送信します。定期タスクを Copilot セッションではなくバックグラウンドの `copilot` プロセスで実行したいときは、タスクフォームの **Copilot CLI で実行する** を選びます。`copilot -s --output-format json --model <id> [--reasoning-effort <level>]`（プロンプトは標準入力）として実行します。
 
 - タスク単位のオプトインで、モデルを指定したタスクにだけ効きます。モデル未指定のタスク、またはオプションをオフにしたタスクは、これまでどおりチャットで実行します。既存のタスクやプロンプトファイル型のタスクは変わりません。VS Code がどの種類のチャットセッションを使うかを Scheduler は判別できないため、自動では切り替えません。
 - CLI はプロンプトモードで `/スキル` を実行しない（CLI 1.0.99 で確認）ため、Scheduler がスキルの `SKILL.md` の指示（front matter を除く）とスキルのフォルダーを、引数の前に付けます。スキル一覧と同じ規則で、名前の一致が必要で、ワークスペースのスキルは信頼されたワークスペースでのみ使え、ユーザーのスキルより優先されます。
@@ -208,7 +210,7 @@ VS Code 1.142（Windows）で確認した内容です。
 - effort とコンテキストサイズは、Local のセッションでも未確認です。
 - **Auto** と **HydraFusion** は、どちらのセッションでも動作を確認できていません。HydraFusion はエージェントホストでの Auto の振り分け階層で、拡張向けには独立したモデルとして一覧に出ません。
 
-チャット経路では、Scheduler が報告するのは「送信した」ことで、選んだモデルで実行されたことではありません。Agent Host 経路では、実際に実行されたモデルを記録します。チャット経路での新規チャットのセッションの種類は VS Code が決め、Scheduler は変更しません。
+チャット経路では、Scheduler が報告するのは「送信した」ことで、選んだモデルで実行されたことではありません。Agent Host 経路では要求した ID と報告された ID を記録しますが、実バックエンドの独立した証明ではありません。チャット経路での新規チャットのセッションの種類は VS Code が決め、Scheduler は変更しません。
 
 #### モデルのフォールバック（オプトイン）
 
@@ -277,8 +279,8 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
 | `copilotScheduler.autoEnableProposedApi`      | `true`            | プレリリース版のみ：起動時に `argv.json` の `enable-proposed-api` へ Scheduler を自動追記してモデル詳細設定を使えるようにします。反映には VS Code の完全再起動が必要（ウィンドウ再読み込み不可）。`argv.json` を自分で管理する場合はオフ                                 |
 | `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
-| `copilotScheduler.executionRoute`             | `agentHost`       | タスクの実行方法。`agentHost`（既定）は VS Code の Agent Host へ送り、モデル・effort・コンテキストサイズ・カスタムエージェント・添付を反映して実際のモデルを記録します。`chat` は従来の Copilot Chat 経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
-| `copilotScheduler.executionFallback`          | `chat`            | 定期タスクを Agent Host で実行できないとき。`chat` はチャット経路で実行して理由を記録、`fail` は実行せず警告します。既存チャットに紐付けたタスクは代替経路へ送らず停止します。単発タスクは代替経路を使いません。実行を開始して失敗した場合は二重に実行しません。 |
+| `copilotScheduler.executionRoute`             | `agentHost`       | `agentHost`（既定）は選択した ID と対応オプションを VS Code の Agent Host に送ります。報告 ID は実バックエンドの独立確認ではありません。`chat` は従来の経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
+| `copilotScheduler.executionFallback`          | `chat`            | 定期タスクの送信前に Host を使えない場合、`chat` はチャット経路への切替を許可し、`fail` は停止します。タスク単位の経路切替ガードや既存チャット紐付けも切替を禁止します。単発タスクは切替を使わず、送信済み・結果不明の場合は自動再送しません。 |
 | `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.agentHostOpenSession`       | `true`            | Agent Host の実行を開始したら、そのセッションをエディタのタブとして開きます。頻繁に動く無人タスクではオフにできます。 |
 | `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行にキャンセルを要求するまでの分数（1〜720）。確認できなければ結果は不明です。ユーザー／リモート設定のみ有効。 |
@@ -395,9 +397,11 @@ node scripts/verify-vsix-contents.js artifacts/vsix/copilot-scheduler-allfix-lif
 
 メンテナーはローカルで `vsce publish` を実行しなくても、GitHub Actions から公開できます。
 
+- MarketplaceのPre-release版はStableより大きいバージョンにし、両方を更新するときはPre-release版を先に公開します。VS CodeはPre-releaseを選択した利用者にも最大バージョンを適用します。詳細は [VS Codeのプレリリース拡張機能](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#pre-release-extensions) を参照してください。
 - `package.json` の version を更新した後、同じ番号の `vX.Y.Z` タグを push します。
 - GitHub Actions が `npm ci`、`npm run compile`、`npm test`、`.vsix` 作成、VS Code Marketplace 公開、GitHub Release への `.vsix` 添付まで実行します。
 - 公開前の確認は、対象ブランチで `Publish Extension` を `publish=false`（既定値）として手動起動します。全ゲート成功後にバージョンタグをpushします。ブランチ・タグをまたいでジョブは直列化されます。明示的な `publish=true` はMarketplaceのみへ公開し、GitHub Releaseには対応するタグが必要です。
+- `preview/*` ブランチでは `publish=false` に加えて `package_pre_release=true` を指定すると、公開せずにMarketplace Pre-release版のパッケージと公開適格性を検証できます。
 - 利用前に repository secret `VSCE_PAT` を設定してください。
 - Pre-release版は、`package.json` と一致する `marketplace-preview-vX.Y.Z` タグで公開します。ワークフローが `--pre-release` を付けてパッケージ化・公開します。公開検査の例外は、明示承認された `languageModelSystem` 提案だけです。実行時の許可付与やMarketplace受理を保証するものではなく、拒否時は原因を調べ、全API許可や検査無効化では迂回しません。
 - `preview-vX.Y.Z` タグはGitHub専用のビルド（VSIX添付、Marketplaceには公開しない）を作成します。 `preview/*` ブランチでの手動 `publish=true` は拒否されます。公開はタグのpushで行います。

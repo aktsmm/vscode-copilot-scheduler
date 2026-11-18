@@ -96,6 +96,97 @@ suite("executionHistoryStore", () => {
     );
   });
 
+  test("persists route and reported model evidence without claiming backend verification", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "host-match",
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "vendor/group/model",
+          reportedModel: "vendor/group/model",
+          verification: "reported_match",
+        },
+      }),
+    );
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "queued",
+        turnOutcome: "queued",
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "vendor/group/model",
+          verification: "unverified",
+        },
+      }),
+    );
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "chat",
+        modelExecution: {
+          route: "chat",
+          requestedModel: "model",
+          verification: "unverified",
+        },
+      }),
+    );
+    const entries = getExecutionHistoryEntries();
+    assert.deepStrictEqual(entries.find((item) => item.taskId === "host-match")?.modelExecution, {
+      route: "agentHost",
+      requestedModel: "vendor/group/model",
+      reportedModel: "vendor/group/model",
+      verification: "reported_match",
+    });
+    assert.strictEqual(
+      entries.find((item) => item.taskId === "queued")?.modelExecution?.verification,
+      "unverified",
+    );
+    assert.strictEqual(
+      entries.find((item) => item.taskId === "chat")?.modelExecution?.verification,
+      "unverified",
+    );
+    await enqueueExecutionHistoryEntry(entry({ taskId: "legacy" }));
+    assert.strictEqual(getExecutionHistoryEntries()[0].modelExecution, undefined);
+  });
+
+  test("does not turn a truncated mismatch or a queued report into a match", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    const prefix = `vendor/${"a".repeat(512)}`;
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "truncated",
+        turnOutcome: "completed",
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: `${prefix}x`,
+          reportedModel: `${prefix}y`,
+          verification: "reported_mismatch",
+        },
+      }),
+    );
+    await enqueueExecutionHistoryEntry(
+      entry({
+        taskId: "queued-report",
+        turnOutcome: "queued",
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "vendor/model",
+          reportedModel: "vendor/model",
+          verification: "reported_match",
+        },
+      }),
+    );
+    for (const id of ["truncated", "queued-report"]) {
+      assert.strictEqual(
+        getExecutionHistoryEntries().find((item) => item.taskId === id)
+          ?.modelExecution?.verification,
+        "unverified",
+      );
+    }
+  });
+
   test("a rejected history write does not block an already queued append", async () => {
     const ctx = stubContext();
     const update = ctx.globalState.update.bind(ctx.globalState);

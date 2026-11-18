@@ -1249,6 +1249,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         modelVendor?: string;
         modelFamily?: string;
         modelVersion?: string;
+        agentHostModelId?: string;
+        preventAgentHostFallback?: boolean;
       }) => void;
       handleMessage?: (message: unknown) => Promise<void>;
     };
@@ -1259,6 +1261,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           prompt: string;
           agent?: string;
           model?: string;
+          agentHostModelId?: string;
+          preventAgentHostFallback?: boolean;
         }
       | undefined;
 
@@ -1268,6 +1272,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           prompt: request.prompt,
           agent: request.agent,
           model: request.model,
+          agentHostModelId: request.agentHostModelId,
+          preventAgentHostFallback: request.preventAgentHostFallback,
         };
       };
 
@@ -1281,12 +1287,16 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         modelVendor: "copilot",
         modelFamily: "gpt-4o",
         modelVersion: "2026-01-01",
+        agentHostModelId: "vendor/group/model",
+        preventAgentHostFallback: true,
       });
 
       assert.deepStrictEqual(received, {
         prompt: "hello",
         agent: "@workspace",
         model: "gpt-4o",
+        agentHostModelId: "vendor/group/model",
+        preventAgentHostFallback: true,
       });
     } finally {
       wv.onTestPromptCallback = originalCallback;
@@ -1933,6 +1943,76 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
   });
 
+  test("Host model picker retains a saved pin offline and clears it when the source changes", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const options: Array<{ value: string; textContent: string }> = [
+      { value: "", textContent: "Not selected" },
+    ];
+    const select = {
+      options,
+      value: "",
+      appendChild: (option: { value: string; textContent: string }) =>
+        options.push(option),
+      remove: (index: number) => options.splice(index, 1),
+    };
+    const status = { textContent: "" };
+    const models = [
+      { id: "vendor/group/model", name: "<unsafe label>" },
+      { id: "vendor/duplicate" },
+      { id: "vendor/duplicate" },
+    ];
+    let selection = { model: "model", modelVendor: "vendor" };
+    const context = {
+      document: { createElement: () => ({ value: "", textContent: "" }) },
+      agentHostModelSelect: select,
+      agentHostModelStatus: status,
+      strings: {
+        agentHostModelSavedUnverified: "saved-unverified",
+        agentHostModelsDuplicate: "duplicates",
+        agentHostModelsEmpty: "empty",
+      },
+      agentHostModels: models,
+      agentHostModelsLoaded: true,
+      getCurrentModelSelection: () => selection,
+      selectHasOptionValue: (
+        element: typeof select,
+        value: string,
+      ) => element.options.some((option) => option.value === value),
+    };
+    const factory = new Function(
+      ...Object.keys(context),
+      `var agentHostBindingKey = "";
+       var pendingModelValue = "", pendingModelVendor = "", pendingModelFamily = "", pendingModelVersion = "";
+       ${extractFunctionSource(source, "getAgentHostBindingSelection")}
+       ${extractFunctionSource(source, "getAgentHostBindingKey")}
+       ${extractFunctionSource(source, "setAgentHostModelSelection")}
+       ${extractFunctionSource(source, "updateAgentHostModelOptions")}
+       ${extractFunctionSource(source, "clearChangedAgentHostBinding")}
+       return { setAgentHostModelSelection, updateAgentHostModelOptions, clearChangedAgentHostBinding };`,
+    )(...Object.values(context)) as {
+      setAgentHostModelSelection(id: string, value: typeof selection): void;
+      updateAgentHostModelOptions(value: typeof models, error?: string): void;
+      clearChangedAgentHostBinding(): void;
+    };
+    factory.setAgentHostModelSelection("saved/opaque/id", selection);
+    factory.updateAgentHostModelOptions([], "offline");
+    assert.strictEqual(select.value, "saved/opaque/id");
+    assert.strictEqual(status.textContent, "offline");
+    factory.updateAgentHostModelOptions(models);
+    assert.strictEqual(select.value, "saved/opaque/id");
+    assert.strictEqual(status.textContent, "saved-unverified");
+    assert.strictEqual(options.some((option) => option.value === "vendor/duplicate"), false);
+    assert.ok(
+      options.some((option) => option.textContent === "<unsafe label> — vendor/group/model"),
+    );
+    selection = { model: "different", modelVendor: "vendor" };
+    factory.clearChangedAgentHostBinding();
+    assert.strictEqual(select.value, "");
+  });
+
   test("updateDefaults applies new defaults immediately only in create mode", () => {
     const scriptPath = path.resolve(
       __dirname,
@@ -2010,6 +2090,76 @@ suite("SchedulerWebview Script Contract Tests", () => {
         sourceContainsToken(resetSource, token),
         `Expected token not found in resetForm default-scope flow: ${token}`,
       );
+    }
+  });
+
+  test("Host model selection explains the identity check in both languages", async () => {
+    let onDispose: (() => void) | undefined;
+    const panel = {
+      webview: {
+        html: "",
+        cspSource: "vscode-webview://test",
+        asWebviewUri: (uri: vscode.Uri) => uri,
+        postMessage: async () => true,
+        onDidReceiveMessage: () => ({ dispose() {} }),
+      },
+      reveal: () => undefined,
+      dispose: () => onDispose?.(),
+      onDidDispose: (listener: () => void) => {
+        onDispose = listener;
+        return { dispose() {} };
+      },
+    } as unknown as vscode.WebviewPanel;
+    const originalCreate = vscode.window.createWebviewPanel;
+    const originalConfig = vscode.workspace.getConfiguration;
+    let language = "en";
+    Object.defineProperty(vscode.window, "createWebviewPanel", {
+      value: (() => panel) as typeof vscode.window.createWebviewPanel,
+      configurable: true,
+    });
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: ((section?: string) => {
+        const config = originalConfig.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            return key === "language"
+              ? (language as T)
+              : config.get<T>(key, defaultValue as T);
+          },
+        };
+      }) as typeof vscode.workspace.getConfiguration,
+    });
+    try {
+      for (const [locale, expected] of [
+        ["en", /Scheduler cannot verify the match/],
+        ["ja", /Scheduler は対応関係を検証できません/],
+      ] as const) {
+        language = locale;
+        await SchedulerWebview.show(
+          vscode.Uri.file(path.resolve(__dirname, "../../..")),
+          [],
+          () => {},
+        );
+        const html = panel.webview.html;
+        assert.match(html, /aria-describedby="agent-host-model-note agent-host-model-status"/);
+        const note = /id="agent-host-model-note">([^<]+)<\/p>/.exec(html);
+        assert.ok(note, "Host model note should be rendered");
+        assert.match(note[1], expected);
+        SchedulerWebview.dispose();
+      }
+    } finally {
+      SchedulerWebview.dispose();
+      Object.defineProperty(vscode.window, "createWebviewPanel", {
+        value: originalCreate,
+        configurable: true,
+      });
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        value: originalConfig,
+        configurable: true,
+      });
     }
   });
 
@@ -2113,6 +2263,118 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(!submitSource.includes('taskData.promptPath = ""'));
   });
 
+  test("task submissions carry the selected Host ID and route guard", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const submitSource = extractBlockFromStartToken(
+      source,
+      'taskForm.addEventListener("submit", function (e) {',
+    );
+    const callback = submitSource.slice(submitSource.indexOf("function (e)"));
+    for (const { editing, hostId, guard } of [
+      { editing: false, hostId: "vendor/group/new", guard: true },
+      { editing: true, hostId: "vendor/group/new", guard: true },
+      { editing: true, hostId: "", guard: false },
+    ]) {
+      const original = {
+        id: "edit-task",
+        name: "Synthetic task",
+        prompt: "synthetic",
+        cronExpression: "0 9 * * *",
+        promptSource: "inline",
+        scope: "global",
+        model: "model",
+        modelVendor: "vendor",
+        agentHostModelId: "vendor/group/old",
+        preventAgentHostFallback: !guard,
+        enabled: false,
+      };
+      const posted: Array<{ type: string; data: Partial<ScheduledTask> }> = [];
+      const fields: Record<string, { value?: string; checked?: boolean }> = {
+        "task-name": { value: original.name },
+        "prompt-text": { value: original.prompt },
+        "run-first": { checked: false },
+      };
+      const context = {
+        document: {
+          getElementById: (id: string) => fields[id] ?? null,
+          querySelector: (selector: string) => ({
+            value: selector.includes("prompt-source") ? "inline" : "global",
+          }),
+        },
+        pendingSubmit: false,
+        formErr: null,
+        agentSelect: null,
+        editingTaskId: editing ? original.id : "",
+        pendingAgentValue: "",
+        getCurrentModelSelection: () => ({ model: "model", modelVendor: "vendor" }),
+        pendingModelName: "",
+        pendingModelVendor: "",
+        pendingModelFamily: "",
+        pendingModelVersion: "",
+        pendingModelReasoningEffort: "",
+        modelConfigurationState: undefined,
+        templateSelect: null,
+        pendingTemplatePath: "",
+        allowedTimeEnabledInput: null,
+        allowedTimeStartInput: null,
+        allowedTimeEndInput: null,
+        isOneTimeMode: () => false,
+        runAtInput: null,
+        editingTaskSnapshot: editing ? original : null,
+        editingTaskNormalizedSnapshot: null,
+        afterRunSelect: null,
+        cronExpression: { value: original.cronExpression },
+        autoModeInput: null,
+        modelFallbackInput: null,
+        agentHostModelSelect: { value: hostId },
+        preventAgentHostFallbackInput: { checked: guard },
+        useCopilotCliInput: null,
+        getSelectedSkillRefForSubmit: () => null,
+        getEffectivePromptSource: () => "inline",
+        chatSessionSelect: null,
+        targetChatSelect: { value: "" },
+        jitterSecondsInput: null,
+        maxExecutionsPerDayInput: null,
+        attachmentsState: [],
+        editingTaskEnabled: false,
+        strings: {},
+        templateLoadingPath: "",
+        templatePromptBaseline: null,
+        submitBtn: { disabled: false },
+        defaultJitterSeconds: 0,
+        serializeAttachments: (value: unknown) => JSON.stringify(value ?? []),
+        clearInvalidField: () => undefined,
+        failValidation: (message: string) => assert.fail(message),
+        vscode: {
+          postMessage: (message: (typeof posted)[number]) => posted.push(message),
+        },
+      };
+      const factory = new Function(
+        ...Object.keys(context),
+        [
+          extractFunctionSource(source, "boundedNumber"),
+          extractFunctionSource(source, "copyModelConfigurationForForm"),
+          extractFunctionSource(source, "serializeModelConfigurationForDiff"),
+          extractFunctionSource(source, "normalizeSkillRefClient"),
+          extractFunctionSource(source, "normalizeTaskForEditDiff"),
+          extractFunctionSource(source, "buildTaskUpdateData"),
+          `return (${callback});`,
+        ].join("\n"),
+      );
+      const submit = factory(...Object.values(context)) as (event: {
+        preventDefault: () => void;
+      }) => void;
+      submit({ preventDefault: () => undefined });
+      assert.strictEqual(posted.length, 1);
+      assert.strictEqual(posted[0].type, editing ? "updateTask" : "createTask");
+      assert.strictEqual(posted[0].data.agentHostModelId, hostId);
+      assert.strictEqual(posted[0].data.preventAgentHostFallback, guard);
+    }
+  });
+
   test("submit handler preserves file references across model and prompt refresh changes", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
@@ -2184,6 +2446,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
           cronExpression: { value: original.cronExpression },
           autoModeInput: null,
           modelFallbackInput: null,
+          agentHostModelSelect: null,
+          preventAgentHostFallbackInput: null,
           useCopilotCliInput: null,
           getSelectedSkillRefForSubmit: () => null,
           getEffectivePromptSource: () => promptSource,
@@ -3718,6 +3982,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       const renderModelConfigurationControls = () => {};
       const updateModelSelectionStatus = () => {};
       const scheduleLayoutRefresh = () => {};
+      const clearChangedAgentHostBinding = () => {};
       ${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}
     `,
     );
@@ -3767,6 +4032,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "findModelPickerGroup",
       `
       var modelConfigurationState;
+      var agentHostModelsLoaded = true;
       const clearUnavailableModelOptions = () => {};
       var modelConfigurationExecutionEnabled = true;
       const clearPendingModelSelection = () => {};
@@ -3774,6 +4040,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       const updateModelVariantOptions = () => {};
       const updateModelSelectionStatus = () => {};
       const scheduleLayoutRefresh = () => {};
+      const clearChangedAgentHostBinding = () => {};
       ${extractBlockFromStartToken(source, "if (modelSelect) {")}
       return { state: () => modelConfigurationState, unsupported: () => modelConfigurationExecutionEnabled = false };
       `,
@@ -4009,7 +4276,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     };
     const api = new Function(
       "modelVariantSelect",
-      `var modelConfigurationExecutionEnabled=false;var modelConfigurationState=undefined;var cleared=0;var updated=0;var modelSelect={value:''};function getActiveModelPickerGroups(){return [];}function findModelPickerGroup(){return null;}function updateModelVariantOptions(){updated++;}function updateModelSelectionStatus(){}function scheduleLayoutRefresh(){}function clearPendingModelSelection(){cleared++;}${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}return {cleared:()=>cleared,updated:()=>updated};`,
+      `var modelConfigurationExecutionEnabled=false;var modelConfigurationState=undefined;var cleared=0;var updated=0;var modelSelect={value:''};function getActiveModelPickerGroups(){return [];}function findModelPickerGroup(){return null;}function updateModelVariantOptions(){updated++;}function updateModelSelectionStatus(){}function scheduleLayoutRefresh(){}function clearChangedAgentHostBinding(){}function clearPendingModelSelection(){cleared++;}${extractBlockFromStartToken(source, "if (modelVariantSelect) {")}return {cleared:()=>cleared,updated:()=>updated};`,
     )(selector);
     assert.ok(changed);
     changed!();

@@ -5,6 +5,21 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-11-18
+
+### Added
+
+- Select and save an explicit Agent Host model ID for BYOK providers, including Codex Bridge. Chat tools can list Host IDs and set the binding.
+- Add an opt-in per-task guard against Agent Host-to-Chat fallback; directly selected Chat, Local, remote and CLI routes are unchanged.
+
+### Fixed
+
+- Stop applying the CLI-only model restriction to Agent Host requests. Recheck the selected Host ID and model options against the live catalog before dispatch.
+- Distinguish the requested model, Host-reported ID and unverified backend in execution history. A matching report does not prove which backend or account served the request.
+- Show queued messages as queued, rather than dispatched, in the execution history list.
+- Clarify in the task form and Chat tools that Host catalog membership does not prove a model/ID match.
+- Prevent duplicate Agent Host turn dispatch and fail promptly if a dispatch guard returns without sending.
+
 ## [1.9.7] - 2026-11-16
 
 Pre-release build with the Stable 1.10.1 changes: tasks run through the Agent Host by default, and a task can be bound to an existing Copilot chat. Development dependencies were updated to clear npm audit findings. The proposed `languageModelSystem` API declaration is unchanged. The notes below describe the Stable changes included in this build.

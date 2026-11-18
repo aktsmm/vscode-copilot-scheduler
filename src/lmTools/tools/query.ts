@@ -31,6 +31,7 @@ type QueryKind =
   | "history"
   | "preview_cron"
   | "list_models"
+  | "list_agent_host_models"
   | "list_agents"
   | "list_skills"
   | "list_sessions";
@@ -56,6 +57,7 @@ export interface SchedulerCatalogProvider {
     source: "api" | "fallback";
     models: readonly ModelInfo[];
   }>;
+  listAgentHostModels?(): Promise<readonly { id: string; name?: string }[]>;
   listAgents(): Promise<readonly AgentInfo[]>;
   listSkills?(): Promise<DiscoveredSkills>;
   listSessions?(): Promise<
@@ -73,6 +75,7 @@ const VALID_KINDS: readonly QueryKind[] = [
   "history",
   "preview_cron",
   "list_models",
+  "list_agent_host_models",
   "list_agents",
   "list_skills",
   "list_sessions",
@@ -104,6 +107,7 @@ const ALLOWED_BY_KIND: Record<QueryKind, ReadonlySet<string>> = {
   history: new Set(["kind", "taskId", "limit"]),
   preview_cron: new Set(["kind", "cronExpression", "count", "timezone"]),
   list_models: new Set(["kind"]),
+  list_agent_host_models: new Set(["kind"]),
   list_agents: new Set(["kind"]),
   list_skills: new Set(["kind"]),
   list_sessions: new Set(["kind"]),
@@ -113,6 +117,14 @@ function catalogUnavailableResult(
   kind: QueryKind,
   detail?: unknown,
 ): vscode.LanguageModelToolResult {
+  if (kind === "list_agent_host_models") {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "agent_host_unavailable",
+      message:
+        "The Agent Host model catalog is unavailable. Check Agent Host availability and retry; no model IDs were inferred.",
+    });
+  }
   const reason =
     detail === undefined
       ? ""
@@ -213,6 +225,12 @@ function handleHistory(input: QueryInput): vscode.LanguageModelToolResult {
       note: "When present, turnOutcome is an Agent Host turn observation; it does not confirm that the requested work succeeded. responseText describes observed assistant text, not the contents of the response.",
       absent: "completion_not_observed",
     },
+    modelExecutionSemantics: {
+      note: "Model IDs are requests and reports, not independent backend or account verification. Chat, Local and remote routes remain unverified.",
+      reported_match: "the reported ID matches the request; backend unverified",
+      reported_mismatch: "the reported ID differs from the request",
+      unverified: "model application could not be established",
+    },
     entries: filtered.slice(0, limit),
   });
 }
@@ -304,6 +322,36 @@ async function handleListModels(
         vendor: model.vendor,
         family: model.family,
       }) : [],
+    })),
+  });
+}
+
+async function handleListAgentHostModels(
+  catalogProvider: SchedulerCatalogProvider,
+): Promise<vscode.LanguageModelToolResult> {
+  const listAgentHostModels = catalogProvider.listAgentHostModels;
+  if (!listAgentHostModels) {
+    return catalogUnavailableResult("list_agent_host_models");
+  }
+  const models = await listAgentHostModels.call(catalogProvider);
+  if (
+    !Array.isArray(models) ||
+    !models.every(
+      (model) =>
+        model !== null &&
+        typeof model === "object" &&
+        typeof model.id === "string" &&
+        model.id.length > 0,
+    )
+  ) {
+    return catalogUnavailableResult("list_agent_host_models");
+  }
+  return buildJsonTextResult({
+    ok: true,
+    count: models.length,
+    models: models.map((model) => ({
+      id: model.id,
+      ...(typeof model.name === "string" ? { name: model.name } : {}),
     })),
   });
 }
@@ -406,6 +454,7 @@ export function createSchedulerQueryTool(
         case "preview_cron":
           return handlePreviewCron(input);
         case "list_models":
+        case "list_agent_host_models":
         case "list_agents":
         case "list_skills":
         case "list_sessions": {
@@ -415,6 +464,9 @@ export function createSchedulerQueryTool(
           try {
             if (kindStrict === "list_models") {
               return await handleListModels(catalogProvider);
+            }
+            if (kindStrict === "list_agent_host_models") {
+              return await handleListAgentHostModels(catalogProvider);
             }
             if (kindStrict === "list_agents") {
               return await handleListAgents(catalogProvider);

@@ -110,6 +110,9 @@ export interface ModelSelectionFields {
   /** Preferred version captured at save time */
   modelVersion?: string;
 
+  /** Exact Agent Host catalog ID selected for this model. */
+  agentHostModelId?: string;
+
   /** Experimental reasoning effort captured at save time */
   modelReasoningEffort?: string;
   modelConfiguration?: ModelConfiguration;
@@ -158,6 +161,9 @@ export interface ScheduledTask {
   /** Saved model version for migration/healing */
   modelVersion?: string;
 
+  /** Exact Agent Host catalog ID selected for this model. */
+  agentHostModelId?: string;
+
   /** Experimental reasoning effort for eligible Copilot models */
   modelReasoningEffort?: string;
   modelConfiguration?: ModelConfiguration;
@@ -182,6 +188,9 @@ export interface ScheduledTask {
 
   /** Opt in to the configured fallback model chain when the saved model is unavailable. */
   modelFallback?: boolean;
+
+  /** Stop instead of switching from Agent Host to the chat route. */
+  preventAgentHostFallback?: boolean;
 
   /**
    * Run through the GitHub Copilot CLI instead of a chat session, so the saved model
@@ -278,6 +287,9 @@ export interface CreateTaskInput {
   /** Saved model version for migration/healing */
   modelVersion?: string;
 
+  /** Exact Agent Host catalog ID selected for this model. */
+  agentHostModelId?: string;
+
   /** Experimental reasoning effort for eligible Copilot models */
   modelReasoningEffort?: string;
   modelConfiguration?: ModelConfiguration;
@@ -306,6 +318,9 @@ export interface CreateTaskInput {
 
   /** Opt in to the configured fallback model chain when the saved model is unavailable. */
   modelFallback?: boolean;
+
+  /** Stop instead of switching from Agent Host to the chat route. */
+  preventAgentHostFallback?: boolean;
 
   /** Run through the GitHub Copilot CLI so the saved model is applied. */
   useCopilotCli?: boolean;
@@ -421,6 +436,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
   /** Opt in to the configured fallback model chain when the model is unavailable. */
   modelFallback?: boolean;
 
+  /** Stop instead of switching from Agent Host to the chat route. */
+  preventAgentHostFallback?: boolean;
+
   /** Run through the GitHub Copilot CLI so the model is applied. */
   useCopilotCli?: boolean;
 }
@@ -525,6 +543,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Opt in to the configured fallback model chain when the model is unavailable. */
   modelFallback?: boolean;
 
+  /** Stop instead of switching from Agent Host to the chat route. */
+  preventAgentHostFallback?: boolean;
+
   /** Run through the GitHub Copilot CLI so the model is applied. */
   useCopilotCli?: boolean;
 
@@ -541,7 +562,7 @@ export interface ExecuteOptions extends ModelSelectionFields {
 export interface ModelFallbackInfo {
   /** Display label of the model the task asked for. */
   from: string;
-  /** Display label of the model actually used. */
+  /** Display label of the replacement model requested. */
   to: string;
 }
 
@@ -567,11 +588,23 @@ export type AgentHostResponseTextObservation =
   | "not_observed"
   | "unknown";
 
+export type ModelReportVerification =
+  | "reported_match"
+  | "reported_mismatch"
+  | "unverified";
+
+export interface ModelExecutionObservation {
+  route: "agentHost" | "chat" | "local" | "remote" | "copilotCli";
+  requestedModel?: string;
+  reportedModel?: string;
+  verification: ModelReportVerification;
+}
+
 /** What an Agent Host run reported, for the execution history. */
 export interface AgentHostRunInfo {
   /** Model id sent to the Agent Host. */
   requestedModel?: string;
-  /** Model id the Agent Host reported using, when it reported one. */
+  /** Model id reported by the Agent Host; not independent backend verification. */
   appliedModel?: string;
   /** Why the task ran through the chat route instead of the Agent Host. */
   fallbackReason?: string;
@@ -585,6 +618,7 @@ export interface ExecutePromptResult {
   modelFallback?: ModelFallbackInfo;
   cliRun?: CopilotCliRunInfo;
   agentHostRun?: AgentHostRunInfo;
+  modelExecution?: ModelExecutionObservation;
 }
 
 /**
@@ -597,6 +631,7 @@ export type WebviewToExtensionMessage =
   | { type: "duplicateTask"; taskId: string }
   | { type: "refreshAgents" }
   | { type: "refreshAgentHostChats" }
+  | { type: "refreshAgentHostModels" }
   | { type: "openModelRuntimeArguments" }
   | { type: "applyModelRuntimeArguments" }
   | { type: "openAutoEnableSettings" }

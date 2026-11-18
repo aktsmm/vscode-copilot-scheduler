@@ -45,12 +45,14 @@ import {
   AgentHostError,
   findAgentHostEndpoint,
   listAgentHostChats,
+  listAgentHostModels,
   queueAgentHostMessage,
   resolveAgentHostChatBinding,
   resolveUserDataDir,
   runAgentHostTurn,
   toFileUri,
   type AgentHostChatInfo,
+  type AgentHostModelInfo,
   type AgentHostSessionRef,
 } from "./agentHostClient";
 import {
@@ -59,11 +61,14 @@ import {
 } from "./promptExecutionErrors";
 import {
   areModelSelectionsEqual,
+  classifyModelReport,
   DEFAULT_MODEL_FALLBACK_CHAIN,
   findBestMatchingModel,
   findFallbackModel,
   hasModelSelection,
   hasStrictModelVariantSelection,
+  isAgentHostModelBindingCompatible,
+  isCopilotModelVendor,
   modelInfoToSelection,
   normalizeModelCatalog,
   normalizeModelFallbackChain,
@@ -630,6 +635,15 @@ export class CopilotExecutor {
     return listAgentHostChats(endpoint);
   }
 
+  static async listAvailableAgentHostModels(): Promise<AgentHostModelInfo[]> {
+    const userDataDir = this.agentHostUserDataDir;
+    const endpoint = userDataDir ? findAgentHostEndpoint(userDataDir) : undefined;
+    if (!endpoint) {
+      throw new AgentHostError("unavailable", "No running Agent Host was found.");
+    }
+    return listAgentHostModels(endpoint);
+  }
+
   static async resolveTargetAgentHostChat(
     targetChatId: string,
     expectedWorkspacePath?: string,
@@ -924,6 +938,17 @@ export class CopilotExecutor {
       ...(agentHostFallbackReason
         ? { agentHostRun: { fallbackReason: agentHostFallbackReason } }
         : {}),
+      modelExecution: {
+        route: vscode.env.remoteName
+          ? "remote"
+          : resolveSessionHarness(config) === "local"
+            ? "local"
+            : "chat",
+        ...(requestedModel.model
+          ? { requestedModel: requestedModel.model }
+          : {}),
+        verification: "unverified",
+      },
     };
   }
 
@@ -942,6 +967,7 @@ export class CopilotExecutor {
     const targetChatId = options?.targetChatId;
     const failOnFallback =
       !!targetChatId ||
+      options?.preventAgentHostFallback === true ||
       config.get<string>("executionFallback", "chat") === "fail";
     const decline = async (rawDetail: string) => {
       const detail = sanitizeAbsolutePathDetails(
@@ -952,7 +978,9 @@ export class CopilotExecutor {
       if (failOnFallback) {
         await this.warnAndThrow(
           createPromptBlockedError(
-            messages.agentHostNotUsed(detail),
+            options?.preventAgentHostFallback === true || targetChatId
+              ? messages.agentHostFallbackPrevented(detail)
+              : messages.agentHostNotUsed(detail),
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
@@ -961,34 +989,62 @@ export class CopilotExecutor {
       return { fallbackReason: detail };
     };
 
+    let modelId: string | undefined;
+    let hostModelIdExplicit = false;
+    let selection: ReturnType<typeof normalizeModelSelection>;
+    try {
+      selection = normalizeModelSelection(options);
+    } catch {
+      return this.warnAndThrow(
+        createPromptBlockedError(
+          messages.dynamicConfigurationUnavailable(),
+          "modelConfigurationUnavailable",
+        ),
+        routing.legacyPrompt,
+      );
+    }
+    const hasSelector = hasModelSelection({
+      ...selection,
+      modelConfiguration: undefined,
+    });
+    const hasConfiguration =
+      Object.keys(selection.modelConfiguration ?? {}).length > 0;
+    if (hasSelector || hasConfiguration) {
+      if (!isAgentHostModelBindingCompatible(selection)) {
+        return this.warnAndThrow(
+          createPromptBlockedError(
+            messages.agentHostModelBindingInvalid(),
+            "agentHostUnavailable",
+          ),
+          routing.legacyPrompt,
+        );
+      }
+      hostModelIdExplicit = !!selection.agentHostModelId;
+      if (
+        !hostModelIdExplicit &&
+        ((selection.modelVendor &&
+          !isCopilotModelVendor(selection.modelVendor)) ||
+          selection.model?.includes("::") ||
+          selection.model?.includes("/") ||
+          !selection.model)
+      ) {
+        return this.warnAndThrow(
+          createPromptBlockedError(
+            messages.agentHostModelSelectionRequired(),
+            "agentHostUnavailable",
+          ),
+          routing.legacyPrompt,
+        );
+      }
+      modelId = selection.agentHostModelId ?? selection.model?.trim();
+    }
+
     const userDataDir = CopilotExecutor.agentHostUserDataDir;
     const endpoint = userDataDir
       ? findAgentHostEndpoint(userDataDir)
       : undefined;
     if (!endpoint) {
       return decline("no running Agent Host was found");
-    }
-
-    let modelId: string | undefined;
-    try {
-      const selection = normalizeModelSelection(options);
-      const hasSelector = hasModelSelection({
-        ...selection,
-        modelConfiguration: undefined,
-      });
-      const hasConfiguration =
-        Object.keys(selection.modelConfiguration ?? {}).length > 0;
-      if (hasSelector || hasConfiguration) {
-        modelId = selection.model?.trim();
-        if (
-          !modelId ||
-          !isCopilotCliModelSupported(selection.modelVendor, modelId)
-        ) {
-          return decline("the task's model cannot be sent to the Agent Host");
-        }
-      }
-    } catch {
-      return decline("the task's model selection could not be read");
     }
 
     let agentUri: string | undefined;
@@ -1046,6 +1102,7 @@ export class CopilotExecutor {
         text: routing.chatOpenPrompt,
         ...(cwd ? { cwdUri: toFileUri(cwd) } : {}),
         ...(modelId ? { modelId } : {}),
+        ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
         modelOptions: {
           ...configuration,
           reasoningEffort:
@@ -1099,6 +1156,7 @@ export class CopilotExecutor {
         ...(options?.taskId ? { taskId: options.taskId } : {}),
         ...(requestedCwd ? { expectedWorkspacePath: requestedCwd } : {}),
         ...(modelId ? { modelId } : {}),
+        ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
         modelOptions: {
           ...configuration,
           reasoningEffort:
@@ -1115,7 +1173,7 @@ export class CopilotExecutor {
 
     try {
       logDebug(
-        `[CopilotScheduler] ${targetChatId ? "Queueing to a bound Agent Host chat" : "Running through the Agent Host"}: model=${modelId ?? "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
+        `[CopilotScheduler] ${targetChatId ? "Queueing to a bound Agent Host chat" : "Running through the Agent Host"}: model=${modelId ? "selected" : "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
       );
       if (targetChatId && queueTargetChat) {
         const queued = await CopilotExecutor.runSerialized(
@@ -1131,6 +1189,13 @@ export class CopilotExecutor {
               turnOutcome: "queued",
               messageId: queued.messageId,
             },
+            modelExecution: {
+              route: "agentHost",
+              ...(queued.requestedModel
+                ? { requestedModel: queued.requestedModel }
+                : {}),
+              verification: "unverified",
+            },
           },
         };
       }
@@ -1141,7 +1206,8 @@ export class CopilotExecutor {
       });
       const requested = turn.requestedModel;
       const applied = turn.appliedModel;
-      if (requested && applied && requested !== "auto" && requested !== applied) {
+      const verification = classifyModelReport(requested, applied);
+      if (requested && applied && verification === "reported_mismatch") {
         void vscode.window.showWarningMessage(
           messages.agentHostModelMismatch(requested, applied),
         );
@@ -1154,11 +1220,26 @@ export class CopilotExecutor {
             turnOutcome: "completed",
             responseText: turn.responseText,
           },
+          modelExecution: {
+            route: "agentHost",
+            ...(requested ? { requestedModel: requested } : {}),
+            ...(applied ? { reportedModel: applied } : {}),
+            verification,
+          },
         },
       };
     } catch (error) {
       if (isPromptBlockedError(error)) {
         return this.warnAndThrow(error, routing.legacyPrompt);
+      }
+      if (error instanceof AgentHostError && error.kind === "modelIdentity") {
+        return this.warnAndThrow(
+          createPromptBlockedError(
+            messages.agentHostModelSelectionRequired(),
+            "agentHostUnavailable",
+          ),
+          routing.legacyPrompt,
+        );
       }
       if (error instanceof AgentHostError && error.kind !== "failed") {
         return decline(error.message);
@@ -1417,6 +1498,14 @@ export class CopilotExecutor {
         ...(typeof result.summary.premiumRequests === "number"
           ? { premiumRequests: result.summary.premiumRequests }
           : {}),
+      },
+      modelExecution: {
+        route: "copilotCli",
+        requestedModel: model,
+        ...(result.summary.appliedModel
+          ? { reportedModel: result.summary.appliedModel }
+          : {}),
+        verification: classifyModelReport(model, result.summary.appliedModel),
       },
     };
   }

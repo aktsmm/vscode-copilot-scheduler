@@ -577,6 +577,9 @@
   var pendingModelFamily = "";
   var pendingModelVersion = "";
   var pendingModelReasoningEffort = "";
+  var agentHostModels = [];
+  var agentHostModelsLoaded = false;
+  var agentHostBindingKey = "";
   var modelConfigurationState = {};
   var modelConfigurationExecutionEnabled =
     !!initialData.modelConfigurationExecutionEnabled;
@@ -898,6 +901,12 @@
 
   var autoModeInput = document.getElementById("auto-mode");
   var modelFallbackInput = document.getElementById("model-fallback");
+  var preventAgentHostFallbackInput = document.getElementById(
+    "prevent-agent-host-fallback",
+  );
+  var agentHostModelSelect = document.getElementById("agent-host-model");
+  var agentHostModelRefresh = document.getElementById("agent-host-model-refresh");
+  var agentHostModelStatus = document.getElementById("agent-host-model-status");
   var useCopilotCliInput = document.getElementById("use-copilot-cli");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
@@ -1031,6 +1040,108 @@
     }
   }
 
+  function getAgentHostBindingSelection() {
+    return getCurrentModelSelection() || {
+      model: pendingModelValue,
+      modelVendor: pendingModelVendor,
+      modelFamily: pendingModelFamily,
+      modelVersion: pendingModelVersion,
+    };
+  }
+
+  function getAgentHostBindingKey(selection) {
+    return JSON.stringify([
+      String((selection && selection.model) || ""),
+      String((selection && selection.modelVendor) || ""),
+      String((selection && selection.modelFamily) || ""),
+      String((selection && selection.modelVersion) || ""),
+    ]);
+  }
+
+  function setAgentHostModelSelection(id, selection) {
+    if (!agentHostModelSelect) return;
+    var value = String(id || "");
+    if (value && !selectHasOptionValue(agentHostModelSelect, value)) {
+      var option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      agentHostModelSelect.appendChild(option);
+    }
+    agentHostModelSelect.value = value;
+    agentHostBindingKey = value ? getAgentHostBindingKey(selection) : "";
+  }
+
+  function updateAgentHostModelOptions(models, error) {
+    if (!agentHostModelSelect) return;
+    var selectedId = agentHostModelSelect.value;
+    var matches = (Array.isArray(models) ? models : []).filter(function (model) {
+      return model && typeof model.id === "string" && model.id.length > 0;
+    });
+    var counts = Object.create(null);
+    matches.forEach(function (model) {
+      counts[model.id] = (counts[model.id] || 0) + 1;
+    });
+    while (agentHostModelSelect.options.length > 1) {
+      agentHostModelSelect.remove(1);
+    }
+    matches.forEach(function (model) {
+      if (counts[model.id] !== 1) return;
+      var option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.name
+        ? String(model.name) + " — " + model.id
+        : model.id;
+      agentHostModelSelect.appendChild(option);
+    });
+    var selectedAvailable =
+      selectedId && selectHasOptionValue(agentHostModelSelect, selectedId);
+    if (selectedId && !selectedAvailable) {
+      var saved = document.createElement("option");
+      saved.value = selectedId;
+      saved.textContent = selectedId;
+      agentHostModelSelect.appendChild(saved);
+    }
+    agentHostModelSelect.value = selectedId;
+    if (agentHostModelStatus) {
+      agentHostModelStatus.textContent = String(
+        error ||
+          (selectedId && !selectedAvailable
+            ? strings.agentHostModelSavedUnverified
+            : matches.some(function (model) {
+                  return counts[model.id] > 1;
+                })
+              ? strings.agentHostModelsDuplicate
+            : agentHostModelsLoaded && !matches.length
+              ? strings.agentHostModelsEmpty
+              : "") ||
+          "",
+      );
+    }
+  }
+
+  function clearChangedAgentHostBinding() {
+    if (
+      agentHostModelSelect &&
+      agentHostModelSelect.value &&
+      agentHostBindingKey &&
+      agentHostBindingKey !==
+        getAgentHostBindingKey(getAgentHostBindingSelection())
+    ) {
+      agentHostModelSelect.value = "";
+      agentHostBindingKey = "";
+    }
+    updateAgentHostModelOptions(agentHostModels);
+  }
+
+  function refreshAgentHostModels() {
+    if (agentHostModelStatus) {
+      agentHostModelStatus.textContent = String(
+        strings.agentHostModelsLoading || "",
+      );
+    }
+    vscode.postMessage({ type: "refreshAgentHostModels" });
+  }
+
   function copyModelConfigurationForForm(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   }
@@ -1076,6 +1187,7 @@
       modelVendor: String(source.modelVendor || ""),
       modelFamily: String(source.modelFamily || ""),
       modelVersion: String(source.modelVersion || ""),
+      agentHostModelId: String(source.agentHostModelId || ""),
       modelReasoningEffort: String(source.modelReasoningEffort || ""),
       modelConfiguration: serializeModelConfigurationForDiff(
         source.modelConfiguration,
@@ -1087,6 +1199,7 @@
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
       modelFallback: source.modelFallback === true,
+      preventAgentHostFallback: source.preventAgentHostFallback === true,
       useCopilotCli: source.useCopilotCli === true,
       skillRef: (function () {
         var ref = normalizeSkillRefClient(source.skillRef);
@@ -1935,6 +2048,8 @@
           ? {}
           : undefined;
       updateModelVariantOptions(group, null);
+      clearChangedAgentHostBinding();
+      if (!agentHostModelsLoaded && group) refreshAgentHostModels();
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
     });
@@ -1965,6 +2080,7 @@
             }
           : null,
       );
+      clearChangedAgentHostBinding();
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
     });
@@ -2278,7 +2394,14 @@
       if (editingTaskId && !agentValue && pendingAgentValue) {
         agentValue = pendingAgentValue;
       }
-      var currentModelSelection = getCurrentModelSelection();
+      var currentModelSelection = getCurrentModelSelection() || {
+        model: pendingModelValue,
+        modelName: pendingModelName,
+        modelVendor: pendingModelVendor,
+        modelFamily: pendingModelFamily,
+        modelVersion: pendingModelVersion,
+        modelReasoningEffort: pendingModelReasoningEffort,
+      };
       var modelValue = currentModelSelection
         ? currentModelSelection.model || ""
         : "";
@@ -2372,6 +2495,7 @@
         modelVendor: modelVendorValue,
         modelFamily: modelFamilyValue,
         modelVersion: modelVersionValue,
+        agentHostModelId: agentHostModelSelect ? agentHostModelSelect.value : "",
         modelReasoningEffort: modelReasoningEffortValue,
         modelConfiguration:
           modelConfigurationState !== undefined
@@ -2384,6 +2508,9 @@
           !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
         autoMode: autoModeInput ? autoModeInput.checked : false,
         modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        preventAgentHostFallback: preventAgentHostFallbackInput
+          ? preventAgentHostFallbackInput.checked
+          : false,
         useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
@@ -2528,7 +2655,14 @@
       var promptTextEl = document.getElementById("prompt-text");
       var prompt = promptTextEl ? promptTextEl.value : "";
       var agent = agentSelect ? agentSelect.value : "";
-      var currentModelSelection = getCurrentModelSelection();
+      var currentModelSelection = getCurrentModelSelection() || {
+        model: pendingModelValue,
+        modelName: pendingModelName,
+        modelVendor: pendingModelVendor,
+        modelFamily: pendingModelFamily,
+        modelVersion: pendingModelVersion,
+        modelReasoningEffort: pendingModelReasoningEffort,
+      };
       var model = currentModelSelection
         ? currentModelSelection.model || ""
         : "";
@@ -2563,6 +2697,7 @@
         modelVersion: currentModelSelection
           ? currentModelSelection.modelVersion || ""
           : "",
+        agentHostModelId: agentHostModelSelect ? agentHostModelSelect.value : "",
         modelReasoningEffort: currentModelSelection
           ? currentModelSelection.modelReasoningEffort || ""
           : "",
@@ -2570,6 +2705,10 @@
           modelConfigurationState !== undefined
             ? copyModelConfigurationForForm(modelConfigurationState)
             : undefined,
+        modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        preventAgentHostFallback: preventAgentHostFallbackInput
+          ? preventAgentHostFallbackInput.checked
+          : false,
         useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
@@ -2600,6 +2739,17 @@
       }
       vscode.postMessage({ type: "refreshAgentHostChats" });
     });
+  }
+
+  if (agentHostModelSelect) {
+    agentHostModelSelect.addEventListener("change", function () {
+      agentHostBindingKey = agentHostModelSelect.value
+        ? getAgentHostBindingKey(getAgentHostBindingSelection())
+        : "";
+    });
+  }
+  if (agentHostModelRefresh) {
+    agentHostModelRefresh.addEventListener("click", refreshAgentHostModels);
   }
 
   // Template refresh button (Create tab)
@@ -3564,6 +3714,10 @@
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     if (modelFallbackInput) modelFallbackInput.checked = false;
+    if (preventAgentHostFallbackInput)
+      preventAgentHostFallbackInput.checked = false;
+    setAgentHostModelSelection("", null);
+    updateAgentHostModelOptions(agentHostModels);
     if (useCopilotCliInput) useCopilotCliInput.checked = false;
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
@@ -4082,6 +4236,16 @@
         pendingModelReasoningEffort = hiddenReasoningEffort;
       }
     }
+    setAgentHostModelSelection(task.agentHostModelId, {
+      model: task.model,
+      modelVendor: task.modelVendor,
+      modelFamily: task.modelFamily,
+      modelVersion: task.modelVersion,
+    });
+    updateAgentHostModelOptions(agentHostModels);
+    if (task.agentHostModelId && !agentHostModelsLoaded) {
+      refreshAgentHostModels();
+    }
     editingTaskEnabled = task.enabled !== false;
     var scopeValue = task.scope || "workspace";
     var scopeRadio = document.querySelector(
@@ -4160,6 +4324,10 @@
     }
     if (modelFallbackInput) {
       modelFallbackInput.checked = task.modelFallback === true;
+    }
+    if (preventAgentHostFallbackInput) {
+      preventAgentHostFallbackInput.checked =
+        task.preventAgentHostFallback === true;
     }
     if (useCopilotCliInput) {
       useCopilotCliInput.checked = task.useCopilotCli === true;
@@ -4311,6 +4479,11 @@
           break;
         case "updateAgentHostChats":
           updateTargetChatOptions(message.chats, message.error);
+          break;
+        case "updateAgentHostModels":
+          agentHostModels = Array.isArray(message.models) ? message.models : [];
+          agentHostModelsLoaded = !message.error;
+          updateAgentHostModelOptions(agentHostModels, message.error);
           break;
         case "updateModels":
           {

@@ -17,6 +17,11 @@ on:
         required: true
         type: boolean
         default: false
+      package_pre_release:
+        description: Verify a Marketplace Pre-release package without publishing
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -56,12 +61,18 @@ jobs:
           if ($preview -and "${{ inputs.publish }}" -eq 'true') {
             throw "Preview builds cannot publish to VS Code Marketplace."
           }
+          $verifyPreviewPackage = "${{ inputs.package_pre_release }}" -eq 'true'
+          if ($verifyPreviewPackage -and -not $ref.StartsWith('refs/heads/preview/')) {
+            throw "Pre-release package validation requires a preview branch."
+          }
+          $packagePreRelease = $marketplacePreview -or $verifyPreviewPackage
           $tagPrefix = if ($marketplacePreview) { 'marketplace-preview-v' } elseif ($preview) { 'preview-v' } else { 'v' }
 
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tagPrefix$version" >> $env:GITHUB_OUTPUT
           "preview=$($preview.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "marketplacePreview=$($marketplacePreview.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "packagePreRelease=$($packagePreRelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "artifact=copilot-scheduler-$version.vsix" >> $env:GITHUB_OUTPUT
 
       - name: Validate tag matches package version
@@ -98,7 +109,7 @@ jobs:
         shell: pwsh
         run: |
           $packageArgs = @('vsce', 'package', '--out', '${{ steps.meta.outputs.artifact }}')
-          if ('${{ steps.meta.outputs.marketplacePreview }}' -eq 'true') {
+          if ('${{ steps.meta.outputs.packagePreRelease }}' -eq 'true') {
             $packageArgs += '--pre-release'
           }
           npx @packageArgs
@@ -107,11 +118,11 @@ jobs:
         run: npm run verify:vsix -- "${{ steps.meta.outputs.artifact }}"
 
       - name: Verify Marketplace eligibility
-        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish) || steps.meta.outputs.marketplacePreview == 'true'
+        if: steps.meta.outputs.preview != 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish) || steps.meta.outputs.packagePreRelease == 'true'
         shell: pwsh
         run: |
           $verifyArgs = @('scripts/verify-vsix-contents.js', '--verify-marketplace', '${{ steps.meta.outputs.artifact }}')
-          if ('${{ steps.meta.outputs.marketplacePreview }}' -eq 'true') {
+          if ('${{ steps.meta.outputs.packagePreRelease }}' -eq 'true') {
             $verifyArgs += @('--allow-proposed-apis', 'languageModelSystem')
           }
           node @verifyArgs

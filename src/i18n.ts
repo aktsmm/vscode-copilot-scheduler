@@ -516,6 +516,67 @@ export const messages = {
       "Fall back to another model if the selected model is unavailable",
       "選択したモデルが使えない場合は別のモデルに切り替える",
     ),
+  agentHostModelBindingInvalid: () =>
+    t(
+      "Select a source model before setting its Agent Host ID.",
+      "Agent Host ID を設定する前に、提供元のモデルを選択してください。",
+    ),
+  agentHostFallbackGuardInvalid: () =>
+    t(
+      "The Agent Host fallback guard must be on or off.",
+      "Agent Host の経路切替ガードはオンまたはオフで指定してください。",
+    ),
+  labelAgentHostModel: () =>
+    t("Agent Host model ID", "Agent Host のモデル ID"),
+  agentHostModelUnpinned: () =>
+    t("Not selected", "未選択"),
+  agentHostModelNote: () =>
+    t(
+      "For an external provider, select the exact Agent Host ID after choosing the source model. Check that they correspond: Scheduler cannot verify the match. Candidates are not selected automatically; the ID's presence in the Host catalog is checked before each Agent Host run.",
+      "外部プロバイダーでは、提供元のモデルを選んだ後に正確な Agent Host ID を選択してください。両者が対応しているかは自分で確認してください。Scheduler は対応関係を検証できません。候補は自動選択されず、Agent Host での実行前に Host の一覧に ID があるか確認します。",
+    ),
+  agentHostModelsLoading: () =>
+    t("Loading Agent Host models…", "Agent Host のモデルを取得しています…"),
+  agentHostModelsLoadFailed: () =>
+    t(
+      "Agent Host models could not be loaded. Start the host and refresh the list.",
+      "Agent Host のモデルを取得できませんでした。Host を起動して一覧を更新してください。",
+    ),
+  agentHostModelsEmpty: () =>
+    t(
+      "No Agent Host models are currently available.",
+      "現在、利用できる Agent Host のモデルはありません。",
+    ),
+  agentHostModelsDuplicate: () =>
+    t(
+      "Duplicate Agent Host IDs are not selectable. Resolve the duplicate in the provider and refresh.",
+      "重複する Agent Host ID は選択できません。プロバイダーの重複を解消して更新してください。",
+    ),
+  agentHostModelNotInCatalog: () =>
+    t(
+      "The selected Agent Host ID is not in the current catalog. Refresh the list, or save without selecting an ID.",
+      "選択した Agent Host ID は現在の一覧にありません。一覧を更新するか、ID を選択せずに保存してください。",
+    ),
+  agentHostModelSavedUnverified: () =>
+    t(
+      "The saved Agent Host ID is not in the current catalog and will be rechecked before running.",
+      "保存済みの Agent Host ID は現在の一覧にありません。実行前に再確認されます。",
+    ),
+  labelPreventAgentHostFallback: () =>
+    t(
+      "Do not switch from Agent Host to Chat automatically",
+      "Agent Host から Chat へ自動で切り替えない",
+    ),
+  webviewPreventAgentHostFallbackNote: () =>
+    t(
+      "Off by default. When on, an Agent Host failure stops the task instead of switching routes. It does not apply when Chat, Local, a remote window, or the CLI is selected from the start.",
+      "既定はオフです。オンにすると Agent Host で実行できない場合は経路を切り替えず停止します。最初から Chat、Local、リモートウィンドウ、CLI を選ぶ場合は対象外です。",
+    ),
+  agentHostModelSelectionRequired: () =>
+    t(
+      "Select this provider model's exact Agent Host ID from the current host catalog before running the task.",
+      "タスクの実行前に、現在の Agent Host 一覧から提供元モデルの正確な ID を選択してください。",
+    ),
   webviewModelFallbackNote: () =>
     t(
       "Off by default. When on, an unavailable model is replaced by the first available model in the copilotScheduler.modelFallbackChain setting (default: HydraFusion, then Auto). HydraFusion is skipped unless the model list includes it. Explicit detailed model options are not carried over. The change is recorded in the execution history. Whether the replacement is applied depends on the session type; see the note under the model selector.",
@@ -523,8 +584,8 @@ export const messages = {
     ),
   webviewModelHarnessNote: () =>
     t(
-      "Tasks run through the Agent Host by default, which applies the model, reasoning effort and context size set here and records the model that ran (copilotScheduler.executionRoute). If the Agent Host cannot take the task, the fallback setting decides: the older chat route ignores the model in Copilot (Agent Host) sessions (measured on VS Code 1.142) and runs on the model chosen in the chat window. Tick \"Run with the Copilot CLI\" below to use a background copilot process instead. Auto and HydraFusion are not confirmed to apply.",
-      "タスクは既定で Agent Host 経由で実行され、ここで設定したモデル・reasoning effort・コンテキストサイズが反映され、実際に使われたモデルが記録されます（copilotScheduler.executionRoute）。Agent Host で実行できない場合は、フォールバック設定に従います。従来のチャット経路では、Copilot（エージェントホスト）のセッションでモデルが反映されず、チャット画面で選んだモデルで実行されます（VS Code 1.142 で実測）。バックグラウンドの copilot プロセスで実行するには、下の「Copilot CLI で実行する」を選びます。Auto と HydraFusion は反映を確認できていません。",
+      "By default, the Agent Host receives the selected model ID and supported options. Its reported model ID does not independently verify the backend. If the task switches to the chat route, model application is unverified. Use the CLI option below for a background Copilot CLI process.",
+      "既定では Agent Host に選択したモデル ID と対応するオプションを送ります。Host が報告した ID は実バックエンドの独立した確認ではありません。チャット経路へ切り替わった場合、モデルの適用は未確認です。下の CLI オプションでバックグラウンドの Copilot CLI を利用できます。",
     ),
   labelUseCopilotCli: () =>
     t(
@@ -548,7 +609,7 @@ export const messages = {
   ) => {
     const parts = [
       requested ? `requested ${requested}` : "model not set",
-      applied ? `applied ${applied}` : "applied model not reported",
+      applied ? `reported ${applied}` : "model not reported",
     ];
     if (typeof premiumRequests === "number") {
       parts.push(`premium requests ${premiumRequests}`);
@@ -557,7 +618,7 @@ export const messages = {
       `Copilot CLI: ${parts.join(", ")}`,
       `Copilot CLI: ${[
         requested ? `指定 ${requested}` : "モデル未指定",
-        applied ? `適用 ${applied}` : "適用モデルの報告なし",
+        applied ? `報告 ${applied}` : "モデルの報告なし",
         ...(typeof premiumRequests === "number"
           ? [`プレミアムリクエスト ${premiumRequests}`]
           : []),
@@ -568,6 +629,11 @@ export const messages = {
     t(
       `The task was not run because it cannot run through the Agent Host (${detail}). Set copilotScheduler.executionFallback to "chat" to run it through the chat route instead.`,
       `Agent Host で実行できないため、タスクを実行していません（${detail}）。代わりにチャット経路で実行するには、copilotScheduler.executionFallback を "chat" にしてください。`,
+    ),
+  agentHostFallbackPrevented: (detail: string) =>
+    t(
+      `The task was not run because the Agent Host could not take it and chat fallback is blocked (${detail}).`,
+      `Agent Host で実行できず、チャット経路への切り替えも禁止されているため、タスクを実行していません（${detail}）。`,
     ),
   agentHostFailed: (detail: string) =>
     t(
@@ -586,13 +652,14 @@ export const messages = {
     ),
   agentHostModelMismatch: (requested: string, applied: string) =>
     t(
-      `The Agent Host ran the task on ${applied} instead of the requested ${requested}.`,
-      `Agent Host は指定された ${requested} ではなく ${applied} でタスクを実行しました。`,
+      `The Agent Host reported ${applied}, which differs from the requested ${requested}. The backend was not independently verified.`,
+      `Agent Host の報告 ${applied} は指定した ${requested} と異なります。実バックエンドは独立して確認されていません。`,
     ),
   executionHistoryAgentHost: (
     requested?: string,
     applied?: string,
     fallbackReason?: string,
+    verification?: import("./types").ModelReportVerification,
   ) => {
     if (fallbackReason) {
       return t(
@@ -600,9 +667,31 @@ export const messages = {
         `チャット経路で実行（Agent Host 未使用）: ${fallbackReason}`,
       );
     }
+    const reportStatus =
+      verification === "reported_match"
+        ? t("report matches; backend unverified", "報告は一致、実バックエンドは未確認")
+        : verification === "reported_mismatch"
+          ? t("report differs; backend unverified", "報告は不一致、実バックエンドは未確認")
+          : t("model application unverified", "モデルの適用は未確認");
     return t(
-      `Agent Host: ${requested ? `requested ${requested}` : "model not set"}, ${applied ? `applied ${applied}` : "applied model not reported"}`,
-      `Agent Host: ${requested ? `指定 ${requested}` : "モデル未指定"}、${applied ? `適用 ${applied}` : "適用モデルの報告なし"}`,
+      `Agent Host: ${requested ? `requested ${requested}` : "model not set"}, ${applied ? `reported ${applied}` : "model not reported"}, ${reportStatus}`,
+      `Agent Host: ${requested ? `指定 ${requested}` : "モデル未指定"}、${applied ? `報告 ${applied}` : "モデルの報告なし"}、${reportStatus}`,
+    );
+  },
+  executionHistoryChatRoute: (
+    route: "chat" | "local" | "remote",
+    requested?: string,
+    fallbackReason?: string,
+  ) => {
+    const label =
+      route === "local"
+        ? "Local"
+        : route === "remote"
+          ? t("Remote", "リモート")
+          : t("Chat", "チャット");
+    return t(
+      `${label} route: ${requested ? `requested ${requested}, ` : ""}model application unverified${fallbackReason ? ` (Agent Host not used: ${fallbackReason})` : ""}`,
+      `${label} 経路: ${requested ? `指定 ${requested}、` : ""}モデルの適用は未確認${fallbackReason ? `（Agent Host 未使用: ${fallbackReason}）` : ""}`,
     );
   },
   copilotCliNotFound: () =>

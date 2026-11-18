@@ -33,6 +33,7 @@ import {
 import {
   areModelSelectionsEqual,
   findBestMatchingModel,
+  isAgentHostModelBindingCompatible,
   hasModelSelection,
   modelInfoToSelection,
   normalizeModelSelection,
@@ -326,6 +327,7 @@ function applyModelSelectionToTask(
   target.modelVendor = normalizedSelection.modelVendor;
   target.modelFamily = normalizedSelection.modelFamily;
   target.modelVersion = normalizedSelection.modelVersion;
+  target.agentHostModelId = normalizedSelection.agentHostModelId;
   target.modelReasoningEffort = normalizedSelection.modelReasoningEffort;
   target.modelConfiguration = normalizedSelection.modelConfiguration;
   return true;
@@ -1370,6 +1372,17 @@ export class ScheduleManager {
       }
 
       if (
+        task.preventAgentHostFallback !== undefined &&
+        typeof task.preventAgentHostFallback !== "boolean"
+      ) {
+        logError(
+          "[CopilotScheduler] Invalid Agent Host fallback guard retained as enabled.",
+        );
+        task.preventAgentHostFallback = true;
+        needsSave = true;
+      }
+
+      if (
         task.useCopilotCli !== undefined &&
         typeof task.useCopilotCli !== "boolean"
       ) {
@@ -2008,6 +2021,16 @@ export class ScheduleManager {
     if (input.promptPath?.includes("\0")) {
       throw new Error(messages.templateLoadError());
     }
+    if (
+      input.preventAgentHostFallback !== undefined &&
+      typeof input.preventAgentHostFallback !== "boolean"
+    ) {
+      throw new Error(messages.agentHostFallbackGuardInvalid());
+    }
+    const modelSelection = normalizeModelSelection(input);
+    if (!isAgentHostModelBindingCompatible(modelSelection)) {
+      throw new Error(messages.agentHostModelBindingInvalid());
+    }
 
     if (input.runAt !== undefined) {
       this.parseRunAt(input.runAt);
@@ -2086,7 +2109,7 @@ export class ScheduleManager {
       prompt: input.prompt,
       enabled,
       agent: input.agent,
-      ...normalizeModelSelection(input),
+      ...modelSelection,
       scope: effectiveScope,
       workspacePath: effectiveScope === "workspace" ? workspaceRoot : undefined,
       promptSource: input.promptSource || "inline",
@@ -2097,6 +2120,8 @@ export class ScheduleManager {
           ? Boolean(input.autoMode)
           : defaultAutoMode,
       modelFallback: input.modelFallback === true ? true : undefined,
+      preventAgentHostFallback:
+        input.preventAgentHostFallback === true ? true : undefined,
       useCopilotCli: input.useCopilotCli === true ? true : undefined,
       skillRef: normalizeSkillRef(input.skillRef),
       chatSession:
@@ -2187,8 +2212,22 @@ export class ScheduleManager {
         continue;
       }
 
+      const sameHostBinding =
+        currentSelection.model === matched.id &&
+        (!currentSelection.modelVendor ||
+          currentSelection.modelVendor === matched.vendor) &&
+        (!currentSelection.modelFamily ||
+          currentSelection.modelFamily === matched.family) &&
+        (!currentSelection.modelVersion ||
+          currentSelection.modelVersion === matched.version);
+      if (currentSelection.agentHostModelId && !sameHostBinding) {
+        continue;
+      }
       const matchedSelection = {
         ...modelInfoToSelection(matched),
+        agentHostModelId: sameHostBinding
+          ? currentSelection.agentHostModelId
+          : undefined,
         modelConfiguration: currentSelection.modelConfiguration,
         modelReasoningEffort: currentSelection.modelReasoningEffort,
       };
@@ -2337,6 +2376,7 @@ export class ScheduleManager {
       updates.modelVendor !== undefined ||
       updates.modelFamily !== undefined ||
       updates.modelVersion !== undefined ||
+      updates.agentHostModelId !== undefined ||
       updates.modelReasoningEffort !== undefined ||
       updates.modelConfiguration !== undefined;
     const nextModelSelection = hasModelUpdates
@@ -2349,6 +2389,18 @@ export class ScheduleManager {
                 modelVendor: updates.modelVendor ?? task.modelVendor,
                 modelFamily: updates.modelFamily ?? task.modelFamily,
                 modelVersion: updates.modelVersion ?? task.modelVersion,
+                agentHostModelId:
+                  updates.agentHostModelId !== undefined
+                    ? updates.agentHostModelId
+                    : (updates.model !== undefined && updates.model !== task.model) ||
+                        (updates.modelVendor !== undefined &&
+                          updates.modelVendor !== task.modelVendor) ||
+                        (updates.modelFamily !== undefined &&
+                          updates.modelFamily !== task.modelFamily) ||
+                        (updates.modelVersion !== undefined &&
+                          updates.modelVersion !== task.modelVersion)
+                      ? undefined
+                      : task.agentHostModelId,
                 modelReasoningEffort:
                   updates.modelReasoningEffort ??
                   (updates.modelConfiguration !== undefined
@@ -2369,6 +2421,18 @@ export class ScheduleManager {
               },
         )
       : undefined;
+    if (
+      updates.preventAgentHostFallback !== undefined &&
+      typeof updates.preventAgentHostFallback !== "boolean"
+    ) {
+      throw new Error(messages.agentHostFallbackGuardInvalid());
+    }
+    if (
+      nextModelSelection &&
+      !isAgentHostModelBindingCompatible(nextModelSelection)
+    ) {
+      throw new Error(messages.agentHostModelBindingInvalid());
+    }
     if (
       nextModelSelection?.modelConfiguration !== undefined &&
       nextModelSelection.modelReasoningEffort
@@ -2436,6 +2500,10 @@ export class ScheduleManager {
     }
     if (updates.modelFallback !== undefined) {
       task.modelFallback = updates.modelFallback === true ? true : undefined;
+    }
+    if (updates.preventAgentHostFallback !== undefined) {
+      task.preventAgentHostFallback =
+        updates.preventAgentHostFallback === true ? true : undefined;
     }
     if (updates.useCopilotCli !== undefined) {
       task.useCopilotCli = updates.useCopilotCli === true ? true : undefined;
@@ -2622,6 +2690,7 @@ export class ScheduleManager {
       modelVendor: original.modelVendor,
       modelFamily: original.modelFamily,
       modelVersion: original.modelVersion,
+      agentHostModelId: original.agentHostModelId,
       modelReasoningEffort: original.modelReasoningEffort,
       modelConfiguration: original.modelConfiguration,
       scope: original.scope,
@@ -2630,6 +2699,7 @@ export class ScheduleManager {
       attachments: original.attachments,
       autoMode: original.autoMode,
       modelFallback: original.modelFallback,
+      preventAgentHostFallback: original.preventAgentHostFallback,
       useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,
       chatSession: original.chatSession,
