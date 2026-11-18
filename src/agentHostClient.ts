@@ -154,10 +154,17 @@ export interface AgentHostAction {
 
 interface AgentHostActionEnvelope {
   rejected: boolean;
+  origin: unknown;
+}
+
+interface AgentHostActionOrigin {
+  clientId: string;
+  clientSeq: number;
 }
 
 /** One JSON-RPC connection to the host (a named pipe carrying a WebSocket). */
 export class AgentHostConnection {
+  readonly clientId = `copilot-scheduler-${randomUUID()}`;
   private nextId = 0;
   private clientSeq = 0;
   private closed = false;
@@ -239,11 +246,21 @@ export class AgentHostConnection {
     action: AgentHostAction,
     timeoutMs?: number,
   ): Promise<unknown> {
-    return this.request(
+    return this.dispatchWithOrigin(channel, action, timeoutMs).response;
+  }
+
+  dispatchWithOrigin(
+    channel: string,
+    action: AgentHostAction,
+    timeoutMs?: number,
+  ): { origin: AgentHostActionOrigin; response: Promise<unknown> } {
+    const origin = { clientId: this.clientId, clientSeq: ++this.clientSeq };
+    const response = this.request(
       "dispatchAction",
-      { channel, clientSeq: ++this.clientSeq, action },
+      { channel, clientSeq: origin.clientSeq, action },
       timeoutMs,
     );
+    return { origin, response };
   }
 
   close(): void {
@@ -327,7 +344,7 @@ export class AgentHostConnection {
         "rejectionReason",
       );
       for (const listener of [...this.listeners]) {
-        listener(channel, action, { rejected });
+        listener(channel, action, { rejected, origin: message.params?.origin });
       }
     }
   }
@@ -528,7 +545,7 @@ async function initializeAgentHost(
     snapshots?: Array<{ state?: { agents?: Array<Record<string, unknown>> } }>;
   }>("initialize", {
     channel: "ahp-root://",
-    clientId: `copilot-scheduler-${randomUUID()}`,
+    clientId: connection.clientId,
     protocolVersions: PROTOCOL_VERSIONS,
     initialSubscriptions: ["ahp-root://"],
     clientInfo: { name: "copilot-scheduler", version: "1" },
@@ -926,6 +943,7 @@ export async function queueAgentHostMessage(
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       let dispatchStarted = false;
+      let dispatchOrigin: AgentHostActionOrigin | undefined;
       let timedOut = false;
       let guardPending = !!request.dispatchGuard;
       let pendingOutcome: (() => void) | undefined;
@@ -961,7 +979,17 @@ export async function queueAgentHostMessage(
         REQUEST_TIMEOUT_MS,
       );
       const stopListening = connection.onAction((channel, action, envelope) => {
+        // Message IDs are reused; only this dispatch's origin can confirm it.
+        const origin = envelope.origin;
         if (
+          !dispatchStarted ||
+          !dispatchOrigin ||
+          !origin ||
+          typeof origin !== "object" ||
+          !("clientId" in origin) ||
+          !("clientSeq" in origin) ||
+          origin.clientId !== dispatchOrigin.clientId ||
+          origin.clientSeq !== dispatchOrigin.clientSeq ||
           channel !== chat.chatUri ||
           action.type !== "chat/pendingMessageSet" ||
           action.id !== messageId
@@ -996,24 +1024,24 @@ export async function queueAgentHostMessage(
       const dispatch = () => {
         if (settled || timedOut || dispatchStarted) return;
         dispatchStarted = true;
-        void connection
-          .dispatch(chat.chatUri, {
-            type: "chat/pendingMessageSet",
-            kind: "queued",
-            id: messageId,
-            message,
-          })
-          .catch(() =>
-            finishAfterGuard(() =>
-              reject(
-                new AgentHostError(
-                  "failed",
-                  "The Agent Host did not confirm the queued message.",
-                  "unknown",
-                ),
+        const dispatched = connection.dispatchWithOrigin(chat.chatUri, {
+          type: "chat/pendingMessageSet",
+          kind: "queued",
+          id: messageId,
+          message,
+        });
+        dispatchOrigin = dispatched.origin;
+        void dispatched.response.catch(() =>
+          finishAfterGuard(() =>
+            reject(
+              new AgentHostError(
+                "failed",
+                "The Agent Host did not confirm the queued message.",
+                "unknown",
               ),
             ),
-          );
+          ),
+        );
       };
       if (request.dispatchGuard) {
         void request.dispatchGuard(dispatch).then(

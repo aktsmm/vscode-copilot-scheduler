@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -59,6 +60,8 @@ async function startFakeHost(
     }>;
     queueAck?: boolean;
     queueRejected?: boolean;
+    queueInterference?: "otherClient" | "otherSequence" | "missingOrigin";
+    queueInterferenceRejected?: boolean;
     models?: unknown;
   } = {},
 ): Promise<FakeHost> {
@@ -72,10 +75,12 @@ async function startFakeHost(
 
   wss.on("connection", (socket: WebSocket, request) => {
     assert.ok(request.url?.includes("tkn=secret"));
+    let clientId = "";
     const notify = (
       channel: string,
       action: Record<string, unknown>,
       rejectionReason?: string,
+      origin?: { clientId: string; clientSeq: number },
     ) =>
       socket.send(
         JSON.stringify({
@@ -85,6 +90,7 @@ async function startFakeHost(
             channel,
             action,
             ...(rejectionReason === undefined ? {} : { rejectionReason }),
+            ...(origin === undefined ? {} : { origin }),
           },
         }),
       );
@@ -101,6 +107,8 @@ async function startFakeHost(
 
       switch (message.method) {
         case "initialize":
+          assert.ok(typeof message.params.clientId === "string");
+          clientId = message.params.clientId;
           reply({
             protocolVersion: "1.1.0",
             snapshots: [
@@ -214,6 +222,23 @@ async function startFakeHost(
             );
           } else if (action.type === "chat/pendingMessageSet") {
             if (behaviour.queueAck !== false) {
+              const clientSeq = message.params.clientSeq;
+              assert.ok(typeof clientSeq === "number");
+              const origin = { clientId, clientSeq };
+              if (behaviour.queueInterference) {
+                const otherOrigin =
+                  behaviour.queueInterference === "otherClient"
+                    ? { clientId: "other-client", clientSeq }
+                    : behaviour.queueInterference === "otherSequence"
+                      ? { clientId, clientSeq: clientSeq + 1 }
+                      : undefined;
+                notify(
+                  channel,
+                  { type: "chat/pendingMessageSet", id: action.id, kind: "queued" },
+                  behaviour.queueInterferenceRejected ? "previous rejection" : undefined,
+                  otherOrigin,
+                );
+              }
               notify(
                 channel,
                 {
@@ -222,6 +247,7 @@ async function startFakeHost(
                   kind: "queued",
                 },
                 behaviour.queueRejected ? "queue rejected" : undefined,
+                origin,
               );
             }
           }
@@ -435,6 +461,136 @@ suite("Agent Host client", () => {
           error.kind === "failed" &&
           error.turnOutcome === "unknown",
       );
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("ignores another dispatch's queued notification after dispatch starts", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [{ resource: chatUri, title: "Daily review", interactivity: "interactive" }],
+    };
+    for (const queueInterference of ["otherClient", "otherSequence", "missingOrigin"] as const) {
+      const host = await startFakeHost(tmp, {
+        sessionPages: [{ items: [session] }],
+        queueInterference,
+        queueRejected: true,
+      });
+      try {
+        await assert.rejects(
+          queueAgentHostMessage({
+            endpoint: host.endpoint,
+            targetChatId: toAgentHostChatBindingId(chatUri),
+            taskId: "stable-task-id",
+            text: "Review today's changes",
+          }),
+          (error: unknown) =>
+            error instanceof AgentHostError &&
+            error.kind === "failed" &&
+            error.turnOutcome === "unknown",
+          queueInterference,
+        );
+      } finally {
+        await host.close();
+      }
+    }
+  });
+
+  test("ignores another dispatch's rejection after dispatch starts", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [{ resource: chatUri, title: "Daily review", interactivity: "interactive" }],
+    };
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{ items: [session] }],
+      queueInterference: "otherClient",
+      queueInterferenceRejected: true,
+    });
+    try {
+      const queued = await queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        taskId: "stable-task-id",
+        text: "Review today's changes",
+      });
+      assert.match(queued.messageId, /^copilot-scheduler-[a-f0-9]{64}$/);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("ignores an earlier queued notification before the guard dispatches", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const taskId = "stable-task-id";
+    const messageId = `copilot-scheduler-${createHash("sha256").update(taskId).digest("hex")}`;
+    const session = {
+      resource: "ahp-copilotcli:/session-1",
+      provider: "copilotcli",
+      workingDirectories: [pathToFileURL(tmp).href],
+      chats: [{ resource: chatUri, title: "Daily review", interactivity: "interactive" }],
+    };
+    const host = await startFakeHost(tmp, { sessionPages: [{ items: [session] }] });
+    try {
+      await assert.rejects(
+        queueAgentHostMessage({
+          endpoint: host.endpoint,
+          targetChatId: toAgentHostChatBindingId(chatUri),
+          taskId,
+          text: "Review today's changes",
+          dispatchGuard: async () => {
+            const socket = [...host.sockets()][0];
+            assert.ok(socket);
+            const clientId = host.calls.find((call) => call.method === "initialize")?.params.clientId;
+            assert.ok(typeof clientId === "string");
+            const received = new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error("Host ping timed out")), 3000);
+              socket.once("pong", () => {
+                clearTimeout(timeout);
+                resolve();
+              });
+            });
+            socket.send(JSON.stringify({
+              jsonrpc: "2.0",
+              method: "action",
+              params: {
+                channel: chatUri,
+                action: { type: "chat/pendingMessageSet", id: messageId, kind: "queued" },
+                origin: { clientId, clientSeq: 1 },
+              },
+            }));
+            socket.ping();
+            await received;
+          },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          /reservation did not allow/.test(error.message),
+      );
+      assert.strictEqual(host.calls.filter((call) =>
+        call.method === "dispatchAction" &&
+        (call.params.action as { type?: string }).type === "chat/pendingMessageSet",
+      ).length, 0);
+
+      const queued = await queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        taskId,
+        text: "Review today's changes",
+        dispatchGuard: async (dispatch) => { dispatch(); dispatch(); },
+      });
+      assert.strictEqual(queued.messageId, messageId);
+      assert.strictEqual(host.calls.filter((call) =>
+        call.method === "dispatchAction" &&
+        (call.params.action as { type?: string }).type === "chat/pendingMessageSet",
+      ).length, 1);
     } finally {
       await host.close();
     }
