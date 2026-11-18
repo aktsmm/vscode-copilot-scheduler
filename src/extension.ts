@@ -193,7 +193,9 @@ function buildPromptExecutionOptions(
   return {
     agent: request.agent,
     chatSession: request.chatSession,
-    agentHostWorkspaceMode: request.agentHostWorkspaceMode,
+    ...(request.agentHostWorkspaceMode !== undefined
+      ? { agentHostWorkspaceMode: request.agentHostWorkspaceMode }
+      : {}),
     targetChatId: request.targetChatId,
     model: request.model,
     modelName: request.modelName,
@@ -2282,7 +2284,9 @@ async function resolvePromptExecution(
     prompt: applyAutoModeHint(parsed.prompt, task.autoMode === true),
     agent: resolveExecutionOption(task.agent, parsed.agent),
     chatSession: task.chatSession,
-    agentHostWorkspaceMode: task.agentHostWorkspaceMode,
+    ...(task.agentHostWorkspaceMode !== undefined
+      ? { agentHostWorkspaceMode: task.agentHostWorkspaceMode }
+      : {}),
     model: resolveExecutionOption(task.model, parsed.model),
     modelName: task.modelName,
     modelVendor: task.modelVendor,

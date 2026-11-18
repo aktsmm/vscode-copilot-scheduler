@@ -1946,9 +1946,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "utf8",
     );
     const hostStart = webviewHost.indexOf('case "testPrompt":');
+    assert.ok(hostStart >= 0);
     assert.ok(
       webviewHost
-        .slice(hostStart, hostStart + 900)
+        .slice(hostStart)
+        .split(/\n\s*(?:case |default:)/, 1)[0]
         .includes("message.useCopilotCli === true"),
     );
   });
