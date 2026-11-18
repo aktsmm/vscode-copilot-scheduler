@@ -390,7 +390,7 @@ suite("Extension Test Suite", () => {
     // before the artifact reaches the Marketplace.
     for (const gate of [
       "node scripts/verify-package-lock-registry.js",
-      "npm audit --registry=https://registry.npmjs.org",
+      "npm audit --omit=dev --registry=https://registry.npmjs.org",
       "npm run verify:nls",
       "npm run lint",
       "npm test",
@@ -406,12 +406,19 @@ suite("Extension Test Suite", () => {
       "publish workflow should refuse a tag that does not match package.json",
     );
     assert.match(workflow, /type: boolean\s+default: false/);
+    // Temporary GHSA-fc5q-39xc-vjpf exception: production dependencies block the
+    // release; the full audit is only reported. Restore a single blocking audit
+    // (and this assertion) once a patched picomatch exists.
     assert.match(
       workflow,
-      /- name: Audit dependencies\s+run: npm audit --registry=https:\/\/registry\.npmjs\.org/,
+      /- name: Audit production dependencies\s+run: npm audit --omit=dev --registry=https:\/\/registry\.npmjs\.org/,
+    );
+    assert.match(
+      workflow,
+      /- name: Audit all dependencies \(report only\)\s+continue-on-error: true\s+run: npm audit --registry=https:\/\/registry\.npmjs\.org/,
     );
     assert.ok(
-      workflow.indexOf("- name: Audit dependencies") <
+      workflow.indexOf("- name: Audit production dependencies") <
         workflow.indexOf("- name: Package VSIX"),
     );
     assert.match(

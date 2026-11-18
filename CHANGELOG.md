@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prevent duplicate Agent Host turn dispatch and fail promptly if a dispatch guard returns without sending.
 - Confirm queued messages only from the matching Agent Host dispatch, ignoring stale or unrelated acknowledgements.
 
+### Notes
+
+- The release workflow now blocks on `npm audit --omit=dev` and reports the full audit without blocking. This is a temporary exception for GHSA-fc5q-39xc-vjpf (picomatch <= 4.0.7, no patched release, development tooling only; the packaged extension is unaffected). Restore the single blocking audit when a patched picomatch is published.
+
 ## [1.9.7] - 2026-11-16
 
 Pre-release build with the Stable 1.10.1 changes: tasks run through the Agent Host by default, and a task can be bound to an existing Copilot chat. Development dependencies were updated to clear npm audit findings. The proposed `languageModelSystem` API declaration is unchanged. The notes below describe the Stable changes included in this build.

@@ -90,7 +90,14 @@ jobs:
       - name: Verify package-lock registry hygiene
         run: node scripts/verify-package-lock-registry.js
 
-      - name: Audit dependencies
+      # Temporary exception (GHSA-fc5q-39xc-vjpf): every picomatch <= 4.0.7 is affected, no patched release exists,
+      # and the dependency is reachable only through development tooling, not the packaged extension.
+      # Restore a single blocking `npm audit` once a patched picomatch is published.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org
+
+      - name: Audit all dependencies (report only)
+        continue-on-error: true
         run: npm audit --registry=https://registry.npmjs.org
 
       - name: Verify NLS consistency
