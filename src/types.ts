@@ -71,6 +71,12 @@ export type ChatSessionBehavior = "new" | "continue";
  */
 export type TaskChatSessionMode = "default" | ChatSessionBehavior;
 
+export type AgentHostWorkspaceMode = "folder" | "worktree";
+
+export type AgentHostWorkspaceApplication =
+  | "new_session_config_confirmed"
+  | "not_applied_resumed";
+
 /**
  * Structured model selection fields.
  * `model` remains the primary persisted identifier for backward compatibility.
@@ -207,6 +213,9 @@ export interface ScheduledTask {
   /** Task-specific chat session override. Undefined means use the global setting. */
   chatSession?: ChatSessionBehavior;
 
+  /** Workspace isolation requested only when creating an Agent Host session. */
+  agentHostWorkspaceMode?: AgentHostWorkspaceMode;
+
   /** Opaque Agent Host chat binding selected from scheduler_query or the task picker. */
   targetChatId?: string;
 
@@ -331,6 +340,9 @@ export interface CreateTaskInput {
   /** Per-task chat session override. "default" uses the global setting. */
   chatSession?: TaskChatSessionMode;
 
+  /** New Agent Host session isolation; "default" clears the saved override. */
+  agentHostWorkspaceMode?: AgentHostWorkspaceMode | "default";
+
   /** Opaque ID returned by scheduler_query kind=list_sessions. Empty clears the binding on update. */
   targetChatId?: string;
 
@@ -426,6 +438,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
+
+  /** Workspace isolation requested only when creating an Agent Host session. */
+  agentHostWorkspaceMode?: AgentHostWorkspaceMode;
 
   /** Opaque ID of an existing Agent Host chat to receive the task. */
   targetChatId?: string;
@@ -531,6 +546,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Chat session behavior override */
   chatSession?: ChatSessionBehavior;
 
+  /** Workspace isolation requested only when creating an Agent Host session. */
+  agentHostWorkspaceMode?: AgentHostWorkspaceMode;
+
   /** Opaque ID of an existing Agent Host chat to receive the task. */
   targetChatId?: string;
 
@@ -610,6 +628,9 @@ export interface AgentHostRunInfo {
   fallbackReason?: string;
   /** Stable identifier of a message accepted into an existing chat queue. */
   messageId?: string;
+  /** Requested workspace mode; application is reported separately. */
+  workspaceMode?: AgentHostWorkspaceMode;
+  workspaceModeApplication?: AgentHostWorkspaceApplication;
   turnOutcome?: AgentHostTurnOutcome;
   responseText?: AgentHostResponseTextObservation;
 }

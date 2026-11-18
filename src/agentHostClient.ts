@@ -13,6 +13,8 @@ import { PipeWebSocket } from "./minimalWebSocket";
 import type {
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
+  AgentHostWorkspaceMode,
+  AgentHostWorkspaceApplication,
 } from "./types";
 
 export type AgentHostFailureKind =
@@ -22,6 +24,7 @@ export type AgentHostFailureKind =
   | "unsupported"
   /** The selected model cannot be identified safely; do not choose another route. */
   | "modelIdentity"
+  | "workspaceMode"
   /** The run started (or may have) and failed; do not run it a second time. */
   | "failed";
 
@@ -449,6 +452,9 @@ export interface AgentHostTurnRequest {
   endpoint: AgentHostEndpoint;
   text: string;
   cwdUri?: string;
+  workspaceMode?: AgentHostWorkspaceMode;
+  /** An ambiguous workspace can resume a known session, but cannot create one. */
+  allowNewSession?: boolean;
   modelId?: string;
   /** The model ID was explicitly chosen from the Agent Host catalog. */
   hostModelIdExplicit?: boolean;
@@ -468,6 +474,13 @@ export interface AgentHostTurnResult extends AgentHostSessionRef {
   requestedModel?: string;
   appliedModel?: string;
   responseText: AgentHostResponseTextObservation;
+  workspaceMode?: AgentHostWorkspaceMode;
+  workspaceModeApplication?: AgentHostWorkspaceApplication;
+}
+
+interface PreparedAgentHostSession extends AgentHostSessionRef {
+  workspaceMode?: AgentHostWorkspaceMode;
+  workspaceModeApplication?: AgentHostWorkspaceApplication;
 }
 
 export interface AgentHostChatInfo {
@@ -1095,7 +1108,7 @@ export async function runAgentHostTurn(
   const connection = await AgentHostConnection.open(request.endpoint);
   try {
     let prepared: {
-      ref: AgentHostSessionRef;
+      ref: PreparedAgentHostSession;
       model?: { id: string; config?: Record<string, string | number> };
     };
     try {
@@ -1103,7 +1116,9 @@ export async function runAgentHostTurn(
     } catch (error) {
       // Nothing has been sent yet, so another route can still run the task.
       throw error instanceof AgentHostError &&
-        (error.kind === "unsupported" || error.kind === "modelIdentity")
+        (error.kind === "unsupported" ||
+          error.kind === "modelIdentity" ||
+          error.kind === "workspaceMode")
         ? error
         : new AgentHostError(
             "unavailable",
@@ -1120,11 +1135,18 @@ async function prepareTurn(
   connection: AgentHostConnection,
   request: AgentHostTurnRequest,
 ): Promise<{
-  ref: AgentHostSessionRef;
+  ref: PreparedAgentHostSession;
   model?: { id: string; config?: Record<string, string | number> };
 }> {
   const agents = await initializeAgentHost(connection);
   requireAgentHostAgent(agents);
+  if (
+    request.workspaceMode !== undefined &&
+    request.workspaceMode !== "folder" &&
+    request.workspaceMode !== "worktree"
+  ) {
+    throw new AgentHostError("workspaceMode", "The workspace mode is invalid.");
+  }
 
   let model: { id: string; config?: Record<string, string | number> } | undefined;
   if (request.modelId) {
@@ -1153,23 +1175,83 @@ async function prepareTurn(
 async function openChat(
   connection: AgentHostConnection,
   request: AgentHostTurnRequest,
-): Promise<AgentHostSessionRef> {
+): Promise<PreparedAgentHostSession> {
   if (request.resume) {
     try {
       await connection.request("subscribe", { channel: request.resume.sessionUri });
       await connection.request("subscribe", { channel: request.resume.chatUri });
-      return request.resume;
+      return {
+        ...request.resume,
+        ...(request.workspaceMode
+          ? {
+              workspaceMode: request.workspaceMode,
+              workspaceModeApplication: "not_applied_resumed" as const,
+            }
+          : {}),
+      };
     } catch {
       // The host no longer has that session; start a new one.
     }
   }
 
+  if (request.allowNewSession === false) {
+    throw new AgentHostError("workspaceMode", "The task needs one unambiguous local execution folder for a new session.");
+  }
+
+  if (request.workspaceMode) {
+    if (!request.cwdUri) {
+      throw new AgentHostError("workspaceMode", "No local execution folder was specified.");
+    }
+    let resolved: unknown;
+    try {
+      fileURLToPath(request.cwdUri);
+      resolved = await connection.request("resolveSessionConfig", {
+        channel: "ahp-root://",
+        provider: PROVIDER,
+        workingDirectory: request.cwdUri,
+        config: {
+          isolation: request.workspaceMode,
+          ...(request.autoApprove ? { autoApprove: "autoApprove" } : {}),
+        },
+      });
+    } catch {
+      throw new AgentHostError(
+        "workspaceMode",
+        "The Agent Host could not confirm the requested workspace mode.",
+      );
+    }
+    const schema = isRecord(resolved) ? resolved.schema : undefined;
+    const properties = isRecord(schema) ? schema.properties : undefined;
+    const isolation = isRecord(properties) && Object.hasOwn(properties, "isolation")
+      ? properties.isolation
+      : undefined;
+    const values = isRecord(resolved) ? resolved.values : undefined;
+    if (
+      !isRecord(isolation) ||
+      isolation.type !== "string" ||
+      !Array.isArray(isolation.enum) ||
+      !isolation.enum.includes(request.workspaceMode) ||
+      !isRecord(values) ||
+      !Object.hasOwn(values, "isolation") ||
+      values.isolation !== request.workspaceMode
+    ) {
+      throw new AgentHostError(
+        "workspaceMode",
+        "The Agent Host does not support the requested workspace mode for this folder.",
+      );
+    }
+  }
+
   const sessionUri = `ahp-session:/${randomUUID()}`;
+  const config: Record<string, string> = {
+    ...(request.autoApprove ? { autoApprove: "autoApprove" } : {}),
+    ...(request.workspaceMode ? { isolation: request.workspaceMode } : {}),
+  };
   await connection.request("createSession", {
     channel: sessionUri,
     provider: PROVIDER,
     ...(request.cwdUri ? { workingDirectories: [request.cwdUri] } : {}),
-    ...(request.autoApprove ? { config: { autoApprove: "autoApprove" } } : {}),
+    ...(Object.keys(config).length > 0 ? { config } : {}),
   });
   const state = snapshotState(
     await connection.request<SnapshotResult>("subscribe", { channel: sessionUri }),
@@ -1178,13 +1260,57 @@ async function openChat(
   if (typeof chatUri !== "string" || !chatUri) {
     throw new AgentHostError("failed", "The Agent Host session has no chat.");
   }
-  await connection.request("subscribe", { channel: chatUri });
-  return { sessionUri, chatUri };
+  const chatSnapshot = await connection.request<SnapshotResult>("subscribe", {
+    channel: chatUri,
+  });
+  if (request.workspaceMode) {
+    const appliedConfig = isRecord(state.config) ? state.config.values : undefined;
+    if (
+      !isRecord(appliedConfig) ||
+      !Object.hasOwn(appliedConfig, "isolation") ||
+      appliedConfig.isolation !== request.workspaceMode
+    ) {
+      throw new AgentHostError("workspaceMode", "The created session did not confirm the requested workspace mode.");
+    }
+    if (request.workspaceMode === "folder") {
+      if (!isRecord(chatSnapshot)) {
+        throw new AgentHostError("workspaceMode", "The Agent Host did not confirm the chat execution folder.");
+      }
+      const chatState = snapshotState(chatSnapshot);
+      if (!isRecord(chatState)) {
+        throw new AgentHostError("workspaceMode", "The Agent Host returned an invalid chat state.");
+      }
+      const directories = Object.hasOwn(chatState, "workingDirectories")
+        ? chatState.workingDirectories
+        : state.workingDirectories;
+      const localDirectories = toLocalDirectories(directories);
+      if (
+        !request.cwdUri ||
+        !Array.isArray(directories) ||
+        directories.length !== 1 ||
+        localDirectories.length !== 1 ||
+        normalizeDirectory(localDirectories[0]) !==
+          normalizeDirectory(fileURLToPath(request.cwdUri))
+      ) {
+        throw new AgentHostError("workspaceMode", "The created session uses a different execution folder.");
+      }
+    }
+  }
+  return {
+    sessionUri,
+    chatUri,
+    ...(request.workspaceMode
+      ? {
+          workspaceMode: request.workspaceMode,
+          workspaceModeApplication: "new_session_config_confirmed" as const,
+        }
+      : {}),
+  };
 }
 
 function runTurn(
   connection: AgentHostConnection,
-  ref: AgentHostSessionRef,
+  ref: PreparedAgentHostSession,
   request: AgentHostTurnRequest,
   model: { id: string; config?: Record<string, string | number> } | undefined,
 ): Promise<AgentHostTurnResult> {

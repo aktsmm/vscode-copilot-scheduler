@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.13.0",
+  "version": "1.15.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -655,6 +655,15 @@
               ],
               "description": "Per-task chat session override. 'default' uses the global setting."
             },
+            "agentHostWorkspaceMode": {
+              "type": "string",
+              "enum": [
+                "default",
+                "folder",
+                "worktree"
+              ],
+              "description": "Location for NEW Agent Host sessions only. folder shares the existing folder, including uncommitted changes and local records; worktree requests a new Git worktree. Omitted/default preserves previous Host behavior (normally worktree for Git). Resume keeps the original location without forcing a new session. Inactive for bound existing chats and actual CLI runs; saved values are retained. If an applicable explicit choice cannot be honored, the prompt is not sent."
+            },
             "targetChatId": {
               "type": "string",
               "description": "Optional opaque bindingId returned by scheduler_query kind=list_sessions. Queues this task in that existing Copilot chat. Call list_sessions first; never guess or use an internal URI. Workspace tasks must match the selected chat's sole workspace."
@@ -842,6 +851,15 @@
                     "new",
                     "continue"
                   ]
+                },
+                "agentHostWorkspaceMode": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "folder",
+                    "worktree"
+                  ],
+                  "description": "Location for NEW Agent Host sessions only. Omission preserves the saved value; default removes the override and restores previous Host behavior (normally worktree for Git). folder shares uncommitted changes and local records; worktree requests a new Git worktree. Resume keeps the original location without forcing a new session. Inactive for bound existing chats and actual CLI runs, retaining the choice. If an applicable explicit choice cannot be honored, the prompt is not sent."
                 },
                 "targetChatId": {
                   "type": "string",

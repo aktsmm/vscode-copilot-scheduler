@@ -4,10 +4,304 @@ import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 import * as agentHostClient from "../../agentHostClient";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
-import { createPromptBlockedError } from "../../promptExecutionErrors";
+import { createPromptBlockedError, getPromptBlockedReason } from "../../promptExecutionErrors";
 import type { ExecuteOptions } from "../../types";
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("workspace preferences reject invalid input and non-Host routes but preserve an explicit CLI model", async () => {
+    const getConfig = vscode.workspace.getConfiguration;
+    const warning = vscode.window.showWarningMessage;
+    let local = false;
+    let cliCalls = 0;
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: ((section?: string) => {
+        const config = getConfig.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            if (key === "executionRoute") return (local ? "agentHost" : "chat") as T;
+            if (key === "sessionHarness") return (local ? "local" : "auto") as T;
+            return config.get<T>(key, defaultValue as T);
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => undefined,
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(): Promise<never>;
+        tryOpenChatWithPrompt(): Promise<never>;
+        executePromptViaCopilotCli(): Promise<undefined>;
+      };
+      internals.tryExecuteViaAgentHost = async () => assert.fail("Host must not run");
+      internals.tryOpenChatWithPrompt = async () => assert.fail("chat must not run");
+      internals.executePromptViaCopilotCli = async () => { cliCalls++; return undefined; };
+      for (const mode of ["FOLDER", "", null, 7]) {
+        await assert.rejects(
+          executor.executePrompt("synthetic", {
+            agentHostWorkspaceMode: mode as never,
+            useCopilotCli: true,
+            model: "selected",
+          }),
+          (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+        );
+      }
+      for (const route of ["chat", "local"]) {
+        local = route === "local";
+        for (const useCopilotCli of [false, true]) {
+          await assert.rejects(
+            executor.executePrompt("synthetic", {
+              agentHostWorkspaceMode: "folder",
+              useCopilotCli,
+              model: "  ",
+              chatSession: "continue",
+            }),
+            (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+          );
+        }
+      }
+      assert.strictEqual(cliCalls, 0, "an empty CLI model must not bypass the Host requirement");
+      await executor.executePrompt("synthetic", {
+        agentHostWorkspaceMode: "worktree",
+        useCopilotCli: true,
+        model: "selected",
+      });
+      assert.strictEqual(cliCalls, 1, "an actual CLI run keeps its existing route");
+    } finally {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: getConfig,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: warning,
+      });
+    }
+  });
+
+  test("explicit workspace preferences never fall back when the Host, folder or capability is unavailable", async () => {
+    const getConfig = vscode.workspace.getConfiguration;
+    const workspaceFolders = Object.getOwnPropertyDescriptor(vscode.workspace, "workspaceFolders")!;
+    const warning = vscode.window.showWarningMessage;
+    const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+    const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+    const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+    let hostAvailable = false;
+    let hostCalls = 0;
+    let failureKind: "unsupported" | "workspaceMode" = "unsupported";
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: ((section?: string) => {
+        const config = getConfig.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get<T>(key: string, defaultValue?: T): T {
+            if (key === "executionRoute") return "agentHost" as T;
+            if (key === "sessionHarness") return "auto" as T;
+            if (key === "executionFallback") return "chat" as T;
+            return config.get<T>(key, defaultValue as T);
+          },
+        } as vscode.WorkspaceConfiguration;
+      }) as typeof vscode.workspace.getConfiguration,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => undefined,
+    });
+    Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
+      configurable: true,
+      value: "test",
+    });
+    Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+      configurable: true,
+      value: () => hostAvailable
+        ? { socketPath: "test", token: "test", protocolVersion: "1.1.0" }
+        : undefined,
+    });
+    Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+      configurable: true,
+      value: async () => {
+        hostCalls++;
+        throw new agentHostClient.AgentHostError(failureKind, "workspace configuration unavailable");
+      },
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const internals = executor as unknown as {
+        tryOpenChatWithPrompt(): Promise<never>;
+        executePromptViaCopilotCli(): Promise<never>;
+      };
+      internals.tryOpenChatWithPrompt = async () => assert.fail("chat fallback must not run");
+      internals.executePromptViaCopilotCli = async () => assert.fail("CLI fallback must not run");
+      for (const agentHostWorkspaceMode of ["folder", "worktree"] as const) {
+        const options: ExecuteOptions = {
+          agentHostWorkspaceMode,
+          chatSession: "continue",
+          workingDirectory: __dirname,
+          useCopilotCli: true,
+          model: "",
+        };
+        hostAvailable = false;
+        const before = hostCalls;
+        await assert.rejects(
+          executor.executePrompt("synthetic", options),
+          (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+        );
+        hostAvailable = true;
+        await assert.rejects(
+          executor.executePrompt("synthetic", { ...options, workingDirectory: __filename }),
+          (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+        );
+        assert.strictEqual(hostCalls, before, "invalid prerequisites must stop before the Host turn");
+        for (const kind of ["unsupported", "workspaceMode"] as const) {
+          failureKind = kind;
+          await assert.rejects(
+            executor.executePrompt("synthetic", options),
+            (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+          );
+        }
+        assert.strictEqual(hostCalls, before + 2);
+      }
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        configurable: true,
+        value: [
+          { uri: vscode.Uri.file(__dirname), name: "first", index: 0 },
+          { uri: vscode.Uri.joinPath(vscode.Uri.file(__dirname), ".."), name: "second", index: 1 },
+        ],
+      });
+      const beforeAmbiguousRun = hostCalls;
+      await assert.rejects(
+        executor.executePrompt("synthetic", {
+          agentHostWorkspaceMode: "folder",
+          chatSession: "new",
+        }),
+        (error: unknown) => getPromptBlockedReason(error) === "agentHostUnavailable",
+      );
+      assert.strictEqual(hostCalls, beforeAmbiguousRun, "multiple local roots must not select the first folder");
+    } finally {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", workspaceFolders);
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: getConfig,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: warning,
+      });
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+    }
+  });
+
+  test("forwards workspace metadata and reuses the cached session across creation preferences", async () => {
+    const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+    const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+    const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+    const workspaceFolders = Object.getOwnPropertyDescriptor(vscode.workspace, "workspaceFolders")!;
+    const sessions: Map<string, unknown> = Reflect.get(CopilotExecutor, "agentHostSessions");
+    const previousSessions = new Map(sessions);
+    const requests: agentHostClient.AgentHostTurnRequest[] = [];
+    Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
+      configurable: true,
+      value: "test",
+    });
+    Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+      configurable: true,
+      value: () => ({ socketPath: "test", token: "test", protocolVersion: "1.1.0" }),
+    });
+    Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+      configurable: true,
+      value: async (request: agentHostClient.AgentHostTurnRequest) => {
+        requests.push(request);
+        return {
+          sessionUri: "test-session",
+          chatUri: "test-chat",
+          responseText: "observed",
+          workspaceMode: request.workspaceMode,
+          workspaceModeApplication: request.resume
+            ? "not_applied_resumed"
+            : "new_session_config_confirmed",
+        };
+      },
+    });
+    try {
+      sessions.clear();
+      const executor = new CopilotExecutor() as unknown as {
+        tryExecuteViaAgentHost(
+          routing: ReturnType<typeof __testOnly.buildPromptRouting>,
+          options: ExecuteOptions,
+          config: vscode.WorkspaceConfiguration,
+          chatSession: "new" | "continue",
+        ): Promise<{ result?: { agentHostRun?: Record<string, unknown> } }>;
+      };
+      const config = {
+        get: (key: string, defaultValue: unknown) =>
+          key === "agentHostOpenSession" ? false : defaultValue,
+      } as vscode.WorkspaceConfiguration;
+      const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
+      for (const mode of ["worktree", "folder"] as const) {
+        const result = await executor.tryExecuteViaAgentHost(
+          routing,
+          { agentHostWorkspaceMode: mode, workingDirectory: __dirname },
+          config,
+          mode === "worktree" ? "new" : "continue",
+        );
+        assert.deepStrictEqual(result.result?.agentHostRun, {
+          turnOutcome: "completed",
+          responseText: "observed",
+          workspaceMode: mode,
+          workspaceModeApplication: mode === "worktree"
+            ? "new_session_config_confirmed"
+            : "not_applied_resumed",
+        });
+      }
+      assert.strictEqual(requests[0].workspaceMode, "worktree");
+      assert.strictEqual(requests[0].resume, undefined);
+      assert.strictEqual(requests[1].workspaceMode, "folder");
+      assert.deepStrictEqual(requests[1].resume, {
+        sessionUri: "test-session",
+        chatUri: "test-chat",
+      });
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        configurable: true,
+        value: [
+          { uri: vscode.Uri.file(__dirname), name: "first", index: 0 },
+          { uri: vscode.Uri.joinPath(vscode.Uri.file(__dirname), ".."), name: "second", index: 1 },
+        ],
+      });
+      const ambiguous = await executor.tryExecuteViaAgentHost(
+        routing,
+        { agentHostWorkspaceMode: "folder" },
+        config,
+        "continue",
+      );
+      assert.strictEqual(requests.length, 3);
+      assert.strictEqual(requests[2].workspaceMode, "folder");
+      assert.strictEqual(requests[2].allowNewSession, false);
+      assert.deepStrictEqual(requests[2].resume, requests[1].resume);
+      assert.strictEqual(
+        ambiguous.result?.agentHostRun?.workspaceModeApplication,
+        "not_applied_resumed",
+      );
+      assert.strictEqual(sessions.size, 1, "workspace mode is not a cache partition");
+    } finally {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", workspaceFolders);
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+      sessions.clear();
+      for (const [key, value] of previousSessions) sessions.set(key, value);
+    }
+  });
+
   test("the task guard blocks only Host-to-Chat fallback and unresolved identity", async () => {
     const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
     const originalWarning = vscode.window.showWarningMessage;

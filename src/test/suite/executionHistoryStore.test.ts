@@ -457,6 +457,77 @@ suite("executionHistoryStore", () => {
     assert.strictEqual(inconsistent.responseText, undefined);
   });
 
+  test("round-trips confirmed and unapplied workspace preferences without conflating them", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    for (const workspaceMode of ["folder", "worktree"] as const) {
+      for (const workspaceModeApplication of [
+        "new_session_config_confirmed",
+        "not_applied_resumed",
+      ] as const) {
+        await enqueueExecutionHistoryEntry(entry({
+          taskId: `${workspaceMode}-${workspaceModeApplication}`,
+          turnOutcome: "completed",
+          workspaceMode,
+          workspaceModeApplication,
+        }));
+      }
+    }
+    const persisted = JSON.parse(JSON.stringify(
+      ctx.globalState.get<ExecutionHistoryEntry[]>("executionHistory", []),
+    )) as ExecutionHistoryEntry[];
+    assert.strictEqual(persisted.length, 4);
+    await ctx.globalState.update("executionHistory", persisted);
+    const reloaded = getExecutionHistoryEntries();
+    for (const record of persisted) {
+      const restored = reloaded.find((item) => item.taskId === record.taskId);
+      assert.strictEqual(restored?.workspaceMode, record.workspaceMode);
+      assert.strictEqual(restored?.workspaceModeApplication, record.workspaceModeApplication);
+      assert.strictEqual(record.taskId, `${record.workspaceMode}-${record.workspaceModeApplication}`);
+    }
+  });
+
+  test("strips invalid workspace enums and orphaned application metadata while retaining legacy history", async () => {
+    const ctx = stubContext();
+    setExecutionHistoryContextForTests(ctx);
+    const invalid = [
+      { taskId: "invalid-mode", workspaceMode: "FOLDER", workspaceModeApplication: "new_session_config_confirmed" },
+      { taskId: "invalid-application", workspaceMode: "folder", workspaceModeApplication: "confirmed" },
+      { taskId: "non-string-mode", workspaceMode: 1, workspaceModeApplication: "not_applied_resumed" },
+      { taskId: "non-string-application", workspaceMode: "worktree", workspaceModeApplication: {} },
+      { taskId: "orphaned-application", workspaceModeApplication: "not_applied_resumed" },
+      { taskId: "legacy" },
+    ];
+    await ctx.globalState.update(
+      "executionHistory",
+      invalid.map((metadata) => ({ ...entry(), ...metadata })),
+    );
+    const assertSanitized = (records: ExecutionHistoryEntry[]) => {
+      for (const metadata of invalid) {
+        const record = records.find((item) => item.taskId === metadata.taskId);
+        assert.ok(record, metadata.taskId);
+        assert.strictEqual(record.workspaceModeApplication, undefined, metadata.taskId);
+        assert.strictEqual(
+          record.workspaceMode,
+          metadata.workspaceMode === "folder" || metadata.workspaceMode === "worktree"
+            ? metadata.workspaceMode
+            : undefined,
+          metadata.taskId,
+        );
+      }
+    };
+    assertSanitized(getExecutionHistoryEntries());
+    await enqueueExecutionHistoryEntry(entry({
+      taskId: "invalid-append",
+      workspaceMode: "Folder" as never,
+      workspaceModeApplication: "not_applied_resumed",
+    }));
+    const persisted = ctx.globalState.get<ExecutionHistoryEntry[]>("executionHistory", []);
+    assertSanitized(persisted);
+    assert.strictEqual(persisted[0].workspaceMode, undefined);
+    assert.strictEqual(persisted[0].workspaceModeApplication, undefined);
+  });
+
   test("isExecutionHistoryEntry validates required fields", () => {
     assert.strictEqual(isExecutionHistoryEntry(entry()), true);
     assert.strictEqual(isExecutionHistoryEntry(null), false);

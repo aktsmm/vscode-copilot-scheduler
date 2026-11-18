@@ -910,6 +910,13 @@
   var useCopilotCliInput = document.getElementById("use-copilot-cli");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
+  var agentHostWorkspaceModeSelect = document.getElementById(
+    "agent-host-workspace-mode",
+  );
+  var agentHostWorkspaceModeStatus = document.getElementById(
+    "agent-host-workspace-mode-status",
+  );
+  var savedAgentHostWorkspaceMode;
   var targetChatSelect = document.getElementById("target-chat");
   var targetChatNote = document.getElementById("target-chat-note");
   var chatRefreshBtn = document.getElementById("chat-refresh-btn");
@@ -966,8 +973,61 @@
   }
 
   function updateChatSessionDefaultNote() {
+    updateAgentHostWorkspaceModeAvailability();
     if (!chatSessionNote) return;
     chatSessionNote.textContent = String(defaultChatSessionNote || "");
+  }
+
+  function getAgentHostWorkspaceModeForSubmit() {
+    if (!agentHostWorkspaceModeSelect) return undefined;
+    var value = agentHostWorkspaceModeSelect.value;
+    return value === "invalid-saved"
+      ? savedAgentHostWorkspaceMode
+      : value === "default"
+        ? undefined
+        : value;
+  }
+
+  function setAgentHostWorkspaceModeSelection(value) {
+    if (!agentHostWorkspaceModeSelect) return;
+    var stale = Array.prototype.find.call(
+      agentHostWorkspaceModeSelect.options,
+      function (option) {
+        return option.value === "invalid-saved";
+      },
+    );
+    if (stale) stale.remove();
+    savedAgentHostWorkspaceMode = value;
+    var valid = value === undefined || value === "folder" || value === "worktree";
+    if (!valid) {
+      var option = document.createElement("option");
+      option.value = "invalid-saved";
+      option.textContent = strings.agentHostWorkspaceModeInvalid;
+      agentHostWorkspaceModeSelect.appendChild(option);
+    }
+    agentHostWorkspaceModeSelect.value = valid
+      ? value || "default"
+      : "invalid-saved";
+    updateAgentHostWorkspaceModeAvailability();
+  }
+
+  function updateAgentHostWorkspaceModeAvailability() {
+    if (!agentHostWorkspaceModeSelect) return;
+    var selection = getCurrentModelSelection();
+    var cli =
+      useCopilotCliInput &&
+      useCopilotCliInput.checked &&
+      !!String((selection && selection.model) || pendingModelValue || "").trim();
+    var inactive = !!((targetChatSelect && targetChatSelect.value) || cli);
+    agentHostWorkspaceModeSelect.disabled = inactive;
+    if (agentHostWorkspaceModeStatus) {
+      agentHostWorkspaceModeStatus.textContent = [
+        inactive ? strings.agentHostWorkspaceModeInactive : "",
+        agentHostWorkspaceModeSelect.value === "invalid-saved"
+          ? strings.agentHostWorkspaceModeInvalid
+          : "",
+      ].filter(Boolean).join(" ");
+    }
   }
 
   function setTargetChatSelection(bindingId, title) {
@@ -1209,6 +1269,10 @@
         source.chatSession === "new" || source.chatSession === "continue"
           ? source.chatSession
           : "default",
+      agentHostWorkspaceMode:
+        source.agentHostWorkspaceMode === undefined
+          ? "default"
+          : JSON.stringify(source.agentHostWorkspaceMode),
       targetChatId: String(source.targetChatId || ""),
       jitterSeconds: boundedNumber(
         source.jitterSeconds != null
@@ -1244,7 +1308,10 @@
 
     Object.keys(normalizedCurrent).forEach(function (key) {
       if (normalizedCurrent[key] !== normalizedOriginal[key]) {
-        diff[key] = taskData[key];
+        diff[key] =
+          key === "agentHostWorkspaceMode" && taskData[key] === undefined
+            ? "default"
+            : taskData[key];
       }
     });
 
@@ -2514,6 +2581,7 @@
         useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
+        agentHostWorkspaceMode: getAgentHostWorkspaceModeForSubmit(),
         targetChatId: targetChatSelect ? targetChatSelect.value : "",
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
@@ -2672,12 +2740,22 @@
         showFormError(strings.promptRequired || "", 5000);
         return;
       }
+      var workspaceMode = getAgentHostWorkspaceModeForSubmit();
+      if (
+        workspaceMode !== undefined &&
+        workspaceMode !== "folder" &&
+        workspaceMode !== "worktree"
+      ) {
+        showFormError(strings.agentHostWorkspaceModeInvalid || "", 5000);
+        return;
+      }
 
       vscode.postMessage({
         type: "testPrompt",
         prompt: prompt,
         agent: agent,
         targetChatId: targetChatSelect ? targetChatSelect.value : "",
+        agentHostWorkspaceMode: workspaceMode,
         chatSession:
           chatSessionSelect &&
           (chatSessionSelect.value === "new" ||
@@ -2751,6 +2829,16 @@
   if (agentHostModelRefresh) {
     agentHostModelRefresh.addEventListener("click", refreshAgentHostModels);
   }
+  [
+    agentHostWorkspaceModeSelect,
+    useCopilotCliInput,
+    targetChatSelect,
+    modelSelect,
+    modelVariantSelect,
+  ].forEach(function (control) {
+    if (control)
+      control.addEventListener("change", updateAgentHostWorkspaceModeAvailability);
+  });
 
   // Template refresh button (Create tab)
   if (templateRefreshBtn) {
@@ -3723,6 +3811,7 @@
       chatSessionSelect.value = "default";
     }
     if (targetChatSelect) targetChatSelect.value = "";
+    setAgentHostWorkspaceModeSelection(undefined);
     var defaultScopeInput = document.querySelector(
       'input[name="scope"][value="' + defaultScope + '"]',
     );
@@ -4336,6 +4425,7 @@
       chatSessionSelect.value = task.chatSession || "default";
     }
     setTargetChatSelection(task.targetChatId, task.targetChatTitle);
+    setAgentHostWorkspaceModeSelection(task.agentHostWorkspaceMode);
     updateChatSessionDefaultNote();
 
     // Switch to edit tab (same form)

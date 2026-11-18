@@ -39,6 +39,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "modelConfiguration",
   "scope",
   "chatSession",
+  "agentHostWorkspaceMode",
   "targetChatId",
   "autoMode",
   "modelFallback",

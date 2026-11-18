@@ -189,7 +189,7 @@ suite("lmTools scheduler_query", () => {
   test("kind=list omits prompt bodies but kind=get keeps them", async () => {
     const body = "x".repeat(5000);
     const manager = new FakeScheduleManager([
-      fakeTask({ id: "big", prompt: body }),
+      fakeTask({ id: "big", prompt: body, agentHostWorkspaceMode: "folder" }),
     ]) as unknown as ScheduleManager;
     const tool = createSchedulerQueryTool(manager);
 
@@ -202,6 +202,7 @@ suite("lmTools scheduler_query", () => {
       "kind=list must not carry prompt bodies into the model context",
     );
     assert.strictEqual(tasks[0]?.promptLength, body.length);
+    assert.strictEqual(tasks[0]?.agentHostWorkspaceMode, "folder");
     assert.strictEqual(
       String(tasks[0]?.promptPreview).length,
       160,
@@ -209,6 +210,9 @@ suite("lmTools scheduler_query", () => {
     );
 
     const fetched = parseJson(await invoke(tool, { kind: "get", id: "big" }));
+    assert.strictEqual(
+      (fetched.task as ScheduledTask).agentHostWorkspaceMode, "folder",
+    );
     assert.strictEqual(
       (fetched.task as Record<string, unknown>).prompt,
       body,

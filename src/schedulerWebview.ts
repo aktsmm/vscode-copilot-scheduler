@@ -769,6 +769,8 @@ export class SchedulerWebview {
             modelFamily: message.modelFamily,
             modelVersion: message.modelVersion,
             agentHostModelId: message.agentHostModelId,
+            agentHostWorkspaceMode: message.agentHostWorkspaceMode,
+            chatSession: message.chatSession,
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
             targetChatId: message.targetChatId,
@@ -1869,6 +1871,13 @@ export class SchedulerWebview {
       labelUseCopilotCli: messages.labelUseCopilotCli(),
       webviewUseCopilotCliNote: messages.webviewUseCopilotCliNote(),
       labelChatSession: messages.labelChatSession(),
+      labelAgentHostWorkspaceMode: messages.labelAgentHostWorkspaceMode(),
+      agentHostWorkspaceModeDefault: messages.agentHostWorkspaceModeDefault(),
+      agentHostWorkspaceModeFolder: messages.agentHostWorkspaceModeFolder(),
+      agentHostWorkspaceModeWorktree: messages.agentHostWorkspaceModeWorktree(),
+      agentHostWorkspaceModeNote: messages.agentHostWorkspaceModeNote(),
+      agentHostWorkspaceModeInactive: messages.agentHostWorkspaceModeInactive(),
+      agentHostWorkspaceModeInvalid: messages.agentHostWorkspaceModeInvalid(),
       labelChatSessionDefault: messages.labelChatSessionDefault(),
       labelChatSessionNew: messages.labelChatSessionNew(),
       labelChatSessionContinue: messages.labelChatSessionContinue(),
@@ -3149,6 +3158,17 @@ export class SchedulerWebview {
                 <input type="checkbox" id="run-first">
                 <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
               </div>
+            </div>
+
+            <div class="form-group col-12">
+              <label for="agent-host-workspace-mode">${escapeHtml(strings.labelAgentHostWorkspaceMode)}</label>
+              <select id="agent-host-workspace-mode" aria-describedby="agent-host-workspace-mode-note agent-host-workspace-mode-status">
+                <option value="default">${escapeHtml(strings.agentHostWorkspaceModeDefault)}</option>
+                <option value="folder">${escapeHtml(strings.agentHostWorkspaceModeFolder)}</option>
+                <option value="worktree">${escapeHtml(strings.agentHostWorkspaceModeWorktree)}</option>
+              </select>
+              <p class="note" id="agent-host-workspace-mode-note">${escapeHtml(strings.agentHostWorkspaceModeNote)}</p>
+              <p class="note" id="agent-host-workspace-mode-status" role="status"></p>
             </div>
 
             <div class="form-group col-6">

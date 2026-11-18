@@ -528,6 +528,52 @@ export const messages = {
     ),
   labelAgentHostModel: () =>
     t("Agent Host model ID", "Agent Host のモデル ID"),
+  labelAgentHostWorkspaceMode: () =>
+    t("New Agent Host session location", "新しい Agent Host セッションの実行場所"),
+  agentHostWorkspaceModeDefault: () =>
+    t("Previous Host behavior (no override)", "従来の Host 動作（上書きなし）"),
+  agentHostWorkspaceModeReset: () =>
+    t(
+      "Remove the saved new-session location override.",
+      "保存した新規セッションの実行場所の上書きを削除します。",
+    ),
+  agentHostWorkspaceModeFolder: () =>
+    t("Existing folder", "既存フォルダー"),
+  agentHostWorkspaceModeWorktree: () =>
+    t("New Git worktree", "新しい Git worktree"),
+  agentHostWorkspaceModeNote: () =>
+    t(
+      "Applies only to NEW Agent Host sessions. Resume keeps the original location; this choice never forces a new session. Existing folder shares uncommitted changes and local records. No override preserves previous Host behavior (normally worktree for Git). An explicit choice that cannot be honored stops without sending the prompt.",
+      "新しい Agent Host セッションにのみ適用します。再開時は元の場所を維持し、この選択だけで新規セッションにはしません。既存フォルダーは未コミット変更やローカル記録を共有します。上書きなしは従来の Host 動作（Git では通常 worktree）を維持します。明示指定を適用できなければプロンプトを送信せず停止します。",
+    ),
+  agentHostWorkspaceModeInactive: () =>
+    t(
+      "Not applied to a bound existing chat or an actual CLI run. The saved choice is retained.",
+      "既存チャットへの紐付けや実際に CLI を使う実行には適用しません。保存した選択は保持します。",
+    ),
+  agentHostWorkspaceModeInvalid: () =>
+    t(
+      "Invalid Agent Host session location. Explicitly select a location or reset to previous Host behavior; the saved value was not discarded.",
+      "Agent Host セッションの実行場所が不正です。実行場所を明示的に選び直すか、従来の Host 動作に戻してください。保存値は破棄していません。",
+    ),
+  agentHostWorkspaceUnavailable: (detail: string) =>
+    t(
+      `The selected Agent Host session location could not be applied. The prompt was not sent. ${detail}`,
+      `指定した Agent Host セッションの実行場所を適用できませんでした。プロンプトは送信していません。${detail}`,
+    ),
+  agentHostWorkspaceModeDetail: (
+    mode: "folder" | "worktree",
+    application: "new_session_config_confirmed" | "not_applied_resumed",
+  ) =>
+    application === "not_applied_resumed"
+      ? t(
+          `New-session location preference: ${mode}; not applied because the original session was resumed.`,
+          `新規セッションの実行場所の希望: ${mode}。既存セッションを再開したため非適用です。`,
+        )
+      : t(
+          `New-session location configuration confirmed by Host: ${mode} (not a process cwd measurement).`,
+          `Host による新規セッションの実行場所の設定確認: ${mode}（プロセスの cwd の実測ではありません）。`,
+        ),
   agentHostModelUnpinned: () =>
     t("Not selected", "未選択"),
   agentHostModelNote: () =>
