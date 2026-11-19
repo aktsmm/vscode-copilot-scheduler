@@ -100,6 +100,12 @@ export interface ModelConfigurationOption {
   defaultValue?: ModelConfigurationValue;
 }
 
+export interface ModelFallbackPolicy {
+  strategy: "diverse" | "similar";
+  chatModel?: { id: string; vendor: string };
+  agentHostModelId?: string;
+}
+
 export interface ModelSelectionFields {
   /** Preferred model identifier */
   model?: string;
@@ -192,8 +198,9 @@ export interface ScheduledTask {
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
-  /** Opt in to the configured fallback model chain when the saved model is unavailable. */
+  /** Use a replacement when the selected model is absent before dispatch. */
   modelFallback?: boolean;
+  modelFallbackPolicy?: ModelFallbackPolicy;
 
   /** Stop instead of switching from Agent Host to the chat route. */
   preventAgentHostFallback?: boolean;
@@ -328,8 +335,9 @@ export interface CreateTaskInput {
   /** Whether to append an auto-mode hint to the runtime prompt. */
   autoMode?: boolean;
 
-  /** Opt in to the configured fallback model chain when the saved model is unavailable. */
+  /** Use a replacement when the selected model is absent before dispatch. */
   modelFallback?: boolean;
+  modelFallbackPolicy?: ModelFallbackPolicy;
 
   /** Stop instead of switching from Agent Host to the chat route. */
   preventAgentHostFallback?: boolean;
@@ -454,8 +462,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
   /** Files attached to the chat request, in their stored (relative) form. */
   attachments?: TaskAttachment[];
 
-  /** Opt in to the configured fallback model chain when the model is unavailable. */
+  /** Use a replacement when the selected model is absent before dispatch. */
   modelFallback?: boolean;
+  modelFallbackPolicy?: ModelFallbackPolicy;
 
   /** Stop instead of switching from Agent Host to the chat route. */
   preventAgentHostFallback?: boolean;
@@ -567,8 +576,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Absolute paths of attachment files, already resolved and validated. */
   attachFilePaths?: string[];
 
-  /** Opt in to the configured fallback model chain when the model is unavailable. */
+  /** Use a replacement when the selected model is absent before dispatch. */
   modelFallback?: boolean;
+  modelFallbackPolicy?: ModelFallbackPolicy;
 
   /** Stop instead of switching from Agent Host to the chat route. */
   preventAgentHostFallback?: boolean;
@@ -601,6 +611,12 @@ export interface ModelFallbackInfo {
   from: string;
   /** Display label of the replacement model requested. */
   to: string;
+  route?: "chat" | "agentHost";
+  fromId?: string;
+  toId?: string;
+  fromProvider?: string;
+  toProvider?: string;
+  reason?: "modelAbsent";
 }
 
 /** What a Copilot CLI run reported, for the execution history. */

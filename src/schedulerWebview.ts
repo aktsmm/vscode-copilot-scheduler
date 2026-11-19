@@ -81,7 +81,9 @@ export class SchedulerWebview {
   private static panel: vscode.WebviewPanel | undefined;
   private static cachedAgents: AgentInfo[] = [];
   private static cachedModels: ModelInfo[] = [];
+  private static chatFallbackModels: Pick<ModelInfo, "id" | "vendor" | "name">[] = [];
   private static modelRefreshGeneration = 0;
+  private static webviewGeneration = 0;
   private static cachedPromptTemplates: PromptTemplate[] = [];
   private static cachedSkills: SkillTemplate[] = [];
   private static hasShownPromptTemplateRefreshError = false;
@@ -156,6 +158,7 @@ export class SchedulerWebview {
   }
 
   private static resetWebviewReadyState(): void {
+    this.webviewGeneration++;
     this.webviewReady = false;
     this.pendingMessages = [];
     this.hasShownPromptTemplateRefreshError = false;
@@ -257,6 +260,7 @@ export class SchedulerWebview {
     return {
       type: "updateModels",
       models: this.cachedModels,
+      chatFallbackModels: this.chatFallbackModels,
       ...this.buildModelPickerPayload(this.cachedModels),
     };
   }
@@ -745,7 +749,14 @@ export class SchedulerWebview {
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
             targetChatId: message.targetChatId,
-            ...(message.modelFallback === true ? { modelFallback: true } : {}),
+            ...(message.modelFallback === true
+              ? {
+                  modelFallback: true,
+                  ...(message.modelFallbackPolicy !== undefined
+                    ? { modelFallbackPolicy: message.modelFallbackPolicy }
+                    : {}),
+                }
+              : {}),
             ...(message.preventAgentHostFallback === true
               ? { preventAgentHostFallback: true }
               : {}),
@@ -822,14 +833,17 @@ export class SchedulerWebview {
         }
         break;
 
-      case "refreshAgentHostModels":
+      case "refreshAgentHostModels": {
+        const generation = this.webviewGeneration;
         try {
           const models = await CopilotExecutor.listAvailableAgentHostModels();
+          if (generation !== this.webviewGeneration) break;
           this.postMessage({
             type: "updateAgentHostModels",
             models: models.map((model) => ({ id: model.id, name: model.name })),
           });
         } catch (error) {
+          if (generation !== this.webviewGeneration) break;
           logDebug(
             `[CopilotScheduler] Could not load Agent Host models: ${sanitizeAbsolutePathDetails(error instanceof Error ? error.message : String(error ?? ""))}`,
           );
@@ -840,6 +854,7 @@ export class SchedulerWebview {
           });
         }
         break;
+      }
 
       case "refreshPrompts":
         {
@@ -991,6 +1006,8 @@ export class SchedulerWebview {
     try {
       const result = await CopilotExecutor.getAvailableModelsWithSource();
       if (generation !== this.modelRefreshGeneration) return;
+      this.chatFallbackModels = filterPickerModelCatalog(result.liveFallbackModels ?? [])
+        .map(({ id, vendor, name }) => ({ id, vendor, name }));
       if (
         result.source === "fallback" &&
         this.hasResolvedModelCatalog(this.cachedModels)
@@ -1007,6 +1024,7 @@ export class SchedulerWebview {
       }
     } catch {
       if (generation !== this.modelRefreshGeneration) return;
+      this.chatFallbackModels = [];
       this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
         ? this.localizeCachedModels(this.cachedModels).map((model) => ({
             ...model,
@@ -1766,7 +1784,7 @@ export class SchedulerWebview {
       labelCustom: messages.labelCustom(),
       labelAgent: messages.labelAgent(),
       labelAgentNote: messages.labelAgentNote(),
-      labelModel: messages.labelModel(),
+      labelSharedModel: messages.labelSharedModel(),
       labelDynamicModelOptions: messages.labelDynamicModelOptions(),
       actionOpenModelRuntimeArguments:
         messages.actionOpenModelRuntimeArguments(),
@@ -1808,6 +1826,12 @@ export class SchedulerWebview {
       skillKindExplicit: messages.skillKindExplicit(),
       skillKindAuto: messages.skillKindAuto(),
       labelModelFallback: messages.labelModelFallback(),
+      labelModelFallbackStrategy: messages.labelModelFallbackStrategy(),
+      modelFallbackDiverse: messages.modelFallbackDiverse(),
+      modelFallbackSimilar: messages.modelFallbackSimilar(),
+      labelChatFallbackModel: messages.labelChatFallbackModel(),
+      labelHostFallbackModel: messages.labelHostFallbackModel(),
+      modelFallbackAutomatic: messages.modelFallbackAutomatic(),
       labelAgentHostModel: messages.labelAgentHostModel(),
       agentHostModelUnpinned: messages.agentHostModelUnpinned(),
       agentHostModelNote: messages.agentHostModelNote(),
@@ -1984,6 +2008,7 @@ export class SchedulerWebview {
       tasks: this.buildTaskViewModels(initialTasks),
       agents: initialAgents,
       models: initialModels,
+      chatFallbackModels: this.chatFallbackModels,
       modelPickerDefault: initialModelPickerPayload.modelPickerDefault,
       modelConfigurationExecutionEnabled:
         initialModelPickerPayload.modelConfigurationExecutionEnabled,
@@ -3060,7 +3085,7 @@ export class SchedulerWebview {
             <h2>${escapeHtml(strings.sectionTarget)}</h2>
           </div>
           <div class="form-grid">
-            <div class="form-group col-6">
+            <div class="form-group col-12">
               <label for="agent-select">${escapeHtml(strings.labelAgent)}</label>
               <div class="template-row">
                 <select id="agent-select">
@@ -3072,13 +3097,25 @@ export class SchedulerWebview {
             </div>
 
             <div class="form-group col-6">
-              <label for="model-select">${escapeHtml(strings.labelModel)}</label>
+              <label for="model-select">${escapeHtml(strings.labelSharedModel)}</label>
               <select id="model-select">
                 <option value="">${escapeHtml(initialModelPickerPayload.modelPickerDefault.length > 0 ? strings.placeholderSelectModel : strings.placeholderNoModels)}</option>
               </select>
               <p class="note" id="model-experimental-note" style="display:none;"></p>
               <p class="note" id="model-selection-status" style="display:none;"></p>
               <p class="note">${escapeHtml(strings.webviewModelHarnessNote)}</p>
+            </div>
+
+            <div class="form-group col-6">
+              <label for="agent-host-model">${escapeHtml(strings.labelAgentHostModel)}</label>
+              <div class="template-row">
+                <select id="agent-host-model" aria-describedby="agent-host-model-note agent-host-model-status">
+                  <option value="">${escapeHtml(strings.agentHostModelUnpinned)}</option>
+                </select>
+                <button type="button" class="btn-secondary" id="agent-host-model-refresh" aria-label="${escapeHtmlAttr(`${strings.actionRefresh}: ${strings.labelAgentHostModel}`)}">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+              <p class="note" id="agent-host-model-note">${escapeHtml(strings.agentHostModelNote)}</p>
+              <p class="note" id="agent-host-model-status" role="status"></p>
             </div>
 
             <div class="form-group col-6" id="model-variant-group" style="display:none;">
@@ -3099,32 +3136,40 @@ export class SchedulerWebview {
               </div>
               <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
             </div>
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="model-fallback" aria-describedby="model-fallback-note" checked>
+                <label for="model-fallback">${escapeHtml(strings.labelModelFallback)}</label>
+              </div>
+              <p class="note" id="model-fallback-note">${escapeHtml(strings.webviewModelFallbackNote)}</p>
+              <div class="form-grid">
+                <div class="form-group col-12">
+                  <label for="model-fallback-strategy">${escapeHtml(strings.labelModelFallbackStrategy)}</label>
+                  <select id="model-fallback-strategy" aria-describedby="model-fallback-note">
+                    <option value="diverse">${escapeHtml(strings.modelFallbackDiverse)}</option>
+                    <option value="similar">${escapeHtml(strings.modelFallbackSimilar)}</option>
+                  </select>
+                </div>
+                <div class="form-group col-6">
+                  <label for="chat-fallback-model">${escapeHtml(strings.labelChatFallbackModel)}</label>
+                  <select id="chat-fallback-model" aria-describedby="model-fallback-note">
+                    <option value="">${escapeHtml(strings.modelFallbackAutomatic)}</option>
+                  </select>
+                </div>
+                <div class="form-group col-6">
+                  <label for="host-fallback-model">${escapeHtml(strings.labelHostFallbackModel)}</label>
+                  <select id="host-fallback-model" aria-describedby="model-fallback-note agent-host-model-status">
+                    <option value="">${escapeHtml(strings.modelFallbackAutomatic)}</option>
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
         <details id="advanced-settings" class="surface form-section advanced-settings">
           <summary id="advanced-summary" class="section-title">${escapeHtml(strings.labelAdvanced)}</summary>
           <div class="form-grid">
-            <div class="form-group col-12">
-              <label for="agent-host-model">${escapeHtml(strings.labelAgentHostModel)}</label>
-              <div class="template-row">
-                <select id="agent-host-model" aria-describedby="agent-host-model-note agent-host-model-status">
-                  <option value="">${escapeHtml(strings.agentHostModelUnpinned)}</option>
-                </select>
-                <button type="button" class="btn-secondary" id="agent-host-model-refresh">${escapeHtml(strings.actionRefresh)}</button>
-              </div>
-              <p class="note" id="agent-host-model-note">${escapeHtml(strings.agentHostModelNote)}</p>
-              <p class="note" id="agent-host-model-status" role="status"></p>
-            </div>
-
-            <div class="form-group col-12">
-              <div class="checkbox-group">
-                <input type="checkbox" id="model-fallback">
-                <label for="model-fallback">${escapeHtml(strings.labelModelFallback)}</label>
-              </div>
-              <p class="note">${escapeHtml(strings.webviewModelFallbackNote)}</p>
-            </div>
-
             <div class="form-group col-12">
               <div class="checkbox-group">
                 <input type="checkbox" id="prevent-agent-host-fallback">

@@ -2409,6 +2409,63 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       );
     });
 
+    test("task policy ranks live models by provider first, then family, with exact choices winning", async () => {
+      const options = [
+        { id: "same-family", vendor: "copilot", family: "claude" },
+        { id: "different-family", vendor: "copilot", family: "gpt" },
+        { id: "different-provider", vendor: "byok", family: "claude" },
+        { id: "both-different", vendor: "byok", family: "gpt" },
+        { id: "unknown-family", vendor: "aaa", family: undefined },
+      ].map((model) => ({ ...model, name: model.id, description: "" }));
+      const primary = { model: "gone", modelVendor: "copilot", modelFamily: "claude", modelReasoningEffort: "high" };
+      const taskResolver = CopilotExecutor as unknown as {
+        resolveRequestedModelSelection(selection: {
+          model: string;
+          modelName?: string;
+          modelVendor?: string;
+          modelFamily?: string;
+          modelReasoningEffort?: string;
+        }, enabled: boolean, policy: {
+          strategy: "diverse" | "similar";
+          chatModel?: { id: string; vendor: string };
+        }): ReturnType<Resolver["resolveRequestedModelSelection"]>;
+      };
+      let live = options.filter((model) => model.id !== "same-family");
+      let complete = true;
+      CopilotExecutor.getAvailableModelsWithSource = async () => ({
+        source: "api", models: live, ...(complete ? { liveFallbackModels: live } : {}),
+      });
+      // A same-provider, same-family model would resolve through the existing
+      // tolerant matching before any policy applies, so it is absent here.
+      for (const [strategy, expected] of [["diverse", "both-different"], ["similar", "different-family"]] as const) {
+        const result = await taskResolver.resolveRequestedModelSelection(primary, true, { strategy });
+        assert.strictEqual(result.selection.model, expected);
+        assert.strictEqual(Reflect.get(result.selection, "modelReasoningEffort"), undefined);
+        assert.strictEqual(result.fallback?.to, expected);
+      }
+      const explicit = await taskResolver.resolveRequestedModelSelection(primary, true, {
+        strategy: "diverse", chatModel: { id: "different-family", vendor: "copilot" },
+      });
+      assert.strictEqual(explicit.selection.model, "different-family");
+      live = live.filter((model) => model.id !== "both-different");
+      assert.strictEqual((await taskResolver.resolveRequestedModelSelection(primary, true, {
+        strategy: "diverse",
+      })).selection.model, "different-provider");
+      complete = false;
+      const unreadable = await taskResolver.resolveRequestedModelSelection(primary, true, { strategy: "diverse" });
+      assert.strictEqual(unreadable.fallback, undefined);
+      assert.strictEqual(unreadable.matched, undefined);
+      complete = true;
+      live = options;
+      const renamed = await taskResolver.resolveRequestedModelSelection(
+        { model: "old-id", modelName: "same-family", modelVendor: "copilot", modelFamily: "claude" },
+        true,
+        { strategy: "diverse" },
+      );
+      assert.strictEqual(renamed.selection.model, "same-family");
+      assert.strictEqual(renamed.fallback, undefined);
+    });
+
     test("an opted-in task falls back to HydraFusion first", async () => {
       const result = await resolver.resolveRequestedModelSelection(
         { model: "gone" },
@@ -2430,6 +2487,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
       const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
       let hostAvailable = false;
+      let acceptHostTurn = false;
       let hostCalls = 0;
       let chatCalls = 0;
       Object.defineProperty(vscode.workspace, "getConfiguration", {
@@ -2465,8 +2523,14 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       });
       Object.defineProperty(agentHostClient, "runAgentHostTurn", {
         configurable: true,
-        value: async () => {
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
           hostCalls++;
+          assert.strictEqual(request.modelFallback?.agentHostModelId, "byok/group/alternate");
+          if (acceptHostTurn) return {
+            requestedModel: "byok/group/alternate",
+            fallbackFromModel: "ollama/group/gone",
+            responseText: "observed",
+          };
           throw new agentHostClient.AgentHostError("failed", "uncertain", "unknown");
         },
       });
@@ -2506,17 +2570,24 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         assert.strictEqual(chatCalls, 1);
 
         hostAvailable = true;
+        const modelFallbackPolicy = { strategy: "diverse", agentHostModelId: "byok/group/alternate" } as const;
         for (const preventAgentHostFallback of [false, true]) {
           await assert.rejects(
             executor.executePrompt("synthetic", {
               ...options,
               modelFallback: true,
+              modelFallbackPolicy,
               preventAgentHostFallback,
             }),
           );
         }
         assert.strictEqual(hostCalls, 2);
         assert.strictEqual(chatCalls, 1);
+        acceptHostTurn = true;
+        const hostFallback = await executor.executePrompt("synthetic", { ...options, modelFallback: true, modelFallbackPolicy });
+        assert.strictEqual(hostFallback.modelFallback?.route, "agentHost");
+        assert.strictEqual(hostFallback.modelFallback?.fromId, "ollama/group/gone");
+        assert.strictEqual(hostFallback.modelFallback?.toId, "byok/group/alternate");
       } finally {
         Object.defineProperty(vscode.workspace, "getConfiguration", {
           configurable: true,

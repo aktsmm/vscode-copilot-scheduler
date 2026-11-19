@@ -500,6 +500,18 @@ suite("Agent Host client", () => {
       const first = await queueAgentHostMessage(request);
       const second = await queueAgentHostMessage(request);
       assert.strictEqual(first.messageId, second.messageId);
+      const fallback = await queueAgentHostMessage({
+        ...request,
+        taskId: "with-fallback",
+        modelId: "missing",
+        modelFallback: { agentHostModelId: hostModelId },
+      });
+      assert.strictEqual(fallback.requestedModel, hostModelId);
+      assert.strictEqual(fallback.fallbackFromModel, "missing");
+      const fallbackDispatch = host.calls.find((call) => call.method === "dispatchAction" &&
+        (call.params.action as { id?: string }).id === fallback.messageId);
+      assert.deepStrictEqual((fallbackDispatch?.params.action as { message: { model: unknown } }).message.model,
+        { id: hostModelId });
       assert.match(first.messageId, /^copilot-scheduler-[a-f0-9]{64}$/);
       const occurrence = await queueAgentHostMessage({ ...request, occurrenceId: "2026-01-01T10:00:00.000Z" });
       const retry = await queueAgentHostMessage({ ...request, occurrenceId: "2026-01-01T10:00:00.000Z" });
@@ -521,7 +533,7 @@ suite("Agent Host client", () => {
         const action = call.params.action as Record<string, unknown> | undefined;
         return action?.type === "chat/pendingMessageSet";
       });
-      assert.strictEqual(queued.length, 6);
+      assert.strictEqual(queued.length, 7);
       const firstAction = queued[0].params.action as Record<string, unknown>;
       assert.strictEqual(firstAction.kind, "queued");
       assert.strictEqual(firstAction.id, first.messageId);
@@ -544,7 +556,7 @@ suite("Agent Host client", () => {
           const action = call.params.action as Record<string, unknown> | undefined;
           return action?.type === "chat/pendingMessageSet";
         }).length,
-        6,
+        7,
       );
     } finally {
       await host.close();
@@ -1812,6 +1824,35 @@ suite("Agent Host client", () => {
           config: { thinkingLevel: "high" },
         });
       }
+    });
+
+    test("dispatches an explicit Host replacement once without copying options", async () => {
+      const replacement = "vendor/group/replacement";
+      const disabled = "vendor/group/disabled";
+      host = await startFakeHost(tmp, { models: [{ id: replacement }, { id: disabled, policyState: "disabled" }] });
+      const request = {
+        ...baseRequest(host.endpoint),
+        modelId: "missing",
+        hostModelIdExplicit: true,
+        modelOptions: { reasoningEffort: "high" },
+      };
+      for (const modelFallback of [{}, { agentHostModelId: "vendor/group/absent" }, { agentHostModelId: disabled }]) {
+        await assert.rejects(runAgentHostTurn({ ...request, modelFallback }),
+          (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported");
+      }
+      // A Chat-catalog ID that is only absent from the Host catalog is not proof the model is gone.
+      await assert.rejects(
+        runAgentHostTurn({ ...request, hostModelIdExplicit: false, modelFallback: { agentHostModelId: replacement } }),
+        (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported");
+      assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
+      const result = await runAgentHostTurn({ ...request, modelFallback: { agentHostModelId: replacement } });
+      assert.strictEqual(result.requestedModel, replacement);
+      assert.strictEqual(result.fallbackFromModel, "missing");
+      const turns = host.calls.filter((call) => call.method === "dispatchAction" &&
+        (call.params.action as { type: string }).type === "chat/pendingMessageSet");
+      assert.strictEqual(turns.length, 1);
+      assert.deepStrictEqual((turns[0].params.action as { message: { model: unknown } }).message.model,
+        { id: replacement });
     });
 
     test("does not dispatch on missing, malformed or duplicate live Host IDs", async () => {

@@ -128,7 +128,9 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 
 Codex Bridge、BYOK、Local LLM などの追加 provider が VS Code Chat に登録したモデルも、Copilot モデルと同じ一覧から選択できます。モデル選択欄は提供元ごとに分かれ、品質バリエーションは別の選択欄に表示します。`kind=list_models` が返す `vendor` を作成・更新時の `modelVendor` に指定すると、提供元間で重複するモデル ID を区別できます。完全一致 ID を正規化した別名より優先し、ID・別名・モデル名の照合で提供元が曖昧な場合は `modelVendor` を要求します。保存した提供元をモデル解決時にも維持します。Copilot 専用カタログの照会が失敗しても他の提供元の検出を続け、全体カタログの照会が失敗しても取得済みの Copilot モデルは保持します。
 
-外部モデルを Agent Host で実行する場合は、提供元のモデルを選んでから **Agent Host のモデル ID** を更新し、Host の一覧にある完全な ID を明示的に選びます。選んだ Host ID が提供元のモデルに対応していることを確認してください。Scheduler はこの対応関係を自動検証できません。一覧は稼働中の Host に依存し、起動直後は空の場合があります。ID は送信前に再確認します。古い BYOK タスクで対応関係を特定できない場合は、候補が 1 件でも自動選択せず停止します。`scheduler_query` の `kind=list_agent_host_models` でも同じ ID を取得でき、`scheduler_create_task` / `scheduler_update_task` は `agentHostModelId` を受け付けます。提供元のモデルを変更すると、新しい ID を明示しない限り古い紐付けは解除されます。この ID は Host への要求を指定するもので、実際に処理するバックエンドやアカウントの証明ではありません。
+VS Code は[旧 Local ハーネスを2027年2月に削除予定](https://code.visualstudio.com/updates/v1_146#_copilot-harness-and-deprecation-of-the-local-harness)です。Chat 画面の廃止ではありません。既定の Copilot ハーネスは Agent Host で動作し、共通モデルの選択は Chat・CLI・Agent Host の詳細設定に引き続き使われます。
+
+外部モデルを Agent Host で実行する場合は、共通モデルを選び、Host の一覧から完全な **Agent Host のモデル ID** を明示的に選びます。タスク編集画面を開くと最新の一覧を取得し、手動でも更新できます。選んだ Host ID が提供元のモデルに対応していることを確認してください。Scheduler はこの対応関係を自動検証できません。一覧は稼働中の Host に依存し、起動直後は空の場合があります。ID は送信前に再確認します。古い BYOK タスクで対応関係を特定できない場合は、候補が 1 件でも自動選択せず停止します。`scheduler_query` の `kind=list_agent_host_models` でも同じ ID を取得でき、`scheduler_create_task` / `scheduler_update_task` は `agentHostModelId` を受け付けます。提供元のモデルを変更すると、新しい ID を明示しない限り古い紐付けは解除されます。この ID は Host への要求を指定するもので、実際に処理するバックエンドやアカウントの証明ではありません。
 
 追加 provider を明示選択した場合、モデル不在や Chat への送信失敗時には停止し、既定モデルや別の提供元に切り替えて再試行しません。提供元の認証・接続と、選択した Chat / Agent モードへの対応は必要です。送信成功は提供元の応答完了を保証しません。独立した Claude / Codex のエージェント実行環境のスケジュールは対象外です。
 
@@ -231,7 +233,9 @@ VS Code 1.142（Windows）で確認した内容です。
 
 #### モデルのフォールバック（オプトイン）
 
-タスクで **選択したモデルが使えない場合は別のモデルに切り替える** をオンにすると、保存済みモデルがモデル一覧に無くても実行できます。`copilotScheduler.modelFallbackChain`（既定: HydraFusion → Auto）のうち、モデル一覧に存在する最初のモデルで実行します。モデル一覧に無い HydraFusion は飛ばされます。既定はオフなので、既存タスクは従来どおり別モデルでは実行せず停止します。発動するのはモデルが一覧に無い場合だけです。送信に失敗しても再送せず、モデル一覧を取得できないときも発動せず、モデルの詳細オプションや旧来の思考の負荷は引き継ぎません。切り替えは通知と実行履歴に記録されます。置き換えが反映されるかはセッションの種類によります（上記）。`scheduler_create_task` / `scheduler_update_task` は `modelFallback` を受け付けます。
+新規タスクの作成画面では **選択したモデルが使えない場合は別のモデルに切り替える** が既定でオンです。明示指定した代替モデルを最優先します。Chat で代替候補が未指定または使えない場合、既定の **違う系統を優先** は提供元が異なる候補を優先し、次にモデルファミリーを比較します。**近い系統を優先** は逆の順です。優先候補がない場合は、判別できる他の候補も使います。Agent Host 一覧ではファミリーを確実に判別できないため、Agent Host には別途、代替モデル ID を明示してください。この ID は、固定した Host ID が Host の一覧にないときだけ使います。Host の一覧にないだけの固定していないモデルには、通常の経路切替が働きます。同じ提供元・同じファミリーのモデルが一覧に残っている場合は、この優先方針より先に通常のモデル照合で解決されます。Copilot CLI には適用されません。
+
+送信前に最新の一覧で元モデルの不在が確認できたときだけ代替します。一覧取得エラー、識別子が曖昧な場合、送信失敗後は再送しません。詳細設定や思考の負荷は引き継ぎません。代替は実行履歴に記録しますが、実バックエンドの確認ではありません。既存の代替オンは新方式へ移行し、オフ・未設定は変更しません。`copilotScheduler.modelFallbackChain` は旧バージョン向けに残り、移行後のタスクには適用されません。Chat ツールは引き続き `modelFallback` を受け付け、作成時に省略するとオフになります。ツールでオンにすると既定の優先方針（別の提供元・ファミリーを優先）を使います。不正または将来の方針値は保存されたまま保持し、実行時にだけ拒否します。
 
 #### 追加 Provider の検証手順
 
@@ -293,7 +297,7 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.skillTemplates`             | `explicit`        | タスクフォームが `/スキル名` として挿入できる Agent Skills の範囲: `explicit`（`disable-model-invocation: true` のみ）、`all`、`off`。                                                                                                                                  |
 | `copilotScheduler.sessionHarness`             | `auto`            | 新規実行が開始するチャットセッションの種類（新しいセッションを開始するときだけ有効）。`auto` は VS Code の選択に任せます。`local`（実験的）は `workbench.action.chat.newLocalChat` で Local セッションを開始し、失敗した場合はタスクを送信しません。Scheduler は VS Code の設定を変更せず、Copilot（エージェントホスト）のセッションを強制することもできません。 |
 | `copilotScheduler.autoModeDefault`            | `false`           | 新規タスク作成時のオートモードヒント既定値（有効時、実行時プロンプトの先頭に自律実行の指示を自動挿入）                                                                                                                                                                   |
-| `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | モデルのフォールバックを有効にしたタスクの代替モデル順（最新のモデル一覧と ID・名前・ファミリで照合、最大5件、`[]` で無効）。 |
+| `copilotScheduler.modelFallbackChain`         | `["hydrafusion","auto"]` | 旧バージョンとの互換用の代替モデル順。現在のタスクは個別の代替設定を使います。 |
 | `copilotScheduler.executionRoute`             | `agentHost`       | `agentHost`（既定）は選択した ID と対応オプションを VS Code の Agent Host に送ります。報告 ID は実バックエンドの独立確認ではありません。`chat` は従来の経路です。タスクの CLI 指定が優先。`sessionHarness: local` とリモートのウィンドウでは `chat` を使います。 |
 | `copilotScheduler.executionFallback`          | `chat`            | 定期タスクの送信前に Host を使えない場合、`chat` はチャット経路への切替を許可し、`fail` は停止します。タスク単位の経路切替ガードや既存チャット紐付けも切替を禁止します。単発タスクは切替を使わず、送信済み・結果不明の場合は自動再送しません。 |
 | `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
