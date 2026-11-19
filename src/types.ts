@@ -228,6 +228,9 @@ export interface ScheduledTask {
   /** Per-task max executions per day (0 = unlimited). */
   maxExecutionsPerDay?: number;
 
+  /** Allow overlapping scheduled occurrences of this recurring task. */
+  allowOverlappingRuns?: boolean;
+
   /** Allowed execution start time in local clock (HH:mm). */
   allowedTimeStart?: string;
 
@@ -354,6 +357,9 @@ export interface CreateTaskInput {
 
   /** Per-task max executions per day (0 = unlimited). */
   maxExecutionsPerDay?: number;
+
+  /** Allow overlapping scheduled occurrences of this recurring task. */
+  allowOverlappingRuns?: boolean;
 
   /** Allowed execution start time in local clock (HH:mm). */
   allowedTimeStart?: string;
@@ -555,6 +561,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Stable task identifier used to coalesce its pending message in the target chat. */
   taskId?: string;
 
+  /** Stable scheduled occurrence identifier when overlapping runs are enabled. */
+  queueOccurrenceId?: string;
+
   /** Absolute paths of attachment files, already resolved and validated. */
   attachFilePaths?: string[];
 
@@ -574,6 +583,16 @@ export interface ExecuteOptions extends ModelSelectionFields {
   dispatchGuard?: (dispatch: () => void) => Promise<void>;
   /** Preserve legacy fallback for recurring tasks whose guard only applies to Agent Host. */
   allowUnguardedFallback?: boolean;
+  /** Report correlated Agent Host input requests without exposing their contents. */
+  onAgentHostInputNeeded?: (
+    ref: { sessionUri: string; chatUri: string },
+    change: import("./agentHostInputObserver").AgentHostInputChange,
+  ) => void;
+  /** Report a confirmed pending queue after an earlier turn fails or is cancelled. */
+  onAgentHostQueueBlocked?: (
+    ref: { sessionUri: string; chatUri: string },
+    change: import("./agentHostInputObserver").AgentHostQueueBlockedChange,
+  ) => void;
 }
 
 /** Records that a fallback model replaced an unavailable requested model. */

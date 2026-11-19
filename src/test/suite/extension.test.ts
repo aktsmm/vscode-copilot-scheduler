@@ -12,7 +12,11 @@ import { parseExpression } from "cron-parser";
 import type { ExecutionHistoryEntry } from "../../executionHistoryStore";
 import { messages } from "../../i18n";
 import { EXPERIMENTAL_REASONING_EFFORT_LEVELS } from "../../modelQualityExperiment";
-import type { ScheduledTask } from "../../types";
+import type {
+  ExecuteOptions,
+  ExecutePromptResult,
+  ScheduledTask,
+} from "../../types";
 import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
 
 function findMatchingBraceEnd(source: string, braceStart: number): number {
@@ -1378,7 +1382,7 @@ suite("Extension Test Suite", () => {
 });
 
 suite("Execution History Queue Tests", () => {
-  test("automatic concurrency settings explain route-specific waiting", () => {
+  test("missed-run policy remains configured without a global concurrency cap", () => {
     const root = path.resolve(__dirname, "../../..");
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "package.json"), "utf8"),
@@ -1392,23 +1396,15 @@ suite("Execution History Queue Tests", () => {
       "runOnce",
       "skip",
     ]);
-    assert.strictEqual(
-      settings["copilotScheduler.maxConcurrentAutomaticRuns"].default,
-      1,
+    assert.ok(
+      !Object.hasOwn(settings, "copilotScheduler.maxConcurrentAutomaticRuns"),
     );
-    assert.strictEqual(
-      settings["copilotScheduler.maxConcurrentAutomaticRuns"].maximum,
-      10,
-    );
-    for (const [filename, wording] of [
-      ["package.nls.json", "Agent Host and CLI runs occupy a slot"],
-      ["package.nls.ja.json", "Agent Host と CLI はターンまたはプロセスの終了まで枠を使い"],
-    ]) {
+    for (const filename of ["package.nls.json", "package.nls.ja.json"]) {
       const strings = JSON.parse(
         fs.readFileSync(path.join(root, filename), "utf8"),
       );
       assert.ok(
-        strings["config.maxConcurrentAutomaticRuns"].includes(wording),
+        !Object.hasOwn(strings, "config.maxConcurrentAutomaticRuns"),
         filename,
       );
     }
@@ -1692,6 +1688,744 @@ suite("Execution History Queue Tests", () => {
       assert.strictEqual(entries[0]?.status, "success");
     } finally {
       setExtensionContextForTests(undefined);
+    }
+  });
+});
+
+suite("Per-occurrence execution isolation", () => {
+  function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    const promise = new Promise<T>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  }
+
+  function task(
+    id: string,
+    dueAt = "2026-11-19T00:00:00.000Z",
+  ): ScheduledTask {
+    return {
+      id,
+      name: "Isolation test",
+      cronExpression: "0 * * * *",
+      prompt: "saved snapshot",
+      enabled: true,
+      scope: "global",
+      promptSource: "inline",
+      allowOverlappingRuns: true,
+      lastFiredDueAt: new Date(dueAt),
+      createdAt: new Date("2026-11-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-11-01T00:00:00.000Z"),
+    };
+  }
+
+  test("concurrent automatic runs retain their own results, prompts and guarded snapshots", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { computePromptHash } = await import("../../promptResolver");
+    const older = {
+      ...task("occurrence-results"),
+      promptSource: "local" as const,
+      promptPath: ".github\\prompts\\test.md",
+    };
+    const newer = {
+      ...older,
+      lastFiredDueAt: new Date("2026-11-19T01:00:00.000Z"),
+    };
+    let currentTask = { ...newer };
+    const started = [deferred<void>(), deferred<void>()];
+    const results = [
+      deferred<ExecutePromptResult>(),
+      deferred<ExecutePromptResult>(),
+    ];
+    const history: ExecutionHistoryEntry[] = [];
+    const notifications: string[] = [];
+    const options: ExecuteOptions[] = [];
+    const updates: Array<{
+      id: string;
+      prompt: string;
+      expectedSnapshot?: string;
+    }> = [];
+    const deps = {
+      resolvePromptSnapshot: async (selected: ScheduledTask) => {
+        const index =
+          selected.lastFiredDueAt?.getTime() === newer.lastFiredDueAt.getTime()
+            ? 1
+            : 0;
+        const text = index ? "new file content" : "old file content";
+        return {
+          text,
+          source: "file" as const,
+          resolvedPath: "C:\\private\\prompts\\test.md",
+          hash: computePromptHash(text),
+          resolvedAt: index
+            ? "2026-11-19T01:00:01.000Z"
+            : "2026-11-19T00:00:01.000Z",
+          candidateCount: 1,
+        };
+      },
+      executePrompt: async (
+        prompt: string,
+        executionOptions: ExecuteOptions,
+      ) => {
+        const index = prompt === "new file content" ? 1 : 0;
+        options[index] = executionOptions;
+        started[index].resolve();
+        return results[index].promise;
+      },
+      updateTaskPrompts: async (
+        changes: Array<{ id: string; prompt: string; expectedSnapshot?: string }>,
+      ) => {
+        const change = changes[0];
+        updates.push(change);
+        if (JSON.stringify(currentTask) !== change.expectedSnapshot) return 0;
+        currentTask = {
+          ...currentTask,
+          prompt: change.prompt,
+          updatedAt: new Date("2026-11-19T01:00:02.000Z"),
+        };
+        return 1;
+      },
+      recordHistory: async (entry: ExecutionHistoryEntry) => {
+        history.push(entry);
+      },
+      notifyInfo: (message: string) => notifications.push(message),
+    };
+    const olderRun = __testOnly.executeTask(older, "auto", undefined, deps);
+    const newerRun = __testOnly.executeTask(newer, "auto", undefined, deps);
+    try {
+      await Promise.all(started.map((item) => item.promise));
+      results[1].resolve({
+        agentHostRun: {
+          requestedModel: "new-model",
+          appliedModel: "new-model",
+          turnOutcome: "completed",
+          responseText: "observed",
+          workspaceMode: "worktree",
+          workspaceModeApplication: "new_session_config_confirmed",
+        },
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "new-model",
+          reportedModel: "new-model",
+          verification: "reported_match",
+        },
+      });
+      await newerRun;
+      assert.strictEqual(currentTask.prompt, "new file content");
+      currentTask = {
+        ...currentTask,
+        prompt: "user edit",
+        updatedAt: new Date("2026-11-19T01:00:03.000Z"),
+      };
+      results[0].resolve({
+        modelFallback: { from: "old-model", to: "old-fallback" },
+        agentHostRun: {
+          requestedModel: "old-fallback",
+          turnOutcome: "queued",
+        },
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "old-fallback",
+          verification: "unverified",
+        },
+      });
+      await olderRun;
+
+      assert.strictEqual(currentTask.prompt, "user edit");
+      assert.deepStrictEqual(updates.map((item) => item.expectedSnapshot), [
+        JSON.stringify(newer),
+        JSON.stringify(older),
+      ]);
+      assert.deepStrictEqual(updates.map((item) => item.prompt), [
+        "new file content",
+        "old file content",
+      ]);
+      assert.strictEqual(
+        options[0].queueOccurrenceId,
+        older.lastFiredDueAt?.toISOString(),
+      );
+      assert.strictEqual(
+        options[1].queueOccurrenceId,
+        newer.lastFiredDueAt.toISOString(),
+      );
+      const completed = history.find(
+        (entry) => entry.dueAt === newer.lastFiredDueAt.toISOString(),
+      );
+      const queued = history.find(
+        (entry) => entry.dueAt === older.lastFiredDueAt?.toISOString(),
+      );
+      if (!completed || !queued) throw new Error("Missing occurrence history");
+      assert.strictEqual(
+        completed.promptHash,
+        computePromptHash("new file content"),
+      );
+      assert.strictEqual(completed.promptResolvedAt, "2026-11-19T01:00:01.000Z");
+      assert.strictEqual(completed.turnOutcome, "completed");
+      assert.strictEqual(completed.responseText, "observed");
+      assert.strictEqual(completed.workspaceMode, "worktree");
+      assert.strictEqual(completed.modelExecution?.requestedModel, "new-model");
+      assert.strictEqual(queued.promptHash, computePromptHash("old file content"));
+      assert.strictEqual(queued.promptResolvedAt, "2026-11-19T00:00:01.000Z");
+      assert.strictEqual(queued.turnOutcome, "queued");
+      assert.strictEqual(queued.modelExecution?.requestedModel, "old-fallback");
+      assert.ok(queued.detail?.includes("old-fallback"));
+      assert.ok(!completed.detail?.includes("old-fallback"));
+      assert.ok(!queued.promptPathDisplay?.includes("private"));
+      assert.ok(!completed.promptPathDisplay?.includes("private"));
+      assert.ok(
+        notifications.some((message) =>
+          message.includes(messages.executionResultQueued()),
+        ),
+      );
+      assert.ok(
+        notifications.some((message) =>
+          message.includes(messages.executionResultTurnCompleted()),
+        ),
+      );
+    } finally {
+      results[0].resolve({});
+      results[1].resolve({});
+      await Promise.allSettled([olderRun, newerRun]);
+    }
+  });
+
+  test("automatic runs cannot erase or consume an overlapping manual run's metadata", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { computePromptHash } = await import("../../promptResolver");
+    const { createPromptBlockedError } = await import(
+      "../../promptExecutionErrors"
+    );
+    const manualTask = {
+      ...task("manual-auto-isolation"),
+      prompt: "manual prompt",
+    };
+    const manualStarted = deferred<void>();
+    const manualResult = deferred<ExecutePromptResult>();
+    const historyStarted = deferred<void>();
+    const releaseHistory = deferred<void>();
+    const automaticHistory: ExecutionHistoryEntry[] = [];
+    const manualHistory: ExecutionHistoryEntry[] = [];
+    const seenOptions: Array<{ prompt: string; options: ExecuteOptions }> = [];
+    const deps = {
+      resolvePromptSnapshot: async (selected: ScheduledTask) => ({
+        text: selected.prompt,
+        source: "inline" as const,
+        hash: computePromptHash(selected.prompt),
+        resolvedAt: "2026-11-19T02:00:00.000Z",
+        candidateCount: 0,
+      }),
+      executePrompt: async (prompt: string, options: ExecuteOptions) => {
+        seenOptions.push({ prompt, options });
+        if (prompt === "manual prompt") {
+          manualStarted.resolve();
+          return manualResult.promise;
+        }
+        if (prompt === "blocked auto") {
+          throw createPromptBlockedError(
+            "blocked",
+            "modelConfigurationUnavailable",
+          );
+        }
+        if (prompt === "manual cli" || prompt === "auto cli") {
+          return {
+            cliRun: { requestedModel: prompt, appliedModel: prompt },
+            modelExecution: {
+              route: "copilotCli" as const,
+              requestedModel: prompt,
+              verification: "unverified" as const,
+            },
+          };
+        }
+        return {
+          agentHostRun: {
+            requestedModel: "auto-model",
+            turnOutcome: "queued" as const,
+          },
+          modelExecution: {
+            route: "agentHost" as const,
+            requestedModel: "auto-model",
+            verification: "unverified" as const,
+          },
+        };
+      },
+      recordHistory: async (entry: ExecutionHistoryEntry) => {
+        automaticHistory.push(entry);
+      },
+      notifyInfo: () => {},
+    };
+    const manual = __testOnly.runTaskManually(manualTask, {
+      run: async () => {
+        await __testOnly.executeTask(manualTask, "manual", undefined, deps);
+        return { ok: true as const };
+      },
+      recordHistory: async (historyTask, result) => {
+        historyStarted.resolve();
+        await releaseHistory.promise;
+        await __testOnly.appendManualRunHistory(historyTask, result, {
+          getTask: () => historyTask,
+          recordHistory: async (entry) => {
+            manualHistory.push(entry);
+          },
+          notifyInfo: () => {},
+        });
+      },
+      refresh: () => assert.fail("successful manual run should not refresh"),
+    });
+    try {
+      await manualStarted.promise;
+      await assert.rejects(
+        __testOnly.executeTask(
+          { ...manualTask, prompt: "blocked auto" },
+          "auto",
+          undefined,
+          deps,
+        ),
+      );
+      manualResult.resolve({
+        modelFallback: { from: "manual-requested", to: "manual-model" },
+        agentHostRun: {
+          requestedModel: "manual-model",
+          turnOutcome: "completed",
+          responseText: "observed",
+        },
+        modelExecution: {
+          route: "agentHost",
+          requestedModel: "manual-model",
+          verification: "unverified",
+        },
+      });
+      await historyStarted.promise;
+      await __testOnly.executeTask(
+        {
+          ...manualTask,
+          prompt: "queued auto",
+          lastFiredDueAt: new Date("2026-11-19T01:00:00.000Z"),
+        },
+        "auto",
+        undefined,
+        deps,
+      );
+      releaseHistory.resolve();
+      assert.deepStrictEqual(await manual, {
+        ok: true,
+        turnOutcome: "completed",
+        responseText: "observed",
+      });
+      assert.strictEqual(manualHistory.length, 1);
+      assert.strictEqual(
+        manualHistory[0].promptHash,
+        computePromptHash("manual prompt"),
+      );
+      assert.strictEqual(manualHistory[0].turnOutcome, "completed");
+      assert.strictEqual(
+        manualHistory[0].modelExecution?.requestedModel,
+        "manual-model",
+      );
+      assert.ok(manualHistory[0].detail?.includes("manual-requested"));
+      assert.ok(!manualHistory[0].detail?.includes("auto-model"));
+      assert.deepStrictEqual(
+        automaticHistory.map((entry) => entry.status),
+        ["blocked", "success"],
+      );
+      assert.deepStrictEqual(
+        automaticHistory.map((entry) => entry.promptHash),
+        [computePromptHash("blocked auto"), computePromptHash("queued auto")],
+      );
+      assert.strictEqual(automaticHistory[0].modelExecution, undefined);
+      assert.strictEqual(automaticHistory[1].turnOutcome, "queued");
+      assert.strictEqual(
+        automaticHistory[1].modelExecution?.requestedModel,
+        "auto-model",
+      );
+      assert.ok(!Object.hasOwn(seenOptions[0].options, "queueOccurrenceId"));
+
+      const cliTask = {
+        ...manualTask,
+        id: "manual-cli-isolation",
+        prompt: "manual cli",
+      };
+      await __testOnly.executeTask(cliTask, "manual", undefined, deps);
+      await __testOnly.executeTask(
+        { ...cliTask, prompt: "auto cli" },
+        "auto",
+        undefined,
+        deps,
+      );
+      await __testOnly.appendManualRunHistory(cliTask, { ok: true }, {
+        getTask: () => cliTask,
+        recordHistory: async (entry) => {
+          manualHistory.push(entry);
+        },
+        notifyInfo: () => {},
+      });
+      assert.ok(manualHistory[1].detail?.includes("manual cli"));
+      assert.ok(!manualHistory[1].detail?.includes("auto cli"));
+      assert.ok(automaticHistory[2].detail?.includes("auto cli"));
+      assert.strictEqual(manualHistory[1].modelExecution?.route, "copilotCli");
+    } finally {
+      manualResult.resolve({});
+      releaseHistory.resolve();
+      await Promise.allSettled([manual]);
+    }
+  });
+
+  test("failed, unknown and blocked runs retain only their own prompt metadata", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { computePromptHash } = await import("../../promptResolver");
+    const { createPromptBlockedError } = await import(
+      "../../promptExecutionErrors"
+    );
+    const history: ExecutionHistoryEntry[] = [];
+    const deps = {
+      resolvePromptSnapshot: async (selected: ScheduledTask) => ({
+        text: selected.prompt,
+        source: "snapshotFallback" as const,
+        resolvedPath: "C:\\private\\prompts\\missing.md",
+        hash: computePromptHash(selected.prompt),
+        resolvedAt: "2026-11-19T02:00:00.000Z",
+        fallbackReason: "readFailed" as const,
+        candidateCount: 1,
+      }),
+      executePrompt: async (prompt: string): Promise<ExecutePromptResult> => {
+        if (prompt === "unknown") {
+          throw createPromptBlockedError(
+            "unknown",
+            "agentHostFailed",
+            "unknown",
+          );
+        }
+        if (prompt === "blocked") {
+          throw createPromptBlockedError(
+            "blocked",
+            "modelConfigurationUnavailable",
+          );
+        }
+        throw new Error("failed at C:\\private\\prompts\\missing.md");
+      },
+      recordHistory: async (entry: ExecutionHistoryEntry) => {
+        history.push(entry);
+      },
+      notifyInfo: () => {},
+    };
+    for (const prompt of ["unknown", "blocked", "failed"]) {
+      await assert.rejects(
+        __testOnly.executeTask(
+          { ...task("failed-isolation"), prompt },
+          "auto",
+          undefined,
+          deps,
+        ),
+      );
+    }
+    assert.deepStrictEqual(history.map((entry) => entry.status), [
+      "failed",
+      "blocked",
+      "failed",
+    ]);
+    assert.strictEqual(history[0].turnOutcome, "unknown");
+    for (const [index, prompt] of ["unknown", "blocked", "failed"].entries()) {
+      assert.strictEqual(history[index].promptHash, computePromptHash(prompt));
+      assert.strictEqual(history[index].promptSource, "snapshotFallback");
+      assert.strictEqual(history[index].promptFallbackReason, "readFailed");
+      assert.ok(!history[index].promptPathDisplay?.includes("private"));
+      assert.ok(!history[index].detail?.includes("private"));
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(
+      vscode.workspace,
+      "getConfiguration",
+    );
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+    let dispatches = 0;
+    try {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: (...args: Parameters<typeof vscode.workspace.getConfiguration>) => {
+          const config = originalGetConfiguration.apply(vscode.workspace, args);
+          return {
+            ...config,
+            get<T>(name: string, fallback?: T): T {
+              return name === "promptFileFallback"
+                ? ("blockAlways" as T)
+                : config.get<T>(name, fallback as T);
+            },
+          } as vscode.WorkspaceConfiguration;
+        },
+      });
+      await assert.rejects(
+        __testOnly.executeTask(
+          {
+            ...task("blocked-before-dispatch"),
+            prompt: "pre-dispatch",
+            promptSource: "local",
+            promptPath: ".github\\prompts\\missing.md",
+          },
+          "auto",
+          undefined,
+          {
+            ...deps,
+            executePrompt: async () => {
+              dispatches++;
+              return {};
+            },
+          },
+        ),
+      );
+      assert.strictEqual(dispatches, 0);
+      assert.strictEqual(history.at(-1)?.status, "blocked");
+      assert.strictEqual(
+        history.at(-1)?.promptHash,
+        computePromptHash("pre-dispatch"),
+      );
+      assert.strictEqual(history.at(-1)?.promptFallbackReason, "readFailed");
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(vscode.workspace, "getConfiguration", descriptor);
+      } else {
+        Reflect.deleteProperty(vscode.workspace, "getConfiguration");
+      }
+    }
+  });
+
+  test("occurrence IDs are opt-in and one-time cleanup still depends on history", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { computePromptHash } = await import("../../promptResolver");
+    const options: ExecuteOptions[] = [];
+    const history: ExecutionHistoryEntry[] = [];
+    let failHistory = false;
+    const deps = {
+      resolvePromptSnapshot: async (selected: ScheduledTask) => ({
+        text: selected.prompt,
+        source: "inline" as const,
+        hash: computePromptHash(selected.prompt),
+        resolvedAt: "2026-11-19T02:00:00.000Z",
+        candidateCount: 0,
+      }),
+      executePrompt: async (
+        _prompt: string,
+        executionOptions: ExecuteOptions,
+      ) => {
+        options.push(executionOptions);
+        return {};
+      },
+      recordHistory: async (entry: ExecutionHistoryEntry) => {
+        history.push(entry);
+      },
+      enqueueHistory: async (entry: ExecutionHistoryEntry) => {
+        history.push(entry);
+        if (failHistory) throw new Error("history failed");
+      },
+      notifyInfo: () => {},
+    };
+    const base = task("occurrence-option");
+    await __testOnly.executeTask(
+      { ...base, allowOverlappingRuns: undefined },
+      "auto",
+      undefined,
+      deps,
+    );
+    await __testOnly.executeTask(
+      { ...base, allowOverlappingRuns: false },
+      "auto",
+      undefined,
+      deps,
+    );
+    await __testOnly.executeTask(
+      { ...base, lastFiredDueAt: new Date(NaN) },
+      "auto",
+      undefined,
+      deps,
+    );
+    const oneTime = {
+      ...base,
+      runAt: "2026-11-19T00:00:00.000Z",
+      afterRun: "delete" as const,
+    };
+    assert.strictEqual(
+      await __testOnly.executeTask(oneTime, "auto", undefined, deps),
+      undefined,
+    );
+    failHistory = true;
+    assert.deepStrictEqual(
+      await __testOnly.executeTask(oneTime, "auto", undefined, deps),
+      { retainOneTimeTask: true },
+    );
+    for (const item of options) {
+      assert.ok(!Object.hasOwn(item, "queueOccurrenceId"));
+    }
+    assert.strictEqual(history.at(-1)?.runAt, oneTime.runAt);
+    assert.strictEqual(history.at(-1)?.status, "success");
+  });
+});
+
+suite("Agent Host input notifications", () => {
+  test("deduplicates observers, opens the session, and clears only after both stop", async () => {
+    const { __testOnly } = await import("../../extension");
+    const properties: Array<[object, string]> = [
+      [vscode.workspace, "getConfiguration"],
+      [vscode.window, "createStatusBarItem"],
+      [vscode.window, "showWarningMessage"],
+      [vscode.commands, "executeCommand"],
+    ];
+    const descriptors = properties.map(([owner, key]) => [
+      owner, key, Object.getOwnPropertyDescriptor(owner, key)!,
+    ] as const);
+    const item = {
+      text: "",
+      tooltip: "",
+      command: undefined as vscode.Command | undefined,
+      show: () => { shown++; },
+      dispose: () => { disposed++; },
+    };
+    let shown = 0;
+    let disposed = 0;
+    let warnings = 0;
+    const commands: Array<{ command: string; args: unknown[] }> = [];
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: () => ({ get: (_key: string, defaultValue: unknown) => defaultValue }),
+    });
+    Object.defineProperty(vscode.window, "createStatusBarItem", {
+      configurable: true, value: () => item,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async (_message: string, action: string) => { warnings++; return action; },
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (command: string, ...args: unknown[]) => { commands.push({ command, args }); },
+    });
+    const first = __testOnly.createAgentHostInputHandler();
+    const second = __testOnly.createAgentHostInputHandler();
+    const ref = { sessionUri: "ahp-session:/session", chatUri: "ahp-chat:/chat" };
+    const waiting = { id: "request", kind: "toolConfirmation", waiting: true } as const;
+    try {
+      first(ref, waiting);
+      second(ref, waiting);
+      first(ref, waiting);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.strictEqual(shown, 1);
+      assert.strictEqual(warnings, 1);
+      assert.strictEqual(item.command?.command, "workbench.action.chat.openSessionInEditorGroup");
+      assert.strictEqual(commands.length, 1);
+      assert.strictEqual(commands[0].command, item.command?.command);
+      assert.strictEqual(
+        (commands[0].args[0] as { resource: vscode.Uri }).resource.toString(),
+        "agent-host-copilotcli:/session",
+      );
+      first(ref, { ...waiting, waiting: false });
+      assert.strictEqual(disposed, 0);
+      second(ref, { ...waiting, waiting: false });
+      assert.strictEqual(disposed, 1);
+    } finally {
+      first(ref, { ...waiting, waiting: false });
+      second(ref, { ...waiting, waiting: false });
+      for (const [owner, key, descriptor] of descriptors) {
+        Object.defineProperty(owner, key, descriptor);
+      }
+    }
+  });
+
+  test("respects quiet notification settings while keeping an actionable status", async () => {
+    const { __testOnly } = await import("../../extension");
+    const properties: Array<[object, string]> = [
+      [vscode.workspace, "getConfiguration"],
+      [vscode.window, "createStatusBarItem"],
+      [vscode.window, "showWarningMessage"],
+      [vscode.window, "withProgress"],
+    ];
+    const descriptors = properties.map(([owner, key]) => [
+      owner, key, Object.getOwnPropertyDescriptor(owner, key)!,
+    ] as const);
+    let enabled = true;
+    let mode = "silentToast";
+    let statusCount = 0;
+    let toastCount = 0;
+    let warningCount = 0;
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: () => ({
+        get: (key: string, defaultValue: unknown) =>
+          key === "showNotifications" ? enabled :
+          key === "notificationMode" ? mode : defaultValue,
+      }),
+    });
+    Object.defineProperty(vscode.window, "createStatusBarItem", {
+      configurable: true,
+      value: () => ({ show: () => { statusCount++; }, dispose: () => undefined }),
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true, value: async () => { warningCount++; },
+    });
+    Object.defineProperty(vscode.window, "withProgress", {
+      configurable: true, value: async () => { toastCount++; },
+    });
+    const handler = __testOnly.createAgentHostInputHandler();
+    const ref = { sessionUri: "ahp-session:/quiet", chatUri: "ahp-chat:/quiet" };
+    const waiting = { id: "request", kind: "chatInput", waiting: true } as const;
+    try {
+      handler(ref, waiting);
+      handler(ref, { ...waiting, waiting: false });
+      enabled = false;
+      mode = "sound";
+      handler(ref, waiting);
+      handler(ref, { ...waiting, waiting: false });
+      assert.strictEqual(statusCount, 2);
+      assert.strictEqual(toastCount, 1);
+      assert.strictEqual(warningCount, 0);
+    } finally {
+      handler(ref, { ...waiting, waiting: false });
+      for (const [owner, key, descriptor] of descriptors) {
+        Object.defineProperty(owner, key, descriptor);
+      }
+    }
+  });
+
+  test("shows a queued-task warning with the chat action and removes it when cleared", async () => {
+    const { __testOnly } = await import("../../extension");
+    const properties: Array<[object, string]> = [
+      [vscode.workspace, "getConfiguration"],
+      [vscode.window, "createStatusBarItem"],
+      [vscode.window, "showWarningMessage"],
+    ];
+    const descriptors = properties.map(([owner, key]) => [
+      owner, key, Object.getOwnPropertyDescriptor(owner, key)!,
+    ] as const);
+    let disposed = 0;
+    let warning = "";
+    const item = {
+      text: "",
+      tooltip: "",
+      command: undefined as vscode.Command | undefined,
+      show: () => undefined,
+      dispose: () => { disposed++; },
+    };
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: () => ({ get: (_key: string, defaultValue: unknown) => defaultValue }),
+    });
+    Object.defineProperty(vscode.window, "createStatusBarItem", {
+      configurable: true, value: () => item,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true, value: async (message: string) => { warning = message; },
+    });
+    const handler = __testOnly.createAgentHostQueueBlockedHandler();
+    const ref = { sessionUri: "ahp-session:/queue", chatUri: "ahp-chat:/queue" };
+    try {
+      handler(ref, { id: "message", waiting: true });
+      assert.strictEqual(item.command?.command, "workbench.action.chat.openSessionInEditorGroup");
+      assert.strictEqual(item.text, `$(comment-discussion) ${messages.agentHostQueueBlockedStatus()}`);
+      assert.strictEqual(warning, messages.agentHostQueueBlocked());
+      handler(ref, { id: "message", waiting: false });
+      assert.strictEqual(disposed, 1);
+    } finally {
+      handler(ref, { id: "message", waiting: false });
+      for (const [owner, key, descriptor] of descriptors) {
+        Object.defineProperty(owner, key, descriptor);
+      }
     }
   });
 });
@@ -2455,7 +3189,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const source = fs.readFileSync(sourcePath, "utf8");
     const payloads = [
       ...source.matchAll(
-        /(?:recordExecutionHistoryBestEffort\(|const entry: ExecutionHistoryEntry = )\{([^}]*)\}/g,
+        /(?:recordExecutionHistoryBestEffort\(|\(deps\?\.recordHistory \?\? recordExecutionHistoryBestEffort\)\(|const entry: ExecutionHistoryEntry = )\{([^}]*)\}/g,
       ),
     ].map((match) => match[1]);
     const automaticPayloads = payloads.filter((payload) =>

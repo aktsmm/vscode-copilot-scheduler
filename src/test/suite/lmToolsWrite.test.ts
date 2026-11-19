@@ -7,7 +7,7 @@ import { createSchedulerCreateTaskTool } from "../../lmTools/tools/createTask";
 import { createSchedulerDeleteTaskTool } from "../../lmTools/tools/deleteTask";
 import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
 import { createSchedulerSetTaskEnabledTool } from "../../lmTools/tools/setTaskEnabled";
-import { createSchedulerUpdateTaskTool } from "../../lmTools/tools/updateTask";
+import { createSchedulerUpdateTaskTool, RECOGNIZED_UPDATE_KEYS } from "../../lmTools/tools/updateTask";
 import {
   escapeConfirmationText,
   formatConfirmationCode,
@@ -278,6 +278,106 @@ function confirmationMessageText(
 }
 
 suite("lmTools write wrappers", () => {
+  test("the update schema, the runtime whitelist and the create schema list the same fields", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
+    );
+    const find = (name: string) =>
+      manifest.contributes.languageModelTools.find(
+        (item: { name: string }) => item.name === name,
+      );
+    const updateKeys = Object.keys(
+      find("scheduler_update_task").inputSchema.properties.updates.properties,
+    ).sort();
+    // `enabled` is recognized only to return its dedicated error; it is not offered.
+    const runtimeKeys = [...RECOGNIZED_UPDATE_KEYS].filter((key) => key !== "enabled").sort();
+    assert.deepStrictEqual(updateKeys, runtimeKeys);
+    // Creation also accepts `enabled`, which an update changes through its own tool.
+    const createKeys = Object.keys(find("scheduler_create_task").inputSchema.properties)
+      .filter((key) => key !== "enabled")
+      .sort();
+    assert.deepStrictEqual(createKeys, updateKeys);
+  });
+
+  test("overlapping-run setting agrees across schema, confirmation, create and update", async () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
+    );
+    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
+      const tool = manifest.contributes.languageModelTools.find(
+        (item: { name: string }) => item.name === name,
+      );
+      const properties =
+        name === "scheduler_update_task"
+          ? tool.inputSchema.properties.updates.properties
+          : tool.inputSchema.properties;
+      assert.strictEqual(properties.allowOverlappingRuns.type, "boolean");
+    }
+
+    for (const allowOverlappingRuns of [false, true]) {
+      const client = new FakeClient();
+      const createInput = {
+        name: "Overlap",
+        cronExpression: "0 9 * * *",
+        prompt: "Review",
+        scope: "global",
+        allowOverlappingRuns,
+      };
+      const updateInput = {
+        id: "task-1",
+        updates: { allowOverlappingRuns },
+      };
+      const expected = escapeConfirmationText(
+        allowOverlappingRuns
+          ? messages.allowOverlappingRunsConfirmationEnabled()
+          : messages.allowOverlappingRunsConfirmationDisabled(),
+      );
+      for (const prepared of [
+        await withConfirmationMode("always", () =>
+          prepare(createSchedulerCreateTaskTool(client), createInput),
+        ),
+        await withConfirmationMode("always", () =>
+          prepare(createSchedulerUpdateTaskTool(client), updateInput),
+        ),
+      ]) {
+        assert.ok(confirmationMessageText(prepared).includes(expected));
+      }
+      assert.strictEqual(
+        parseJson(await invoke(createSchedulerCreateTaskTool(client), createInput)).ok,
+        true,
+      );
+      assert.strictEqual(client.createInput?.allowOverlappingRuns, allowOverlappingRuns);
+      assert.strictEqual(
+        parseJson(await invoke(createSchedulerUpdateTaskTool(client), updateInput)).ok,
+        true,
+      );
+      assert.strictEqual(client.updateArgs?.updates.allowOverlappingRuns, allowOverlappingRuns);
+    }
+  });
+
+  test("invalid overlapping-run values cannot reach task mutations", async () => {
+    const client = new FakeClient();
+    const created = parseJson(
+      await invoke(createSchedulerCreateTaskTool(client), {
+        name: "Overlap",
+        cronExpression: "0 9 * * *",
+        prompt: "Review",
+        scope: "global",
+        allowOverlappingRuns: "yes" as never,
+      }),
+    );
+    const updated = parseJson(
+      await invoke(createSchedulerUpdateTaskTool(client), {
+        id: "task-1",
+        updates: { allowOverlappingRuns: "yes" as never },
+      }),
+    );
+    assert.strictEqual(created.reason, "validation");
+    assert.strictEqual(updated.reason, "validation");
+    assert.strictEqual(client.createInput, undefined);
+    assert.strictEqual(client.updateArgs, undefined);
+  });
+
   test("workspace location schema, create mapper and update whitelist agree", async () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),

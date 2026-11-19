@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.15.0",
+  "version": "1.17.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -209,13 +209,6 @@
           ],
           "description": "%config.missedRunPolicy%"
         },
-        "copilotScheduler.maxConcurrentAutomaticRuns": {
-          "type": "integer",
-          "default": 1,
-          "minimum": 1,
-          "maximum": 10,
-          "description": "%config.maxConcurrentAutomaticRuns%"
-        },
         "copilotScheduler.chatSession": {
           "type": "string",
           "default": "new",
@@ -321,6 +314,12 @@
           "maximum": 720,
           "scope": "machine",
           "markdownDescription": "%config.cliTimeoutMinutes%"
+        },
+        "copilotScheduler.showCopilotCliControls": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "%config.showCopilotCliControls%"
         },
         "copilotScheduler.autoModeDefault": {
           "type": "boolean",
@@ -691,6 +690,11 @@
               "description": "Per-task execution cap per day (0 = unlimited).",
               "minimum": 0
             },
+            "allowOverlappingRuns": {
+              "type": "boolean",
+              "default": false,
+              "description": "Allow overlapping automatic occurrences of this recurring task. Default false. Manual runs and one-time tasks keep their existing guards; runs using the same chat may queue."
+            },
             "allowedTimeStart": {
               "type": "string",
               "description": "Earliest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
@@ -887,6 +891,10 @@
                   "type": "number",
                   "description": "Per-task execution cap per day (0 = unlimited).",
                   "minimum": 0
+                },
+                "allowOverlappingRuns": {
+                  "type": "boolean",
+                  "description": "Allow overlapping automatic occurrences of this recurring task. Default false; omission preserves the saved value. Manual runs and one-time tasks keep their existing guards; runs using the same chat may queue."
                 },
                 "allowedTimeStart": {
                   "type": "string",

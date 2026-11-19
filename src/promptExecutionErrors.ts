@@ -60,6 +60,16 @@ export function getPromptBlockedReason(
   ] as PromptBlockedReason;
 }
 
+/**
+ * The Host only reports this after the turn has started, because the size of the
+ * tool definitions depends on the session's enabled tools and MCP servers.
+ */
+export function isAgentHostContextBudgetFailure(detail: string): boolean {
+  return /system messages and tool definitions exceed .{0,40}context budget/i.test(
+    detail,
+  );
+}
+
 export function getAgentHostTurnFailure(
   error: unknown,
 ): Exclude<AgentHostTurnOutcome, "completed" | "queued"> | undefined {

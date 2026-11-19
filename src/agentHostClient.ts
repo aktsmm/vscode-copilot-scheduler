@@ -10,6 +10,11 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { fileURLToPath, pathToFileURL } from "url";
 import { PipeWebSocket } from "./minimalWebSocket";
+import {
+  observeAgentHostInput,
+  type AgentHostInputChange,
+  type AgentHostQueueBlockedChange,
+} from "./agentHostInputObserver";
 import type {
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
@@ -25,6 +30,8 @@ export type AgentHostFailureKind =
   /** The selected model cannot be identified safely; do not choose another route. */
   | "modelIdentity"
   | "workspaceMode"
+  /** The selected session was confirmed missing before dispatch. */
+  | "sessionExpired"
   /** The run started (or may have) and failed; do not run it a second time. */
   | "failed";
 
@@ -36,6 +43,7 @@ export class AgentHostError extends Error {
       AgentHostTurnOutcome,
       "completed" | "queued"
     >,
+    readonly rpcCode?: number,
   ) {
     super(message);
     this.name = "AgentHostError";
@@ -162,6 +170,7 @@ export interface AgentHostAction {
 interface AgentHostActionEnvelope {
   rejected: boolean;
   origin: unknown;
+  serverSeq?: number;
 }
 
 interface AgentHostActionOrigin {
@@ -323,6 +332,8 @@ export class AgentHostConnection {
           new AgentHostError(
             "failed",
             `Agent Host error ${message.error.code ?? ""}: ${message.error.message ?? ""}`.trim(),
+            undefined,
+            typeof message.error.code === "number" ? message.error.code : undefined,
           ),
         );
       } else {
@@ -351,7 +362,14 @@ export class AgentHostConnection {
         "rejectionReason",
       );
       for (const listener of [...this.listeners]) {
-        listener(channel, action, { rejected, origin: message.params?.origin });
+        const serverSeq = message.params?.serverSeq;
+        listener(channel, action, {
+          rejected,
+          origin: message.params?.origin,
+          ...(typeof serverSeq === "number" && Number.isSafeInteger(serverSeq) && serverSeq >= 0
+            ? { serverSeq }
+            : {}),
+        });
       }
     }
   }
@@ -470,7 +488,11 @@ export interface AgentHostTurnRequest {
   /** Reuse this session (a "continue" run) when the host still has it. */
   resume?: AgentHostSessionRef;
   /** Called once the host has accepted the turn, so the session can be shown. */
-  onSessionStarted?: (ref: AgentHostSessionRef) => void;
+  onSessionStarted?: (ref: AgentHostSessionRef, turnId: string, startedAt: string) => void;
+  beforeDispatch?: (ref: AgentHostSessionRef, messageId: string) => Promise<void>;
+  onMessageDispatched?: (ref: AgentHostSessionRef) => void;
+  onInputNeeded?: (ref: AgentHostSessionRef, change: AgentHostInputChange) => void;
+  onInputObservationError?: () => void;
   dispatchGuard?: (dispatch: () => void) => Promise<void>;
 }
 
@@ -499,8 +521,11 @@ export interface AgentHostChatInfo {
 export interface AgentHostQueuedMessageRequest {
   endpoint: AgentHostEndpoint;
   targetChatId: string;
+  /** A previously confirmed session; never resolve this to a different chat. */
+  resume?: AgentHostSessionRef;
   text: string;
   taskId?: string;
+  occurrenceId?: string;
   expectedWorkspacePath?: string;
   modelId?: string;
   /** The model ID was explicitly chosen from the Agent Host catalog. */
@@ -509,6 +534,13 @@ export interface AgentHostQueuedMessageRequest {
   agentUri?: string;
   attachments?: AgentHostAttachment[];
   dispatchGuard?: (dispatch: () => void) => Promise<void>;
+  beforeDispatch?: (ref: AgentHostSessionRef, messageId: string) => Promise<void>;
+  onMessageDispatched?: (ref: AgentHostSessionRef) => void;
+  onQueuedTurnStarted?: (ref: AgentHostSessionRef, turnId: string) => void;
+  onInputNeeded?: (ref: AgentHostSessionRef, change: AgentHostInputChange) => void;
+  onQueueBlocked?: (ref: AgentHostSessionRef, change: AgentHostQueueBlockedChange) => void;
+  onInputObservationError?: () => void;
+  inputObservationTimeoutMs?: number;
 }
 
 export interface AgentHostQueuedMessageResult extends AgentHostSessionRef {
@@ -903,11 +935,290 @@ async function resolveAgentHostChat(
   return current;
 }
 
-/** Queues one task-specific message in an existing chat; repeated task runs upsert the same pending ID. */
+async function verifyResumedChat(
+  connection: AgentHostConnection,
+  ref: AgentHostSessionRef,
+): Promise<Record<string, unknown>> {
+  let sessionSnapshot: unknown;
+  try {
+    sessionSnapshot = await connection.request("subscribe", { channel: ref.sessionUri });
+  } catch (error) {
+    if (error instanceof AgentHostError && error.rpcCode === -32001) {
+      throw new AgentHostError("sessionExpired", "The Agent Host session no longer exists.");
+    }
+    throw new AgentHostError("failed", "The continued Agent Host session could not be verified.", "unknown");
+  }
+  if (!isRecord(sessionSnapshot)) {
+    throw new AgentHostError("failed", "The continued Agent Host session could not be verified.", "unknown");
+  }
+  const sessionState = snapshotState(sessionSnapshot);
+  const summaries = Array.isArray(sessionState.chats) ? sessionState.chats : [];
+  const summary = summaries.find((item) => isRecord(item) && item.resource === ref.chatUri);
+  if (
+    sessionState.resource !== ref.sessionUri ||
+    sessionState.lifecycle !== "ready" ||
+    sessionState.provider !== PROVIDER ||
+    !isRecord(summary) ||
+    summary.interactivity === "read-only" ||
+    summary.interactivity === "hidden" ||
+    isArchived(summary.status)
+  ) {
+    throw new AgentHostError("failed", "The continued Agent Host session could not be verified.", "unknown");
+  }
+
+  let chatSnapshot: unknown;
+  try {
+    chatSnapshot = await connection.request("subscribe", { channel: ref.chatUri });
+  } catch {
+    throw new AgentHostError("failed", "The continued Agent Host chat could not be verified.", "unknown");
+  }
+  if (!isRecord(chatSnapshot)) {
+    throw new AgentHostError("failed", "The continued Agent Host chat could not be verified.", "unknown");
+  }
+  const chatState = snapshotState(chatSnapshot);
+  if (
+    chatState.resource !== ref.chatUri ||
+    (chatState.provider !== undefined && chatState.provider !== PROVIDER) ||
+    chatState.interactivity === "read-only" ||
+    chatState.interactivity === "hidden" ||
+    isArchived(chatState.status)
+  ) {
+    throw new AgentHostError("failed", "The continued Agent Host chat could not be verified.", "unknown");
+  }
+  return chatState;
+}
+
+/** Reconciles an uncertain, identified turn without submitting another message. */
+export async function isAgentHostTurnTerminal(
+  endpoint: AgentHostEndpoint,
+  ref: AgentHostSessionRef,
+  turnId: string,
+): Promise<boolean> {
+  const connection = await AgentHostConnection.open(endpoint);
+  try {
+    requireAgentHostAgent(await initializeAgentHost(connection));
+    const state = await verifyResumedChat(connection, ref);
+    if (isRecord(state.activeTurn) && state.activeTurn.id === turnId) return false;
+    return Array.isArray(state.turns) && state.turns.some((turn) =>
+      isRecord(turn) &&
+      turn.id === turnId &&
+      (turn.state === "complete" || turn.state === "cancelled" || turn.state === "error"),
+    );
+  } finally {
+    connection.close();
+  }
+}
+
+function queuedMessageId(taskId?: string, occurrenceId?: string): string {
+  if (occurrenceId !== undefined) {
+    if (
+      typeof taskId !== "string" ||
+      !taskId.trim() ||
+      typeof occurrenceId !== "string" ||
+      !occurrenceId.trim()
+    ) {
+      throw new AgentHostError("unsupported", "An occurrence needs a task identifier and occurrence identifier.");
+    }
+    return `copilot-scheduler-occurrence-${createHash("sha256")
+      .update(JSON.stringify([taskId, occurrenceId]))
+      .digest("hex")}`;
+  }
+  return `copilot-scheduler-${createHash("sha256")
+    .update(taskId || randomUUID())
+    .digest("hex")}`;
+}
+
+const queuedInputObservers = new Set<() => void>();
+
+export function disposeAgentHostInputObservers(): void {
+  for (const stop of [...queuedInputObservers]) stop();
+}
+
+function agentHostMessage(
+  request: {
+    text: string;
+    agentUri?: string;
+    attachments?: AgentHostAttachment[];
+  },
+  model: { id: string; config?: Record<string, string | number> } | undefined,
+): Record<string, unknown> {
+  return {
+    text: request.text,
+    origin: { kind: "user" },
+    ...(model ? { model } : {}),
+    ...(request.agentUri ? { agent: { uri: request.agentUri } } : {}),
+    ...(request.attachments && request.attachments.length > 0
+      ? {
+          attachments: request.attachments.map((item) => ({
+            type: "resource",
+            label: item.label,
+            uri: item.uri,
+          })),
+        }
+      : {}),
+  };
+}
+
+async function dispatchQueuedMessage(
+  connection: AgentHostConnection,
+  chatUri: string,
+  messageId: string,
+  message: Record<string, unknown>,
+  dispatchGuard?: (dispatch: () => void) => Promise<void>,
+  onDispatch?: () => void,
+  mayDispatch?: () => boolean,
+  onQueuedTurnStarted?: (turnId: string) => void,
+  onQueueEcho?: (serverSeq: number | undefined) => void,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let dispatchStarted = false;
+    let dispatchOrigin: AgentHostActionOrigin | undefined;
+    let guardPending = !!dispatchGuard;
+    let echoConfirmed = false;
+    let stateConfirmed = false;
+    let pendingOutcome: (() => void) | undefined;
+    const finish = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stopListening();
+      stopWatchingClose();
+      outcome();
+    };
+    const finishAfterGuard = (outcome: () => void) => {
+      if (settled) return;
+      if (guardPending) pendingOutcome ??= outcome;
+      else finish(outcome);
+    };
+    const confirm = () => {
+      if (echoConfirmed && stateConfirmed) finishAfterGuard(resolve);
+    };
+    const unconfirmed = () => new AgentHostError(
+      "failed",
+      "The Agent Host did not confirm the queued message.",
+      dispatchStarted ? "unknown" : undefined,
+    );
+    const timer = setTimeout(() => finish(() => reject(unconfirmed())), REQUEST_TIMEOUT_MS);
+    const stopListening = connection.onAction((channel, action, envelope) => {
+      if (channel !== chatUri || envelope.rejected) {
+        if (
+          channel === chatUri &&
+          envelope.rejected &&
+          dispatchStarted &&
+          dispatchOrigin &&
+          action.type === "chat/pendingMessageSet" &&
+          action.id === messageId &&
+          isRecord(envelope.origin) &&
+          envelope.origin.clientId === dispatchOrigin?.clientId &&
+          envelope.origin.clientSeq === dispatchOrigin?.clientSeq
+        ) {
+          finishAfterGuard(() => reject(unconfirmed()));
+        }
+        return;
+      }
+      if (
+        dispatchStarted &&
+        echoConfirmed &&
+        action.type === "chat/turnStarted" &&
+        action.queuedMessageId === messageId &&
+        typeof action.turnId === "string" &&
+        action.turnId
+      ) {
+        if (action.type === "chat/turnStarted" && typeof action.turnId === "string") {
+          try {
+            onQueuedTurnStarted?.(action.turnId);
+          } catch {
+            // Observation must not change the dispatch outcome.
+          }
+        }
+        stateConfirmed = true;
+        confirm();
+        return;
+      }
+      const origin = envelope.origin;
+      if (
+        !dispatchStarted ||
+        !dispatchOrigin ||
+        !isRecord(origin) ||
+        origin.clientId !== dispatchOrigin.clientId ||
+        origin.clientSeq !== dispatchOrigin.clientSeq ||
+        action.type !== "chat/pendingMessageSet" ||
+        action.id !== messageId ||
+        action.kind !== "queued"
+      ) return;
+      echoConfirmed = true;
+      onQueueEcho?.(envelope.serverSeq);
+      confirm();
+      if (stateConfirmed || settled) return;
+      void connection.request<SnapshotResult>("subscribe", { channel: chatUri }).then(
+        (snapshot) => {
+          if (settled || stateConfirmed) return;
+          if (isRecord(snapshot)) {
+            const state = snapshotState(snapshot);
+            stateConfirmed = state.resource === chatUri && Array.isArray(state.queuedMessages) &&
+              state.queuedMessages.some((entry) =>
+                isRecord(entry) && entry.id === messageId &&
+                (entry.kind === undefined || entry.kind === "queued"),
+              );
+          }
+          if (stateConfirmed) confirm();
+          else finishAfterGuard(() => reject(unconfirmed()));
+        },
+        () => finishAfterGuard(() => reject(unconfirmed())),
+      );
+    });
+    const stopWatchingClose = connection.onClose(() =>
+      finishAfterGuard(() => reject(unconfirmed())),
+    );
+    const dispatch = () => {
+      if (settled || dispatchStarted || (mayDispatch && !mayDispatch())) return;
+      dispatchStarted = true;
+      onDispatch?.();
+      const dispatched = connection.dispatchWithOrigin(chatUri, {
+        type: "chat/pendingMessageSet",
+        kind: "queued",
+        id: messageId,
+        message,
+      });
+      dispatchOrigin = dispatched.origin;
+      void dispatched.response.catch(() => finishAfterGuard(() => reject(unconfirmed())));
+    };
+    if (dispatchGuard) {
+      void dispatchGuard(dispatch).then(
+        () => {
+          guardPending = false;
+          if (pendingOutcome) finish(pendingOutcome);
+          else if (!dispatchStarted) {
+            finish(() => reject(new AgentHostError(
+              "failed",
+              "The task reservation did not allow a queued message.",
+            )));
+          }
+        },
+        (error: unknown) => finish(() => reject(
+          dispatchStarted
+            ? new AgentHostError("failed", "The queued message outcome is unknown.", "unknown")
+            : error,
+        )),
+      );
+    } else {
+      dispatch();
+    }
+  });
+}
+
+/** Repeated task runs coalesce unless a distinct occurrence is supplied. */
 export async function queueAgentHostMessage(
   request: AgentHostQueuedMessageRequest,
 ): Promise<AgentHostQueuedMessageResult> {
+  const messageId = queuedMessageId(request.taskId, request.occurrenceId);
   const connection = await AgentHostConnection.open(request.endpoint);
+  let stopInputObservation: (() => void) | undefined;
+  let observerStopped = false;
+  let keepConnection = false;
+  let acceptQueuedMessage!: () => void;
+  const queuedAcceptance = new Promise<void>((resolve) => { acceptQueuedMessage = resolve; });
   try {
     const agents = await initializeAgentHost(connection);
     requireAgentHostAgent(agents);
@@ -933,167 +1244,60 @@ export async function queueAgentHostMessage(
         "Model options need a model to apply to.",
       );
     }
-    const chat = await resolveAgentHostChat(
-      connection,
-      request.targetChatId,
-      request.expectedWorkspacePath,
-    );
-    const messageId = `copilot-scheduler-${createHash("sha256")
-      .update(request.taskId || randomUUID())
-      .digest("hex")}`;
-    const message = {
-      text: request.text,
-      origin: { kind: "user" },
-      ...(model ? { model } : {}),
-      ...(request.agentUri ? { agent: { uri: request.agentUri } } : {}),
-      ...(request.attachments && request.attachments.length > 0
-        ? {
-            attachments: request.attachments.map((item) => ({
-              type: "resource",
-              label: item.label,
-              uri: item.uri,
-            })),
-          }
-        : {}),
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let dispatchStarted = false;
-      let dispatchOrigin: AgentHostActionOrigin | undefined;
-      let timedOut = false;
-      let guardPending = !!request.dispatchGuard;
-      let pendingOutcome: (() => void) | undefined;
-      const finish = (outcome: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        stopListening();
-        stopWatchingClose();
-        outcome();
-      };
-      const finishAfterGuard = (outcome: () => void) => {
-        if (settled) return;
-        if (guardPending) {
-          pendingOutcome ??= outcome;
-        } else {
-          finish(outcome);
-        }
-      };
-      const timer = setTimeout(
-        () => {
-          timedOut = true;
-          finish(() =>
-            reject(
-              new AgentHostError(
-                "failed",
-                "The Agent Host did not confirm the queued message.",
-                dispatchStarted ? "unknown" : undefined,
-              ),
-            ),
-          );
-        },
-        REQUEST_TIMEOUT_MS,
-      );
-      const stopListening = connection.onAction((channel, action, envelope) => {
-        // Message IDs are reused; only this dispatch's origin can confirm it.
-        const origin = envelope.origin;
-        if (
-          !dispatchStarted ||
-          !dispatchOrigin ||
-          !origin ||
-          typeof origin !== "object" ||
-          !("clientId" in origin) ||
-          !("clientSeq" in origin) ||
-          origin.clientId !== dispatchOrigin.clientId ||
-          origin.clientSeq !== dispatchOrigin.clientSeq ||
-          channel !== chat.chatUri ||
-          action.type !== "chat/pendingMessageSet" ||
-          action.id !== messageId
-        ) {
-          return;
-        }
-        if (envelope.rejected) {
-          finishAfterGuard(() =>
-            reject(
-              new AgentHostError(
-                "failed",
-                "The Agent Host rejected the queued message.",
-                "unknown",
-              ),
-            ),
-          );
-        } else if (action.kind === "queued") {
-          finishAfterGuard(resolve);
-        }
-      });
-      const stopWatchingClose = connection.onClose(() =>
-        finishAfterGuard(() =>
-          reject(
-            new AgentHostError(
-              "failed",
-              "The Agent Host connection closed before confirming the queued message.",
-              dispatchStarted ? "unknown" : undefined,
-            ),
-          ),
-        ),
-      );
-      const dispatch = () => {
-        if (settled || timedOut || dispatchStarted) return;
-        dispatchStarted = true;
-        const dispatched = connection.dispatchWithOrigin(chat.chatUri, {
-          type: "chat/pendingMessageSet",
-          kind: "queued",
-          id: messageId,
-          message,
-        });
-        dispatchOrigin = dispatched.origin;
-        void dispatched.response.catch(() =>
-          finishAfterGuard(() =>
-            reject(
-              new AgentHostError(
-                "failed",
-                "The Agent Host did not confirm the queued message.",
-                "unknown",
-              ),
-            ),
-          ),
-        );
-      };
-      if (request.dispatchGuard) {
-        void request.dispatchGuard(dispatch).then(
-          () => {
-            guardPending = false;
-            if (pendingOutcome) finish(pendingOutcome);
-            else if (!dispatchStarted) {
-              finish(() =>
-                reject(
-                  new AgentHostError(
-                    "failed",
-                    "The task reservation did not allow a queued message.",
-                  ),
-                ),
-              );
-            }
-          },
-          (error: unknown) =>
-            finish(() =>
-              reject(
-                dispatchStarted
-                  ? new AgentHostError(
-                      "failed",
-                      "The queued message outcome is unknown.",
-                      "unknown",
-                    )
-                  : error,
-              ),
-            ),
-        );
-      } else {
-        dispatch();
+    let chat: AgentHostSessionRef;
+    if (request.resume) {
+      if (request.targetChatId.trim().toLowerCase() !== toAgentHostChatBindingId(request.resume.chatUri)) {
+        throw new AgentHostError("failed", "The continued Agent Host chat could not be verified.", "unknown");
       }
-    });
+      await verifyResumedChat(connection, request.resume);
+      chat = request.resume;
+    } else {
+      chat = await resolveAgentHostChat(connection, request.targetChatId, request.expectedWorkspacePath);
+    }
+    await request.beforeDispatch?.(chat, messageId);
+    let queueEchoSeq: number | undefined;
+    await dispatchQueuedMessage(
+      connection,
+      chat.chatUri,
+      messageId,
+      agentHostMessage(request, model),
+      request.dispatchGuard,
+      () => {
+        if (request.onInputNeeded || request.onQueueBlocked) {
+          stopInputObservation = observeAgentHostInput(
+            connection,
+            chat,
+            (change) => request.onInputNeeded?.(chat, change),
+            {
+              queuedMessageId: messageId,
+              isQueuedStart: (serverSeq) =>
+                queueEchoSeq !== undefined &&
+                serverSeq !== undefined &&
+                serverSeq > queueEchoSeq,
+              queuedAcceptance,
+              onQueueBlocked: (change) => request.onQueueBlocked?.(chat, change),
+              timeoutMs: request.inputObservationTimeoutMs ?? 60 * 60 * 1000,
+              onObservationError: request.onInputObservationError,
+              onStopped: () => {
+                observerStopped = true;
+                if (stopInputObservation) queuedInputObservers.delete(stopInputObservation);
+                if (keepConnection) connection.close();
+              },
+            },
+          );
+        }
+        request.onMessageDispatched?.(chat);
+      },
+      undefined,
+      (turnId) => request.onQueuedTurnStarted?.(chat, turnId),
+      (serverSeq) => { queueEchoSeq = serverSeq; },
+    );
 
+    acceptQueuedMessage();
+    if (stopInputObservation && !observerStopped) {
+      keepConnection = true;
+      queuedInputObservers.add(stopInputObservation);
+    }
     return {
       sessionUri: chat.sessionUri,
       chatUri: chat.chatUri,
@@ -1101,7 +1305,10 @@ export async function queueAgentHostMessage(
       ...(model ? { requestedModel: model.id } : {}),
     };
   } finally {
-    connection.close();
+    if (!keepConnection) {
+      stopInputObservation?.();
+      connection.close();
+    }
   }
 }
 
@@ -1122,7 +1329,8 @@ export async function runAgentHostTurn(
       throw error instanceof AgentHostError &&
         (error.kind === "unsupported" ||
           error.kind === "modelIdentity" ||
-          error.kind === "workspaceMode")
+          error.kind === "workspaceMode" ||
+          (error.kind === "failed" && error.turnOutcome === "unknown"))
         ? error
         : new AgentHostError(
             "unavailable",
@@ -1182,8 +1390,7 @@ async function openChat(
 ): Promise<PreparedAgentHostSession> {
   if (request.resume) {
     try {
-      await connection.request("subscribe", { channel: request.resume.sessionUri });
-      await connection.request("subscribe", { channel: request.resume.chatUri });
+      await verifyResumedChat(connection, request.resume);
       return {
         ...request.resume,
         ...(request.workspaceMode
@@ -1193,8 +1400,10 @@ async function openChat(
             }
           : {}),
       };
-    } catch {
-      // The host no longer has that session; start a new one.
+    } catch (error) {
+      if (!(error instanceof AgentHostError) || error.kind !== "sessionExpired") {
+        throw error;
+      }
     }
   }
 
@@ -1312,33 +1521,29 @@ async function openChat(
   };
 }
 
-function runTurn(
+async function runTurn(
   connection: AgentHostConnection,
   ref: PreparedAgentHostSession,
   request: AgentHostTurnRequest,
   model: { id: string; config?: Record<string, string | number> } | undefined,
 ): Promise<AgentHostTurnResult> {
-  const turnId = randomUUID();
+  const messageId = `copilot-scheduler-turn-${randomUUID()}`;
+  await request.beforeDispatch?.(ref, messageId);
   return new Promise<AgentHostTurnResult>((resolve, reject) => {
+    let turnId: string | undefined;
     let appliedModel: string | undefined;
     let responseTextObserved = false;
     let responseTextUncertain = false;
     const markdownParts = new Set<string>();
     let settled = false;
     let dispatchStarted = false;
-    let guardPending = !!request.dispatchGuard;
+    let queueConfirmed = false;
     let pendingOutcome: (() => void) | undefined;
-    let sessionStarted = false;
+    let timedOut = false;
+    let cancelSent = false;
+    let removalOrigin: AgentHostActionOrigin | undefined;
     let cancelTimer: NodeJS.Timeout | undefined;
-    const revealSession = () => {
-      if (sessionStarted) return;
-      sessionStarted = true;
-      try {
-        request.onSessionStarted?.(ref);
-      } catch {
-        // Revealing the session is best effort and must not fail the run.
-      }
-    };
+    let stopInputObservation: () => void = () => undefined;
     const finish = (outcome: () => void) => {
       if (settled) {
         return;
@@ -1348,19 +1553,30 @@ function runTurn(
       if (cancelTimer) {
         clearTimeout(cancelTimer);
       }
+      stopInputObservation();
       stopListening();
       stopWatchingClose();
       outcome();
     };
-    const finishAfterGuard = (outcome: () => void) => {
-      if (guardPending) {
+    const finishAfterQueue = (outcome: () => void) => {
+      if (!queueConfirmed) {
         pendingOutcome ??= outcome;
       } else {
         finish(outcome);
       }
     };
 
+    const cancelTurn = () => {
+      if (!turnId || cancelSent) return;
+      cancelSent = true;
+      void connection.dispatch(ref.chatUri, {
+        type: "chat/turnCancelled",
+        turnId,
+        duration: request.timeoutMs,
+      }, CANCEL_TIMEOUT_MS).catch(() => undefined);
+    };
     const timer = setTimeout(() => {
+      timedOut = true;
       if (!dispatchStarted) {
         finish(() =>
           reject(new AgentHostError("failed", "The Agent Host run timed out before dispatch.", "unknown")),
@@ -1381,29 +1597,43 @@ function runTurn(
           ),
         CANCEL_TIMEOUT_MS,
       );
-      void connection
-        .dispatch(
-          ref.chatUri,
-          {
-            type: "chat/turnCancelled",
-            turnId,
-            duration: request.timeoutMs,
-          },
-          CANCEL_TIMEOUT_MS,
-        )
-        .catch(() => undefined);
+      if (turnId) {
+        cancelTurn();
+      } else {
+        const removed = connection.dispatchWithOrigin(ref.chatUri, {
+          type: "chat/pendingMessageRemoved",
+          id: messageId,
+          kind: "queued",
+        }, CANCEL_TIMEOUT_MS);
+        removalOrigin = removed.origin;
+        void removed.response.catch(() => undefined);
+      }
     }, request.timeoutMs);
 
     const stopListening = connection.onAction((channel, action, envelope) => {
       if (channel !== ref.chatUri) {
         return;
       }
-      // A continued chat can carry events of other turns; only this turn counts.
-      if (action.turnId !== turnId) {
+      if (
+        action.type === "chat/pendingMessageRemoved" &&
+        action.id === messageId &&
+        !envelope.rejected &&
+        !turnId &&
+        removalOrigin &&
+        isRecord(envelope.origin) &&
+        envelope.origin.clientId === removalOrigin.clientId &&
+        envelope.origin.clientSeq === removalOrigin.clientSeq
+      ) {
+        // The reducer may echo a removal even when the message was already gone.
+        finishAfterQueue(() => reject(new AgentHostError(
+          "failed",
+          "The Agent Host queue cancellation could not be confirmed.",
+          "unknown",
+        )));
         return;
       }
-      if (envelope.rejected) {
-        if (action.type === "chat/turnStarted") {
+      if (action.type === "chat/turnStarted" && action.queuedMessageId === messageId) {
+        if (envelope.rejected || typeof action.turnId !== "string" || !action.turnId) {
           finish(() =>
             reject(
               new AgentHostError(
@@ -1413,18 +1643,24 @@ function runTurn(
               ),
             ),
           );
+        } else if (!turnId) {
+          turnId = action.turnId;
+          try {
+            request.onSessionStarted?.(
+              ref,
+              turnId,
+              typeof action.startedAt === "string" ? action.startedAt : "",
+            );
+          } catch {
+            // Revealing the session is best effort and must not fail the run.
+          }
+          if (timedOut) cancelTurn();
         }
         return;
       }
-      if (
-        action.type === "chat/turnStarted" ||
-        action.type === "chat/responsePart" ||
-        action.type === "chat/delta" ||
-        action.type === "chat/usage" ||
-        action.type === "chat/turnComplete" ||
-        action.type === "chat/error"
-      ) {
-        revealSession();
+      // Other chats and other turns, including user input requests, are not this turn.
+      if (!turnId || action.turnId !== turnId || envelope.rejected) {
+        return;
       }
       if (action.type === "chat/responsePart") {
         const part = action.part;
@@ -1465,7 +1701,7 @@ function runTurn(
           appliedModel = usage.model;
         }
       } else if (action.type === "chat/turnComplete") {
-        finishAfterGuard(() =>
+        finishAfterQueue(() =>
           resolve({
             ...ref,
             ...(model ? { requestedModel: model.id } : {}),
@@ -1481,7 +1717,7 @@ function runTurn(
         const part = action.part as { error?: { message?: unknown } } | undefined;
         const detail =
           typeof part?.error?.message === "string" ? part.error.message : "";
-        finishAfterGuard(() =>
+        finishAfterQueue(() =>
           reject(
             new AgentHostError(
               "failed",
@@ -1491,7 +1727,7 @@ function runTurn(
           ),
         );
       } else if (action.type === "chat/turnCancelled") {
-        finishAfterGuard(() =>
+        finishAfterQueue(() =>
           reject(
             new AgentHostError(
               "failed",
@@ -1515,72 +1751,41 @@ function runTurn(
       ),
     );
 
-    const dispatch = () => {
-      if (settled || dispatchStarted) return;
-      dispatchStarted = true;
-      void connection
-        .dispatch(ref.chatUri, {
-        type: "chat/turnStarted",
-        turnId,
-        startedAt: new Date().toISOString(),
-        message: {
-          text: request.text,
-          origin: { kind: "user" },
-          ...(model ? { model } : {}),
-          ...(request.agentUri ? { agent: { uri: request.agentUri } } : {}),
-          ...(request.attachments && request.attachments.length > 0
-            ? {
-                attachments: request.attachments.map((item) => ({
-                  type: "resource",
-                  label: item.label,
-                  uri: item.uri,
-                })),
-              }
-            : {}),
-        },
-        })
-        .catch((error: unknown) =>
-          finish(() =>
-            reject(
-              new AgentHostError(
-                "failed",
-                error instanceof AgentHostError
-                  ? error.message
-                  : "The Agent Host rejected the run.",
-                "unknown",
-              ),
-            ),
-          ),
-        );
-    };
-    if (request.dispatchGuard) {
-      void request.dispatchGuard(dispatch).then(
-        () => {
-          guardPending = false;
-          if (pendingOutcome) finish(pendingOutcome);
-          else if (!dispatchStarted) {
-            finish(() =>
-              reject(
-                new AgentHostError(
-                  "failed",
-                  "The task reservation did not allow a turn.",
-                ),
-              ),
-            );
-          }
-        },
-        (error: unknown) =>
-          finish(() =>
-            reject(
-              dispatchStarted
-                ? new AgentHostError("failed", "The dispatch outcome could not be confirmed.", "unknown")
-                : error,
-            ),
-          ),
-      );
-    } else {
-      dispatch();
-    }
+    void dispatchQueuedMessage(
+      connection,
+      ref.chatUri,
+      messageId,
+      agentHostMessage(request, model),
+      request.dispatchGuard,
+      () => {
+        dispatchStarted = true;
+        if (request.onInputNeeded) {
+          stopInputObservation = observeAgentHostInput(
+            connection,
+            ref,
+            (change) => request.onInputNeeded?.(ref, change),
+            { onObservationError: request.onInputObservationError },
+          );
+        }
+        try {
+          request.onMessageDispatched?.(ref);
+        } catch {
+          // Observation must not change the dispatch outcome.
+        }
+      },
+      () => !settled && !timedOut,
+    ).then(
+      () => {
+        queueConfirmed = true;
+        if (pendingOutcome) finish(pendingOutcome);
+      },
+      (error: unknown) => finish(() => reject(
+        error instanceof AgentHostError &&
+        error.message === "The task reservation did not allow a queued message."
+          ? new AgentHostError("failed", "The task reservation did not allow a turn.")
+          : error,
+      )),
+    );
   });
 }
 

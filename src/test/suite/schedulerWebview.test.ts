@@ -1253,6 +1253,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostWorkspaceMode?: "folder" | "worktree";
         chatSession?: "new" | "continue";
         preventAgentHostFallback?: boolean;
+        useCopilotCli?: boolean;
+        attachments?: Array<{ source: "local" | "global"; path: string }>;
       }) => void;
       handleMessage?: (message: unknown) => Promise<void>;
     };
@@ -1267,6 +1269,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agentHostWorkspaceMode?: "folder" | "worktree";
           chatSession?: "new" | "continue";
           preventAgentHostFallback?: boolean;
+          useCopilotCli?: boolean;
+          attachments?: Array<{ source: "local" | "global"; path: string }>;
         }
       | undefined;
 
@@ -1280,6 +1284,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agentHostWorkspaceMode: request.agentHostWorkspaceMode,
           chatSession: request.chatSession,
           preventAgentHostFallback: request.preventAgentHostFallback,
+          useCopilotCli: request.useCopilotCli,
+          attachments: request.attachments,
         };
       };
 
@@ -1297,6 +1303,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostWorkspaceMode: "folder",
         chatSession: "continue",
         preventAgentHostFallback: true,
+        useCopilotCli: true,
+        attachments: [{ source: "local", path: "AGENTS.md" }],
       });
 
       assert.deepStrictEqual(received, {
@@ -1307,6 +1315,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostWorkspaceMode: "folder",
         chatSession: "continue",
         preventAgentHostFallback: true,
+        useCopilotCli: true,
+        attachments: [{ source: "local", path: "AGENTS.md" }],
       });
     } finally {
       wv.onTestPromptCallback = originalCallback;
@@ -1438,7 +1448,7 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
     assert.ok(
       sourceContainsToken(
         block,
-        'showFormError(strings.promptRequired || "", 5000)',
+        'failValidation( strings.promptRequired || "",',
       ),
       "empty prompt should show promptRequired error in test button flow.",
     );
@@ -1913,12 +1923,13 @@ suite("SchedulerWebview Script Contract Tests", () => {
     for (const token of [
       'var modelFallbackInput = document.getElementById("model-fallback");',
       "modelFallback: source.modelFallback === true,",
-      "modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,",
+      "modelFallback: modelFallbackInput",
+      'getSavedTaskField("modelFallback", false) === true',
       "if (modelFallbackInput) modelFallbackInput.checked = false;",
       "modelFallbackInput.checked = task.modelFallback === true;",
       'var useCopilotCliInput = document.getElementById("use-copilot-cli");',
       "useCopilotCli: source.useCopilotCli === true,",
-      "useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,",
+      "useCopilotCli: getUseCopilotCliForSubmit(),",
       "if (useCopilotCliInput) useCopilotCliInput.checked = false;",
       "useCopilotCliInput.checked = task.useCopilotCli === true;",
     ]) {
@@ -1939,7 +1950,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(
       script
         .slice(testPromptStart, testPromptEnd)
-        .includes("useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,"),
+        .includes("useCopilotCli: getUseCopilotCliForSubmit(),"),
     );
     const webviewHost = fs.readFileSync(
       path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
@@ -1953,6 +1964,281 @@ suite("SchedulerWebview Script Contract Tests", () => {
         .split(/\n\s*(?:case |default:)/, 1)[0]
         .includes("message.useCopilotCli === true"),
     );
+  });
+
+  test("CLI marker follows the visible control and current selection", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const control = { checked: true };
+    const controls = { hidden: false };
+    const marker = { hidden: true };
+    const details = { open: false };
+    const factory = new Function(
+      "useCopilotCliInput",
+      "editingTaskSnapshot",
+      "copilotCliControls",
+      "copilotCliConfigured",
+      "advancedSettings",
+      "advancedSummary",
+      "rescueFocusFrom",
+      [
+        "var showCopilotCliControls = false;",
+        extractFunctionSource(source, "getSavedTaskField"),
+        extractFunctionSource(source, "getUseCopilotCliForSubmit"),
+        extractFunctionSource(source, "updateCliControlVisibility"),
+        "return { update: updateCliControlVisibility, show: function (value) { showCopilotCliControls = value; } };",
+      ].join("\n"),
+    );
+    const visibility = factory(
+      control,
+      { useCopilotCli: true },
+      controls,
+      marker,
+      details,
+      null,
+      () => undefined,
+    ) as { update: () => void; show: (value: boolean) => void };
+    visibility.update();
+    assert.strictEqual(controls.hidden, true);
+    assert.strictEqual(marker.hidden, false);
+
+    visibility.show(true);
+    visibility.update();
+    assert.strictEqual(controls.hidden, false);
+    assert.strictEqual(marker.hidden, false, "collapsed Advanced still hides the control");
+    details.open = true;
+    visibility.update();
+    assert.strictEqual(marker.hidden, true);
+    control.checked = false;
+    details.open = false;
+    visibility.update();
+    assert.strictEqual(marker.hidden, true, "an unchecked draft must not claim CLI is selected");
+
+    const unrendered = factory(
+      null,
+      { useCopilotCli: true },
+      null,
+      marker,
+      details,
+      null,
+      () => undefined,
+    ) as { update: () => void };
+    unrendered.update();
+    assert.strictEqual(marker.hidden, false, "unrendered saved CLI still needs a marker");
+  });
+
+  test("display setting updates preserve dirty create and edit fields", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const start = source.indexOf('case "updateDisplaySettings":');
+    const end = source.indexOf("break;", start);
+    assert.ok(start >= 0 && end > start);
+    const branch = source.slice(start, end + "break;".length);
+    const dirty = {
+      name: { value: "dirty name" },
+      jitter: { value: "17" },
+      autoMode: { checked: true },
+      cli: { checked: true },
+    };
+    const controls = { hidden: true };
+    const marker = { hidden: true };
+    const details = { open: false };
+    const unexpectedReset = () => assert.fail("display-only update reset form data");
+    const factory = new Function(
+      "useCopilotCliInput",
+      "editingTaskSnapshot",
+      "copilotCliControls",
+      "copilotCliConfigured",
+      "advancedSettings",
+      "advancedSummary",
+      "rescueFocusFrom",
+      "resetForm",
+      "applyUpdatedDefaultsToCreateForm",
+      [
+        "var showCopilotCliControls = false;",
+        extractFunctionSource(source, "getSavedTaskField"),
+        extractFunctionSource(source, "getUseCopilotCliForSubmit"),
+        extractFunctionSource(source, "updateCliControlVisibility"),
+        `return function (message) { switch (message.type) { ${branch} } };`,
+      ].join("\n"),
+    );
+    for (const snapshot of [null, { useCopilotCli: true }]) {
+      const receive = factory(
+        dirty.cli,
+        snapshot,
+        controls,
+        marker,
+        details,
+        null,
+        () => undefined,
+        unexpectedReset,
+        unexpectedReset,
+      ) as (message: { type: string; showCopilotCliControls: boolean }) => void;
+      receive({ type: "updateDisplaySettings", showCopilotCliControls: true });
+      assert.strictEqual(controls.hidden, false);
+      receive({ type: "updateDisplaySettings", showCopilotCliControls: false });
+      assert.strictEqual(controls.hidden, true);
+      assert.strictEqual(marker.hidden, false);
+      assert.deepStrictEqual(dirty, {
+        name: { value: "dirty name" },
+        jitter: { value: "17" },
+        autoMode: { checked: true },
+        cli: { checked: true },
+      });
+    }
+  });
+
+  test("one-time mode disables overlap without clearing the saved choice", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const selection = { value: "cron" };
+    const overlap = { checked: true, disabled: false };
+    const onceFields = { hidden: true };
+    const cronFields = { hidden: false };
+    const runAtInput = { required: false };
+    const cronExpression = { required: true };
+    const factory = new Function(
+      "document",
+      "allowOverlappingRunsInput",
+      "onceFields",
+      "cronFields",
+      "runAtInput",
+      "cronExpression",
+      [
+        extractFunctionSource(source, "isOneTimeMode"),
+        extractFunctionSource(source, "updateScheduleMode"),
+        "return updateScheduleMode;",
+      ].join("\n"),
+    );
+    const updateMode = factory(
+      { querySelector: () => selection },
+      overlap,
+      onceFields,
+      cronFields,
+      runAtInput,
+      cronExpression,
+    ) as () => void;
+    selection.value = "once";
+    updateMode();
+    assert.strictEqual(overlap.disabled, true);
+    assert.strictEqual(overlap.checked, true);
+    selection.value = "cron";
+    updateMode();
+    assert.strictEqual(overlap.disabled, false);
+    assert.strictEqual(overlap.checked, true);
+  });
+
+  test("validation opens Advanced and restores the original field description", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const details = { open: false, parentElement: null };
+    const attributes: Record<string, string> = { "aria-describedby": "guard-note" };
+    let focused = false;
+    const field = {
+      closest: () => details,
+      getAttribute: (name: string) => attributes[name] ?? null,
+      setAttribute: (name: string, value: string) => { attributes[name] = value; },
+      removeAttribute: (name: string) => { delete attributes[name]; },
+      focus: () => { focused = true; },
+    };
+    const factory = new Function(
+      "showFormError",
+      [
+        "var invalidFieldElement = null, invalidFieldOriginalDescription = null;",
+        extractFunctionSource(source, "clearInvalidField"),
+        extractFunctionSource(source, "revealFieldForValidation"),
+        extractFunctionSource(source, "failValidation"),
+        "return { fail: failValidation, clear: clearInvalidField };",
+      ].join("\n"),
+    );
+    const validation = factory(() => undefined) as {
+      fail: (message: string, target: typeof field) => void;
+      clear: () => void;
+    };
+    validation.fail("invalid", field);
+    assert.strictEqual(details.open, true);
+    assert.strictEqual(focused, true);
+    assert.strictEqual(attributes["aria-invalid"], "true");
+    assert.strictEqual(attributes["aria-describedby"], "guard-note form-error");
+    validation.clear();
+    assert.strictEqual(attributes["aria-invalid"], undefined);
+    assert.strictEqual(attributes["aria-describedby"], "guard-note");
+
+    delete attributes["aria-describedby"];
+    validation.fail("invalid", field);
+    assert.strictEqual(attributes["aria-describedby"], "form-error");
+    validation.clear();
+    assert.strictEqual(attributes["aria-describedby"], undefined);
+  });
+
+  test("editor order and overlap controls match their manifest contract", () => {
+    const hostSource = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/schedulerWebview.ts"),
+      "utf8",
+    );
+    const formStart = hostSource.indexOf('<form id="task-form"');
+    const formEnd = hostSource.indexOf("</form>", formStart);
+    assert.ok(formStart >= 0 && formEnd > formStart);
+    const form = hostSource.slice(formStart, formEnd);
+    const ordered = [
+      'id="task-name"',
+      'name="schedule-mode"',
+      'name="scope"',
+      'id="agent-host-workspace-mode"',
+      'id="prompt-text"',
+      'id="attachments-label"',
+      'id="agent-select"',
+      'id="model-select"',
+      'id="advanced-settings"',
+      'id="allow-overlapping-runs"',
+    ].map((token) => form.indexOf(token));
+    assert.ok(ordered.every((position) => position >= 0));
+    assert.deepStrictEqual(ordered, [...ordered].sort((a, b) => a - b));
+    const advancedTag = form.match(/<details id="advanced-settings"[^>]*>/)?.[0];
+    assert.ok(advancedTag && !/\sopen(?:[=\s>])/.test(advancedTag));
+    assert.ok(form.indexOf('id="copilot-cli-configured"') < ordered[8]);
+
+    type Schema = {
+      type?: string;
+      default?: unknown;
+      properties?: Record<string, Schema>;
+    };
+    const manifest = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, "../../../package.json"),
+      "utf8",
+    )) as {
+      contributes: {
+        configuration: { properties: Record<string, { default?: unknown }> };
+        languageModelTools: Array<{
+          name: string;
+          inputSchema: { properties: Record<string, Schema> };
+        }>;
+      };
+    };
+    const settings = manifest.contributes.configuration.properties;
+    assert.strictEqual(settings["copilotScheduler.showCopilotCliControls"].default, false);
+    assert.ok(!Object.hasOwn(settings, "copilotScheduler.maxConcurrentAutomaticRuns"));
+    const create = manifest.contributes.languageModelTools.find(
+      (tool) => tool.name === "scheduler_create_task",
+    );
+    const update = manifest.contributes.languageModelTools.find(
+      (tool) => tool.name === "scheduler_update_task",
+    );
+    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.type, "boolean");
+    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.default, false);
+    const updates = update?.inputSchema.properties.updates.properties;
+    assert.strictEqual(updates?.allowOverlappingRuns.type, "boolean");
+    assert.ok(!Object.hasOwn(updates?.allowOverlappingRuns ?? {}, "default"));
+    assert.ok(!Object.hasOwn(create?.inputSchema.properties ?? {}, "useCopilotCli"));
+    assert.ok(!Object.hasOwn(updates ?? {}, "useCopilotCli"));
   });
 
   test("Host model picker retains a saved pin offline and clears it when the source changes", () => {
@@ -2231,7 +2517,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const submitSource = extractBlockFromStartToken(source, "if (taskForm) {");
 
     const expectedTokens = [
-      'chatSession: chatSessionSelect ? chatSessionSelect.value : "default"',
+      'getSavedTaskField("chatSession", "default")',
       "jitterSeconds: jitterSecondsInput",
       "? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)",
       "maxExecutionsPerDay: maxExecutionsPerDayInput",
@@ -2285,7 +2571,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'taskForm.addEventListener("submit", function (e) {',
     );
     const callback = submitSource.slice(submitSource.indexOf("function (e)"));
-    for (const { editing, hostId, guard, workspaceMode, savedMode } of [
+    for (const {
+      editing, hostId, guard, workspaceMode, savedMode, cliChecked, overlapChecked,
+    } of [
       {
         editing: false, hostId: "vendor/group/new", guard: true,
         workspaceMode: "folder",
@@ -2307,6 +2595,16 @@ suite("SchedulerWebview Script Contract Tests", () => {
         editing: true, hostId: "", guard: false,
         workspaceMode: undefined, savedMode: "default",
       },
+      {
+        editing: true, hostId: "vendor/group/new", guard: true,
+        workspaceMode: "folder", savedMode: "folder",
+        cliChecked: false, overlapChecked: false,
+      },
+      {
+        editing: true, hostId: "vendor/group/new", guard: true,
+        workspaceMode: "folder", savedMode: "folder",
+        cliChecked: true, overlapChecked: true,
+      },
     ]) {
       const original = {
         id: "edit-task",
@@ -2320,6 +2618,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
         agentHostModelId: "vendor/group/old",
         agentHostWorkspaceMode: savedMode,
         preventAgentHostFallback: !guard,
+        useCopilotCli: true,
+        allowOverlappingRuns: true,
+        modelFallback: true,
+        autoMode: true,
+        chatSession: "continue",
         enabled: false,
       };
       const posted: Array<{ type: string; data: Partial<ScheduledTask> }> = [];
@@ -2359,10 +2662,13 @@ suite("SchedulerWebview Script Contract Tests", () => {
         afterRunSelect: null,
         cronExpression: { value: original.cronExpression },
         autoModeInput: null,
+        allowOverlappingRunsInput:
+          overlapChecked === undefined ? null : { checked: overlapChecked },
         modelFallbackInput: null,
         agentHostModelSelect: { value: hostId },
         preventAgentHostFallbackInput: { checked: guard },
-        useCopilotCliInput: null,
+        useCopilotCliInput:
+          cliChecked === undefined ? null : { checked: cliChecked },
         getSelectedSkillRefForSubmit: () => null,
         getEffectivePromptSource: () => "inline",
         getAgentHostWorkspaceModeForSubmit: () => workspaceMode,
@@ -2377,6 +2683,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         templatePromptBaseline: null,
         submitBtn: { disabled: false },
         defaultJitterSeconds: 0,
+        defaultAutoMode: false,
         serializeAttachments: (value: unknown) => JSON.stringify(value ?? []),
         clearInvalidField: () => undefined,
         failValidation: (message: string) => assert.fail(message),
@@ -2388,6 +2695,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
         ...Object.keys(context),
         [
           extractFunctionSource(source, "boundedNumber"),
+          extractFunctionSource(source, "getSavedTaskField"),
+          extractFunctionSource(source, "getUseCopilotCliForSubmit"),
           extractFunctionSource(source, "copyModelConfigurationForForm"),
           extractFunctionSource(source, "serializeModelConfigurationForDiff"),
           extractFunctionSource(source, "normalizeSkillRefClient"),
@@ -2404,6 +2713,24 @@ suite("SchedulerWebview Script Contract Tests", () => {
       assert.strictEqual(posted[0].type, editing ? "updateTask" : "createTask");
       assert.strictEqual(posted[0].data.agentHostModelId, hostId);
       assert.strictEqual(posted[0].data.preventAgentHostFallback, guard);
+      if (editing) {
+        for (const field of ["modelFallback", "autoMode", "chatSession"]) {
+          assert.ok(!Object.hasOwn(posted[0].data, field), field);
+        }
+        for (const [field, checked] of [
+          ["useCopilotCli", cliChecked],
+          ["allowOverlappingRuns", overlapChecked],
+        ] as const) {
+          if (checked === false) {
+            assert.strictEqual(posted[0].data[field], false, field);
+          } else {
+            assert.ok(!Object.hasOwn(posted[0].data, field), field);
+          }
+        }
+      } else {
+        assert.strictEqual(posted[0].data.useCopilotCli, false);
+        assert.strictEqual(posted[0].data.allowOverlappingRuns, false);
+      }
       assert.strictEqual(
         posted[0].data.agentHostWorkspaceMode,
         editing && workspaceMode === savedMode
@@ -2485,6 +2812,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           afterRunSelect: null,
           cronExpression: { value: original.cronExpression },
           autoModeInput: null,
+          allowOverlappingRunsInput: null,
           modelFallbackInput: null,
           agentHostModelSelect: null,
           preventAgentHostFallbackInput: null,
@@ -2506,6 +2834,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           templatePromptBaseline: baseline,
           submitBtn: { disabled: false },
           defaultJitterSeconds: 0,
+          defaultAutoMode: false,
           serializeAttachments: (value: unknown) => JSON.stringify(value ?? []),
           clearInvalidField: () => undefined,
           failValidation: (message: string, field: unknown) => {
@@ -2526,6 +2855,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
           ...Object.keys(context),
           [
             extractFunctionSource(source, "boundedNumber"),
+            extractFunctionSource(source, "getSavedTaskField"),
+            extractFunctionSource(source, "getUseCopilotCliForSubmit"),
             extractFunctionSource(source, "copyModelConfigurationForForm"),
             extractFunctionSource(source, "serializeModelConfigurationForDiff"),
             extractFunctionSource(source, "normalizeSkillRefClient"),
@@ -3294,7 +3625,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "clearInvalidField()",
       "showFormError(message)",
       'fieldElement.setAttribute("aria-invalid", "true")',
-      'fieldElement.setAttribute("aria-describedby", "form-error")',
+      'fieldElement.getAttribute("aria-describedby")',
+      'invalidFieldOriginalDescription + " form-error"',
+      ': "form-error"',
       "fieldElement.focus()",
     ]) {
       assert.ok(
@@ -4980,6 +5313,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
         "getAgentHostWorkspaceModeForSubmit",
         "setAgentHostWorkspaceModeSelection",
         "updateAgentHostWorkspaceModeAvailability",
+        "getSavedTaskField",
+        "getUseCopilotCliForSubmit",
         "normalizeTaskForEditDiff",
         "serializeModelConfigurationForDiff",
         "normalizeSkillRefClient",

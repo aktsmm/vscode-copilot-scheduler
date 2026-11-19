@@ -105,6 +105,29 @@ export function formatConfirmationCode(value: string): string {
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 
+export function describeOverlappingRunsForConfirmation(value: unknown): string {
+  const description =
+    value === true
+      ? messages.allowOverlappingRunsConfirmationEnabled()
+      : value === false || value === undefined
+        ? messages.allowOverlappingRunsConfirmationDisabled()
+        : messages.allowOverlappingRunsConfirmationInvalid();
+  return `- ${escapeConfirmationText(description)}`;
+}
+
+export function validateOverlappingRuns(
+  value: unknown,
+): vscode.LanguageModelToolResult | undefined {
+  if (value !== undefined && typeof value !== "boolean") {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "validation",
+      message: messages.allowOverlappingRunsInvalid(),
+    });
+  }
+  return undefined;
+}
+
 interface AgentHostToolFields {
   agentHostModelId?: unknown;
   preventAgentHostFallback?: unknown;

@@ -8,7 +8,9 @@ import { pathToFileURL } from "url";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   AgentHostError,
+  disposeAgentHostInputObservers,
   findAgentHostEndpoint,
+  isAgentHostTurnTerminal,
   listAgentHostChats,
   listAgentHostModels,
   mapModelConfiguration,
@@ -41,6 +43,7 @@ interface FakeHost {
   endpoint: AgentHostEndpoint;
   calls: Recorded[];
   sockets: () => Iterable<WebSocket>;
+  broadcast: (channel: string, action: Record<string, unknown>) => void;
   close: () => Promise<void>;
 }
 
@@ -54,12 +57,17 @@ async function startFakeHost(
     cancel?: (send: (action: Record<string, unknown>) => void) => void;
     acceptStart?: boolean;
     missingSessions?: boolean;
+    missingSessionCode?: number;
     sessionPages?: Array<{
       items: Array<Record<string, unknown>>;
       nextCursor?: string;
     }>;
     queueAck?: boolean;
     queueRejected?: boolean;
+    queueStateMissing?: boolean;
+    keepNewTurnQueued?: boolean;
+    removalAck?: boolean;
+    distinctChats?: boolean;
     queueInterference?: "otherClient" | "otherSequence" | "missingOrigin";
     queueInterferenceRejected?: boolean;
     models?: unknown;
@@ -74,6 +82,13 @@ async function startFakeHost(
       ? `\\\\.\\pipe\\copilot-scheduler-test-${process.pid}-${Date.now()}`
       : path.join(tmp, "host.sock");
   const calls: Recorded[] = [];
+  const sessionChats = new Map<string, string>();
+  const pending = new Map<string, Array<{ id: string; kind: string }>>();
+  const active = new Map<string, string>();
+  const turns = new Map<string, Array<{ id: string; state: string }>>();
+  let nextChat = 0;
+  let nextTurn = 0;
+  let serverSeq = 0;
   const server = http.createServer();
   const wss = new WebSocketServer({ server });
 
@@ -93,6 +108,7 @@ async function startFakeHost(
           params: {
             channel,
             action,
+            serverSeq: ++serverSeq,
             ...(rejectionReason === undefined ? {} : { rejectionReason }),
             ...(origin === undefined ? {} : { origin }),
           },
@@ -130,6 +146,10 @@ async function startFakeHost(
           });
           break;
         case "createSession":
+          sessionChats.set(
+            String(message.params.channel),
+            `ahp-chat:/chat-${behaviour.distinctChats ? ++nextChat : 1}`,
+          );
           reply(null);
           break;
         case "resolveSessionConfig":
@@ -151,7 +171,7 @@ async function startFakeHost(
               JSON.stringify({
                 jsonrpc: "2.0",
                 id: message.id,
-                error: { code: -32002, message: "Unknown session" },
+                error: { code: behaviour.missingSessionCode ?? -32001, message: "Unknown session" },
               }),
             );
           } else {
@@ -173,7 +193,9 @@ async function startFakeHost(
             if (session) {
               reply({
                 snapshot: {
+                  fromSeq: serverSeq,
                   state: {
+                    resource: session.resource,
                     lifecycle: "ready",
                     provider: session.provider,
                     chats: session.chats,
@@ -190,21 +212,42 @@ async function startFakeHost(
               );
               reply({
                 snapshot: {
+                  fromSeq: serverSeq,
                   state: {
                     resource: chat.resource,
                     provider: chat.provider,
                     title: chat.title,
                     workingDirectories:
                       chat.workingDirectories ?? parent?.workingDirectories,
+                    queuedMessages: behaviour.queueStateMissing ? [] : pending.get(channel) ?? [],
+                    activeTurn: active.has(channel) ? { id: active.get(channel) } : undefined,
+                    turns: turns.get(channel) ?? [],
                   },
                 },
               });
             } else {
+              const isSession = channel.startsWith("ahp-session:");
+              const defaultChat = sessionChats.get(channel) ??
+                channel.replace("ahp-session:", "ahp-chat:");
               reply({
                 snapshot: {
+                  fromSeq: serverSeq,
                   state: {
-                    defaultChat: "ahp-chat:/chat-1",
-                    ...(channel.startsWith("ahp-session:")
+                    resource: channel,
+                    ...(isSession
+                      ? {
+                          defaultChat,
+                          lifecycle: "ready",
+                          provider: "copilotcli",
+                          chats: [{ resource: defaultChat }],
+                        }
+                      : {
+                          provider: "copilotcli",
+                          queuedMessages: behaviour.queueStateMissing ? [] : pending.get(channel) ?? [],
+                          activeTurn: active.has(channel) ? { id: active.get(channel) } : undefined,
+                          turns: turns.get(channel) ?? [],
+                        }),
+                    ...(isSession
                       ? behaviour.sessionState
                       : behaviour.chatState),
                   },
@@ -221,26 +264,18 @@ async function startFakeHost(
             turnId?: string;
             id?: string;
           };
-          if (action.type === "chat/turnStarted") {
-            const send = (next: Record<string, unknown>, rejectionReason?: string) =>
-              notify(channel, { turnId: action.turnId, ...next }, rejectionReason);
-            if (behaviour.acceptStart !== false) {
-              send({ type: "chat/turnStarted" });
-            }
-            if (behaviour.finish) {
-              behaviour.finish(send);
-            } else {
-              send({
-                type: "chat/usage",
-                usage: { model: "claude-sonnet-5.5" },
-              });
-              send({ type: "chat/turnComplete" });
-            }
-          } else if (action.type === "chat/turnCancelled" && behaviour.cancel) {
+          if (action.type === "chat/turnCancelled" && behaviour.cancel) {
             behaviour.cancel((next) =>
               notify(channel, { turnId: action.turnId, ...next }),
             );
+          } else if (action.type === "chat/pendingMessageRemoved" && behaviour.removalAck) {
+            notify(channel, action, undefined, { clientId, clientSeq: Number(message.params.clientSeq) });
           } else if (action.type === "chat/pendingMessageSet") {
+            if (!behaviour.queueRejected && typeof action.id === "string") {
+              const items = (pending.get(channel) ?? []).filter((item) => item.id !== action.id);
+              items.push({ id: action.id, kind: "queued" });
+              pending.set(channel, items);
+            }
             if (behaviour.queueAck !== false) {
               const clientSeq = message.params.clientSeq;
               assert.ok(typeof clientSeq === "number");
@@ -270,6 +305,49 @@ async function startFakeHost(
                 origin,
               );
             }
+            if (
+              typeof action.id === "string" &&
+              action.id.startsWith("copilot-scheduler-turn-") &&
+              !behaviour.queueRejected &&
+              !behaviour.keepNewTurnQueued
+            ) {
+              const messageId = action.id;
+              const turnId = `turn-${++nextTurn}`;
+              const startedAt = new Date(Date.now() + nextTurn).toISOString();
+              const send = (next: Record<string, unknown>, rejectionReason?: string) => {
+                const sent = {
+                  turnId,
+                  ...(next.type === "chat/turnStarted"
+                    ? { queuedMessageId: messageId, startedAt }
+                    : {}),
+                  ...next,
+                };
+                if (rejectionReason === undefined && sent.turnId === turnId) {
+                  if (next.type === "chat/turnStarted") {
+                    active.set(channel, turnId);
+                    pending.set(channel, (pending.get(channel) ?? []).filter((item) => item.id !== messageId));
+                  } else if (
+                    next.type === "chat/turnComplete" ||
+                    next.type === "chat/error" ||
+                    next.type === "chat/turnCancelled"
+                  ) {
+                    active.delete(channel);
+                    const state = next.type === "chat/turnComplete"
+                      ? "complete"
+                      : next.type === "chat/error" ? "error" : "cancelled";
+                    turns.set(channel, [...(turns.get(channel) ?? []), { id: turnId, state }]);
+                  }
+                }
+                notify(channel, sent, rejectionReason);
+              };
+              if (behaviour.acceptStart !== false) send({ type: "chat/turnStarted" });
+              if (behaviour.finish) {
+                behaviour.finish(send);
+              } else {
+                send({ type: "chat/usage", usage: { model: "claude-sonnet-5.5" } });
+                send({ type: "chat/turnComplete" });
+              }
+            }
           }
           break;
         }
@@ -284,6 +362,14 @@ async function startFakeHost(
     endpoint: { socketPath, token: "secret", protocolVersion: "1.1.0" },
     calls,
     sockets: () => wss.clients,
+    broadcast: (channel, action) => {
+      const message = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "action",
+        params: { channel, action, serverSeq: ++serverSeq },
+      });
+      for (const client of wss.clients) client.send(message);
+    },
     close: () =>
       new Promise<void>((resolve) => {
         wss.close(() => server.close(() => resolve()));
@@ -415,12 +501,27 @@ suite("Agent Host client", () => {
       const second = await queueAgentHostMessage(request);
       assert.strictEqual(first.messageId, second.messageId);
       assert.match(first.messageId, /^copilot-scheduler-[a-f0-9]{64}$/);
+      const occurrence = await queueAgentHostMessage({ ...request, occurrenceId: "2026-01-01T10:00:00.000Z" });
+      const retry = await queueAgentHostMessage({ ...request, occurrenceId: "2026-01-01T10:00:00.000Z" });
+      const next = await queueAgentHostMessage({ ...request, occurrenceId: "2026-01-01T11:00:00.000Z" });
+      const otherTask = await queueAgentHostMessage({
+        ...request, taskId: "another-task", occurrenceId: "2026-01-01T10:00:00.000Z",
+      });
+      assert.match(occurrence.messageId, /^copilot-scheduler-occurrence-[a-f0-9]{64}$/);
+      assert.strictEqual(occurrence.messageId, retry.messageId);
+      assert.notStrictEqual(occurrence.messageId, next.messageId);
+      assert.notStrictEqual(occurrence.messageId, first.messageId);
+      assert.notStrictEqual(occurrence.messageId, otherTask.messageId);
+      await assert.rejects(
+        queueAgentHostMessage({ ...request, taskId: undefined, occurrenceId: "occurrence" }),
+        (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported",
+      );
       const queued = host.calls.filter((call) => {
         if (call.method !== "dispatchAction") return false;
         const action = call.params.action as Record<string, unknown> | undefined;
         return action?.type === "chat/pendingMessageSet";
       });
-      assert.strictEqual(queued.length, 2);
+      assert.strictEqual(queued.length, 6);
       const firstAction = queued[0].params.action as Record<string, unknown>;
       assert.strictEqual(firstAction.kind, "queued");
       assert.strictEqual(firstAction.id, first.messageId);
@@ -443,9 +544,336 @@ suite("Agent Host client", () => {
           const action = call.params.action as Record<string, unknown> | undefined;
           return action?.type === "chat/pendingMessageSet";
         }).length,
-        2,
+        6,
       );
     } finally {
+      await host.close();
+    }
+  });
+
+  test("requires queue state as well as a matching dispatch echo", async () => {
+    const chatUri = "ahp-copilotcli:/chat-1";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: "ahp-copilotcli:/session-1",
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+      queueStateMissing: true,
+    });
+    try {
+      await assert.rejects(
+        queueAgentHostMessage({
+          endpoint: host.endpoint,
+          targetChatId: toAgentHostChatBindingId(chatUri),
+          taskId: "stable-task-id",
+          text: "synthetic",
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+      assert.strictEqual(
+        host.calls.filter((call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type?: string }).type === "chat/pendingMessageSet",
+        ).length,
+        1,
+      );
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("queues behind an input-waiting turn without starting or completing it", async () => {
+    let sendTurnEvent: ((action: Record<string, unknown>) => void) | undefined;
+    let acceptStart!: (value: { ref: { sessionUri: string; chatUri: string }; turnId: string }) => void;
+    const started = new Promise<{ ref: { sessionUri: string; chatUri: string }; turnId: string }>((resolve) => {
+      acceptStart = resolve;
+    });
+    const host = await startFakeHost(tmp, {
+      finish: (send) => {
+        sendTurnEvent = send;
+        send({ type: "chat/inputRequested", turnId: undefined, requestId: "input-1" });
+      },
+    });
+    let runSettled = false;
+    const running = runAgentHostTurn({
+      ...baseRequest(host.endpoint),
+      onSessionStarted: (ref, turnId) => acceptStart({ ref, turnId }),
+    });
+    void running.then(() => { runSettled = true; }, () => { runSettled = true; });
+    try {
+      const { ref, turnId } = await Promise.race([
+        started,
+        running.then(() => assert.fail("the input-waiting turn must not complete yet")),
+      ]);
+      assert.strictEqual(await isAgentHostTurnTerminal(host.endpoint, ref, turnId), false);
+      const queued = await queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(ref.chatUri),
+        resume: ref,
+        taskId: "another-task",
+        text: "synthetic queued message",
+      });
+      assert.strictEqual(queued.chatUri, ref.chatUri);
+      assert.strictEqual(runSettled, false, "queue acceptance is not turn completion");
+      const actions = host.calls
+        .filter((call) => call.method === "dispatchAction")
+        .map((call) => call.params.action as { type: string; kind?: string });
+      assert.strictEqual(actions.filter((action) => action.type === "chat/pendingMessageSet").length, 2);
+      assert.ok(actions.every((action) => action.type !== "chat/turnStarted"));
+      assert.ok(actions.every((action) => action.kind !== "steering"));
+      assert.ok(sendTurnEvent);
+      sendTurnEvent({ type: "chat/inputCompleted", turnId: undefined, requestId: "input-1" });
+      sendTurnEvent({ type: "chat/turnComplete" });
+      await running;
+      assert.strictEqual(await isAgentHostTurnTerminal(host.endpoint, ref, turnId), true);
+      assert.strictEqual(await isAgentHostTurnTerminal(host.endpoint, ref, "unrelated-turn"), false);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("observes input on a running turn without answering it", async () => {
+    let sendTurnEvent!: (action: Record<string, unknown>) => void;
+    let acceptStart!: (ref: { sessionUri: string; chatUri: string }) => void;
+    let acceptInput!: () => void;
+    const started = new Promise<{ sessionUri: string; chatUri: string }>((resolve) => {
+      acceptStart = resolve;
+    });
+    const inputSeen = new Promise<void>((resolve) => { acceptInput = resolve; });
+    const host = await startFakeHost(tmp, { finish: (send) => { sendTurnEvent = send; } });
+    const changes: Array<{ id: string; kind: string; waiting: boolean }> = [];
+    const running = runAgentHostTurn({
+      ...baseRequest(host.endpoint),
+      onSessionStarted: (ref) => acceptStart(ref),
+      onInputNeeded: (_ref, change) => {
+        changes.push(change);
+        if (change.waiting) acceptInput();
+      },
+    });
+    try {
+      const ref = await started;
+      host.broadcast(ref.sessionUri, {
+        type: "session/inputNeededSet",
+        request: { id: "input", kind: "chatInput", chat: ref.chatUri, request: { id: "question" } },
+      });
+      host.broadcast(ref.chatUri, { type: "chat/inputRequested", request: { id: "question" } });
+      await inputSeen;
+      host.broadcast(ref.chatUri, { type: "chat/inputCompleted", requestId: "question" });
+      sendTurnEvent({ type: "chat/turnComplete" });
+      await running;
+      assert.deepStrictEqual(changes, [
+        { id: "input", kind: "chatInput", waiting: true },
+        { id: "input", kind: "chatInput", waiting: false },
+      ]);
+      assert.ok(host.calls.every((call) =>
+        call.method !== "dispatchAction" ||
+        (call.params.action as { type?: string }).type !== "chat/inputCompleted",
+      ));
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("keeps observing a queued chat until its own turn finishes", async () => {
+    const sessionUri = "ahp-session:/existing";
+    const chatUri = "ahp-chat:/existing";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: sessionUri,
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+    });
+    const changes: Array<{ id: string; kind: string; waiting: boolean }> = [];
+    let acceptInput!: () => void;
+    const inputSeen = new Promise<void>((resolve) => { acceptInput = resolve; });
+    try {
+      const queued = await queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        taskId: "task",
+        text: "synthetic",
+        inputObservationTimeoutMs: 5000,
+        onInputNeeded: (_ref, change) => {
+          changes.push(change);
+          if (change.waiting) acceptInput();
+        },
+      });
+      const socket = [...host.sockets()][0];
+      assert.ok(socket, "queue acceptance must retain the observation connection");
+      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      host.broadcast(chatUri, { type: "chat/turnStarted", turnId: "previous", queuedMessageId: "previous" });
+      host.broadcast(sessionUri, {
+        type: "session/inputNeededSet",
+        request: { id: "approval", kind: "toolConfirmation", chat: chatUri, turnId: "previous" },
+      });
+      await inputSeen;
+      host.broadcast(sessionUri, { type: "session/inputNeededRemoved", id: "approval" });
+      host.broadcast(chatUri, { type: "chat/turnComplete", turnId: "previous" });
+      host.broadcast(chatUri, { type: "chat/turnStarted", turnId: "own", queuedMessageId: queued.messageId });
+      host.broadcast(chatUri, { type: "chat/turnComplete", turnId: "own" });
+      await closed;
+      assert.deepStrictEqual(changes, [
+        { id: "approval", kind: "toolConfirmation", waiting: true },
+        { id: "approval", kind: "toolConfirmation", waiting: false },
+      ]);
+    } finally {
+      disposeAgentHostInputObservers();
+      await host.close();
+    }
+  });
+
+  test("reports a queue left pending after an earlier turn is cancelled", async () => {
+    const sessionUri = "ahp-session:/existing";
+    const chatUri = "ahp-chat:/existing";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: sessionUri,
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+    });
+    const changes: Array<{ id: string; waiting: boolean }> = [];
+    let acceptBlocked!: () => void;
+    const blocked = new Promise<void>((resolve) => { acceptBlocked = resolve; });
+    try {
+      const queued = await queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        taskId: "task",
+        text: "synthetic",
+        inputObservationTimeoutMs: 5000,
+        onQueueBlocked: (_ref, change) => {
+          changes.push(change);
+          if (change.waiting) acceptBlocked();
+        },
+      });
+      const socket = [...host.sockets()][0];
+      assert.ok(socket, "queue observation must keep the connection open");
+      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      host.broadcast(chatUri, { type: "chat/turnCancelled", turnId: "previous" });
+      await blocked;
+      host.broadcast(chatUri, { type: "chat/turnStarted", turnId: "own", queuedMessageId: queued.messageId });
+      host.broadcast(chatUri, { type: "chat/turnComplete", turnId: "own" });
+      await closed;
+      assert.deepStrictEqual(changes, [
+        { id: queued.messageId, waiting: true },
+        { id: queued.messageId, waiting: false },
+      ]);
+      assert.strictEqual(host.calls.filter((call) =>
+        call.method === "dispatchAction" &&
+        (call.params.action as { type?: string }).type === "chat/pendingMessageSet",
+      ).length, 1, "observation must not resend the task");
+    } finally {
+      disposeAgentHostInputObservers();
+      await host.close();
+    }
+  });
+
+  test("does not send a new or queued message if the pre-dispatch write fails", async () => {
+    const sessionUri = "ahp-session:/existing";
+    const chatUri = "ahp-chat:/existing";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: sessionUri,
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+    });
+    const failWrite = async () => { throw new Error("storage unavailable"); };
+    try {
+      await assert.rejects(runAgentHostTurn({
+        ...baseRequest(host.endpoint), beforeDispatch: failWrite,
+      }), /storage unavailable/);
+      await assert.rejects(queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        text: "synthetic",
+        beforeDispatch: failWrite,
+      }), /storage unavailable/);
+      assert.strictEqual(host.calls.filter((call) =>
+        call.method === "dispatchAction" &&
+        (call.params.action as { type?: string }).type === "chat/pendingMessageSet",
+      ).length, 0);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("does not subscribe to input when the dispatch guard rejects", async () => {
+    const sessionUri = "ahp-session:/existing";
+    const chatUri = "ahp-chat:/existing";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: sessionUri,
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+    });
+    try {
+      await assert.rejects(queueAgentHostMessage({
+        endpoint: host.endpoint,
+        targetChatId: toAgentHostChatBindingId(chatUri),
+        text: "synthetic",
+        onInputNeeded: () => assert.fail("input must not be reported before dispatch"),
+        dispatchGuard: async () => { throw new Error("blocked"); },
+      }), /blocked/);
+      assert.strictEqual(host.calls.filter((call) => call.method === "subscribe").length, 2);
+      assert.strictEqual(host.calls.filter((call) => call.method === "dispatchAction").length, 0);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("closes a queued input observer on timeout or extension disposal", async () => {
+    const sessionUri = "ahp-session:/existing";
+    const chatUri = "ahp-chat:/existing";
+    const host = await startFakeHost(tmp, {
+      sessionPages: [{
+        items: [{
+          resource: sessionUri,
+          provider: "copilotcli",
+          workingDirectories: [pathToFileURL(tmp).href],
+          chats: [{ resource: chatUri, interactivity: "interactive" }],
+        }],
+      }],
+    });
+    try {
+      for (const timeout of [true, false]) {
+        await queueAgentHostMessage({
+          endpoint: host.endpoint,
+          targetChatId: toAgentHostChatBindingId(chatUri),
+          text: "synthetic",
+          inputObservationTimeoutMs: timeout ? 100 : 5000,
+          onInputNeeded: () => undefined,
+        });
+        const socket = [...host.sockets()][0];
+        assert.ok(socket);
+        const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+        if (!timeout) disposeAgentHostInputObservers();
+        await closed;
+      }
+    } finally {
+      disposeAgentHostInputObservers();
       await host.close();
     }
   });
@@ -629,7 +1057,7 @@ suite("Agent Host client", () => {
       const starts = () => host.calls.filter(
         (call) =>
           call.method === "dispatchAction" &&
-          (call.params.action as { type: string }).type === "chat/turnStarted",
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
       ).length;
       assert.strictEqual(starts(), 1);
       const blocked = new Error("reservation changed");
@@ -663,7 +1091,7 @@ suite("Agent Host client", () => {
       assert.ok(!host.calls.some(
         (call) =>
           call.method === "dispatchAction" &&
-          (call.params.action as { type: string }).type === "chat/turnStarted",
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
       ));
     } finally {
       await host.close();
@@ -688,7 +1116,7 @@ suite("Agent Host client", () => {
       assert.strictEqual(host.calls.filter(
         (call) =>
           call.method === "dispatchAction" &&
-          (call.params.action as { type: string }).type === "chat/turnStarted",
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
       ).length, 1);
     } finally {
       await host.close();
@@ -775,7 +1203,7 @@ suite("Agent Host client", () => {
       assert.ok(!host.calls.some(
         (call) =>
           call.method === "dispatchAction" &&
-          (call.params.action as { type: string }).type === "chat/turnStarted",
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
       ));
     } finally {
       release();
@@ -907,6 +1335,39 @@ suite("Agent Host client", () => {
       host = undefined;
     });
 
+    test("runs new sessions concurrently even for the same folder and approval policy", async () => {
+      const senders: Array<(action: Record<string, unknown>) => void> = [];
+      const refs: Array<{ sessionUri: string; chatUri: string }> = [];
+      let acceptStarts!: () => void;
+      const started = new Promise<void>((resolve) => { acceptStarts = resolve; });
+      host = await startFakeHost(tmp, {
+        distinctChats: true,
+        finish: (send) => { senders.push(send); },
+      });
+      const request = {
+        ...baseRequest(host.endpoint),
+        cwdUri: pathToFileURL(tmp).href,
+        onSessionStarted: (ref: { sessionUri: string; chatUri: string }) => {
+          refs.push(ref);
+          if (refs.length === 2) acceptStarts();
+        },
+      };
+      const first = runAgentHostTurn(request);
+      const second = runAgentHostTurn(request);
+      void first.catch(() => undefined);
+      void second.catch(() => undefined);
+      await Promise.race([
+        started,
+        Promise.all([first, second]).then(() => assert.fail("both starts must be observed before completion")),
+      ]);
+      assert.notStrictEqual(refs[0].sessionUri, refs[1].sessionUri);
+      assert.notStrictEqual(refs[0].chatUri, refs[1].chatUri);
+      assert.strictEqual(senders.length, 2);
+      senders[1]({ type: "chat/turnComplete" });
+      senders[0]({ type: "chat/turnComplete" });
+      await Promise.all([first, second]);
+    });
+
     test("sends the model, options, agent and attachments, and reports the model that ran", async () => {
       host = await startFakeHost(tmp);
       const result = await runAgentHostTurn({
@@ -933,14 +1394,14 @@ suite("Agent Host client", () => {
         autoApprove: "autoApprove",
       });
       assert.deepStrictEqual(
-        host.calls.map((call) => call.method),
+        host.calls.slice(0, 5).map((call) => call.method),
         ["initialize", "createSession", "subscribe", "subscribe", "dispatchAction"],
         "legacy runs must not negotiate workspace configuration",
       );
       const turn = host.calls.find(
         (c) =>
           c.method === "dispatchAction" &&
-          (c.params.action as { type: string }).type === "chat/turnStarted",
+          (c.params.action as { type: string }).type === "chat/pendingMessageSet",
       );
       const message = (turn?.params.action as { message: unknown }).message;
       assert.deepStrictEqual(message, {
@@ -1212,8 +1673,10 @@ suite("Agent Host client", () => {
       assert.strictEqual(resumed.chatUri, created.chatUri);
       assert.strictEqual(resumed.workspaceMode, "folder");
       assert.strictEqual(resumed.workspaceModeApplication, "not_applied_resumed");
+      const resumedCalls = host.calls.slice(callsBeforeResume);
+      const initializeIndex = resumedCalls.findIndex((call) => call.method === "initialize");
       assert.deepStrictEqual(
-        host.calls.slice(callsBeforeResume).map((call) => call.method),
+        resumedCalls.slice(initializeIndex, initializeIndex + 4).map((call) => call.method),
         ["initialize", "subscribe", "subscribe", "dispatchAction"],
       );
     });
@@ -1337,7 +1800,7 @@ suite("Agent Host client", () => {
       const turns = host.calls.filter(
         (call) =>
           call.method === "dispatchAction" &&
-          (call.params.action as { type: string }).type === "chat/turnStarted",
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
       );
       assert.strictEqual(turns.length, 2);
       for (const turn of turns) {
@@ -1533,6 +1996,21 @@ suite("Agent Host client", () => {
       );
     });
 
+    test("does not claim queued cancellation from a possibly no-op removal echo", async () => {
+      host = await startFakeHost(tmp, { keepNewTurnQueued: true, removalAck: true });
+      await assert.rejects(
+        runAgentHostTurn({ ...baseRequest(host.endpoint), timeoutMs: 100 }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+      const actions = host.calls
+        .filter((call) => call.method === "dispatchAction")
+        .map((call) => (call.params.action as { type: string }).type);
+      assert.deepStrictEqual(actions, ["chat/pendingMessageSet", "chat/pendingMessageRemoved"]);
+    });
+
     test("tells the caller once the host has accepted the turn", async () => {
       host = await startFakeHost(tmp);
       const started: string[] = [];
@@ -1602,6 +2080,22 @@ suite("Agent Host client", () => {
       });
       assert.strictEqual(result.chatUri, "ahp-chat:/chat-1");
       assert.ok(host.calls.some((c) => c.method === "createSession"));
+    });
+
+    test("does not replace a continued session when its verification fails ambiguously", async () => {
+      host = await startFakeHost(tmp, { missingSessions: true, missingSessionCode: -32002 });
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          resume: { sessionUri: "ahp-session:/gone-unknown", chatUri: "ahp-chat:/gone-unknown" },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.kind === "failed" &&
+          error.turnOutcome === "unknown",
+      );
+      assert.ok(!host.calls.some((call) => call.method === "createSession"));
+      assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
     });
   });
 

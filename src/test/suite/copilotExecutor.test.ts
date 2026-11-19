@@ -1,11 +1,27 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 import * as agentHostClient from "../../agentHostClient";
+import { withAgentHostDispatchJournal } from "../../agentHostDispatchJournal";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
 import { createPromptBlockedError, getPromptBlockedReason } from "../../promptExecutionErrors";
 import type { ExecuteOptions } from "../../types";
+
+function useAgentHostTestStorage(): () => void {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "scheduler-host-test-"));
+  const previous = Object.getOwnPropertyDescriptor(CopilotExecutor, "extensionGlobalStorageUri")!;
+  Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", {
+    configurable: true, value: vscode.Uri.file(directory),
+  });
+  return () => {
+    Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", previous);
+    fs.rmSync(directory, { recursive: true, force: true });
+  };
+}
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
   test("workspace preferences reject invalid input and non-Host routes but preserve an explicit CLI model", async () => {
@@ -86,6 +102,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
   });
 
   test("explicit workspace preferences never fall back when the Host, folder or capability is unavailable", async () => {
+    const releaseStorage = useAgentHostTestStorage();
     const getConfig = vscode.workspace.getConfiguration;
     const workspaceFolders = Object.getOwnPropertyDescriptor(vscode.workspace, "workspaceFolders")!;
     const warning = vscode.window.showWarningMessage;
@@ -205,17 +222,21 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
       Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
       Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+      releaseStorage();
     }
   });
 
   test("forwards workspace metadata and reuses the cached session across creation preferences", async () => {
+    const releaseStorage = useAgentHostTestStorage();
     const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
     const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+    const queueMessage = Object.getOwnPropertyDescriptor(agentHostClient, "queueAgentHostMessage")!;
     const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
     const workspaceFolders = Object.getOwnPropertyDescriptor(vscode.workspace, "workspaceFolders")!;
     const sessions: Map<string, unknown> = Reflect.get(CopilotExecutor, "agentHostSessions");
     const previousSessions = new Map(sessions);
     const requests: agentHostClient.AgentHostTurnRequest[] = [];
+    const queuedRequests: agentHostClient.AgentHostQueuedMessageRequest[] = [];
     Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
       configurable: true,
       value: "test",
@@ -228,6 +249,11 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       configurable: true,
       value: async (request: agentHostClient.AgentHostTurnRequest) => {
         requests.push(request);
+        request.onSessionStarted?.(
+          { sessionUri: "test-session", chatUri: "test-chat" },
+          "test-turn",
+          "2026-01-01T00:00:00.001Z",
+        );
         return {
           sessionUri: "test-session",
           chatUri: "test-chat",
@@ -237,6 +263,13 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
             ? "not_applied_resumed"
             : "new_session_config_confirmed",
         };
+      },
+    });
+    Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+      configurable: true,
+      value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+        queuedRequests.push(request);
+        return { sessionUri: "test-session", chatUri: "test-chat", messageId: "test-message" };
       },
     });
     try {
@@ -261,19 +294,26 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
           config,
           mode === "worktree" ? "new" : "continue",
         );
-        assert.deepStrictEqual(result.result?.agentHostRun, {
-          turnOutcome: "completed",
-          responseText: "observed",
-          workspaceMode: mode,
-          workspaceModeApplication: mode === "worktree"
-            ? "new_session_config_confirmed"
-            : "not_applied_resumed",
-        });
+        assert.deepStrictEqual(
+          result.result?.agentHostRun,
+          mode === "worktree"
+            ? {
+                turnOutcome: "completed",
+                responseText: "observed",
+                workspaceMode: mode,
+                workspaceModeApplication: "new_session_config_confirmed",
+              }
+            : {
+                turnOutcome: "queued",
+                messageId: "test-message",
+                workspaceMode: mode,
+                workspaceModeApplication: "not_applied_resumed",
+              },
+        );
       }
       assert.strictEqual(requests[0].workspaceMode, "worktree");
       assert.strictEqual(requests[0].resume, undefined);
-      assert.strictEqual(requests[1].workspaceMode, "folder");
-      assert.deepStrictEqual(requests[1].resume, {
+      assert.deepStrictEqual(queuedRequests[0].resume, {
         sessionUri: "test-session",
         chatUri: "test-chat",
       });
@@ -290,10 +330,9 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         config,
         "continue",
       );
-      assert.strictEqual(requests.length, 3);
-      assert.strictEqual(requests[2].workspaceMode, "folder");
-      assert.strictEqual(requests[2].allowNewSession, false);
-      assert.deepStrictEqual(requests[2].resume, requests[1].resume);
+      assert.strictEqual(requests.length, 1);
+      assert.strictEqual(queuedRequests.length, 2);
+      assert.deepStrictEqual(queuedRequests[1].resume, queuedRequests[0].resume);
       assert.strictEqual(
         ambiguous.result?.agentHostRun?.workspaceModeApplication,
         "not_applied_resumed",
@@ -304,9 +343,797 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
       Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
       Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", queueMessage);
       sessions.clear();
       for (const [key, value] of previousSessions) sessions.set(key, value);
+      releaseStorage();
     }
+  });
+
+  suite("Agent Host session ordering", () => {
+    type InternalExecutor = {
+      tryExecuteViaAgentHost(
+        routing: ReturnType<typeof __testOnly.buildPromptRouting>,
+        options: ExecuteOptions,
+        config: vscode.WorkspaceConfiguration,
+        chatSession: "new" | "continue",
+      ): Promise<{ result?: { agentHostRun?: Record<string, unknown> } }>;
+    };
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<T>((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
+      return { promise, resolve, reject };
+    }
+    const ref = (id: string) => ({
+      sessionUri: `ahp-session:/${id}`,
+      chatUri: `ahp-chat:/${id}`,
+    });
+    const result = (id: string): agentHostClient.AgentHostTurnResult => ({
+      ...ref(id),
+      responseText: "not_observed",
+    });
+    const config = {
+      get: (key: string, defaultValue: unknown) =>
+        key === "agentHostOpenSession" ? false : defaultValue,
+    } as vscode.WorkspaceConfiguration;
+    const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
+    const options: ExecuteOptions = { workingDirectory: __dirname };
+    const endpoint = { socketPath: "test", token: "test", protocolVersion: "1.1.0" };
+    let executor: InternalExecutor;
+    let descriptors: Array<[object, string, PropertyDescriptor]>;
+    let maps: Array<[Map<string, unknown>, Map<string, unknown>]>;
+    let storageDirectory: string;
+    let activeDispatches: Set<string>;
+    let savedActiveDispatches: Set<string>;
+
+    setup(() => {
+      storageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "scheduler-host-safety-"));
+      activeDispatches = Reflect.get(CopilotExecutor, "agentHostActiveDispatches");
+      savedActiveDispatches = new Set(activeDispatches);
+      activeDispatches.clear();
+      const keys = ["agentHostSessions", "agentHostQueues", "agentHostUncertainChats"];
+      maps = keys.map((key) => {
+        const map: Map<string, unknown> = Reflect.get(CopilotExecutor, key);
+        const saved = new Map(map);
+        map.clear();
+        return [map, saved];
+      });
+      const properties: Array<[object, string]> = [
+        [CopilotExecutor, "agentHostUserDataDir"],
+        [CopilotExecutor, "extensionGlobalStorageUri"],
+        [CopilotExecutor, "agentHostDispatchOwner"],
+        [agentHostClient, "findAgentHostEndpoint"],
+        [agentHostClient, "runAgentHostTurn"],
+        [agentHostClient, "queueAgentHostMessage"],
+        [agentHostClient, "isAgentHostTurnTerminal"],
+        [vscode.window, "showWarningMessage"],
+        [vscode.workspace, "getConfiguration"],
+      ];
+      descriptors = properties.map(([owner, key]) => [
+        owner,
+        key,
+        Object.getOwnPropertyDescriptor(owner, key)!,
+      ]);
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", {
+        configurable: true, value: "test",
+      });
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", {
+        configurable: true, value: vscode.Uri.file(storageDirectory),
+      });
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true, value: () => endpoint,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: async () => undefined,
+      });
+      executor = new CopilotExecutor() as unknown as InternalExecutor;
+    });
+
+    teardown(() => {
+      for (const [owner, key, descriptor] of descriptors) {
+        Object.defineProperty(owner, key, descriptor);
+      }
+      for (const [map, saved] of maps) {
+        map.clear();
+        for (const [key, value] of saved) map.set(key, value);
+      }
+      activeDispatches.clear();
+      for (const id of savedActiveDispatches) activeDispatches.add(id);
+      fs.rmSync(storageDirectory, { recursive: true, force: true });
+    });
+
+    test("starts independent sessions in parallel and keeps the latest start after inverted completion", async () => {
+      const runs: Array<{
+        request: agentHostClient.AgentHostTurnRequest;
+        completion: ReturnType<typeof deferred<agentHostClient.AgentHostTurnResult>>;
+      }> = [];
+      const queued: agentHostClient.AgentHostQueuedMessageRequest[] = [];
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: (request: agentHostClient.AgentHostTurnRequest) => {
+          const completion = deferred<agentHostClient.AgentHostTurnResult>();
+          runs.push({ request, completion });
+          return completion.promise;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          queued.push(request);
+          return { ...ref("newer"), messageId: "queued" };
+        },
+      });
+
+      const first = executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      const second = executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.strictEqual(runs.length, 2, "one session must not wait for the other");
+      runs[1].request.onSessionStarted?.(ref("newer"), "turn-newer", "2026-01-01T10:00:02.000Z");
+      runs[0].request.onSessionStarted?.(ref("older"), "turn-older", "2026-01-01T10:00:01.000Z");
+      runs[1].completion.resolve(result("newer"));
+      await second;
+      runs[0].completion.resolve(result("older"));
+      await first;
+      const continued = await executor.tryExecuteViaAgentHost(routing, options, config, "continue");
+      assert.deepStrictEqual(queued[0].resume, ref("newer"));
+      assert.strictEqual(continued.result?.agentHostRun?.turnOutcome, "queued");
+    });
+
+    test("fails closed for tied start timestamps until a later start resolves the ordering", async () => {
+      let runs = 0;
+      const queued: agentHostClient.AgentHostQueuedMessageRequest[] = [];
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          const id = `session-${++runs}`;
+          const startedAt = runs < 3 ? "2026-01-01T10:00:01.000Z" : "2026-01-01T10:00:02.000Z";
+          request.onSessionStarted?.(ref(id), `turn-${id}`, startedAt);
+          return result(id);
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          queued.push(request);
+          return { ...ref("session-3"), messageId: "queued" };
+        },
+      });
+
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      assert.strictEqual(queued.length, 0);
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await executor.tryExecuteViaAgentHost(routing, options, config, "continue");
+      assert.deepStrictEqual(queued[0].resume, ref("session-3"));
+    });
+
+    test("serializes the same chat and keeps a continue target selected before waiting", async () => {
+      let next = 0;
+      const gate = deferred<agentHostClient.AgentHostQueuedMessageResult>();
+      const firstQueued = deferred<void>();
+      const queued: agentHostClient.AgentHostQueuedMessageRequest[] = [];
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          const id = ++next === 1 ? "first" : "later";
+          request.onSessionStarted?.(ref(id), `turn-${id}`, `2026-01-01T10:00:0${next}.000Z`);
+          return result(id);
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          queued.push(request);
+          if (queued.length === 1) firstQueued.resolve();
+          return queued.length === 1
+            ? gate.promise
+            : Promise.resolve({ ...ref("first"), messageId: "second" });
+        },
+      });
+
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      const first = executor.tryExecuteViaAgentHost(routing, { ...options, taskId: "first" }, config, "continue");
+      await firstQueued.promise;
+      const second = executor.tryExecuteViaAgentHost(
+        routing,
+        { ...options, taskId: "second", queueOccurrenceId: "occurrence" },
+        config,
+        "continue",
+      );
+      const third = executor.tryExecuteViaAgentHost(
+        routing,
+        { ...options, taskId: "third", targetChatId: agentHostClient.toAgentHostChatBindingId(ref("first").chatUri) },
+        config,
+        "new",
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.strictEqual(queued.length, 1, "same-chat queue submissions must not overlap");
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      gate.resolve({ ...ref("first"), messageId: "first" });
+      assert.strictEqual((await first).result?.agentHostRun?.turnOutcome, "queued");
+      assert.strictEqual((await second).result?.agentHostRun?.turnOutcome, "queued");
+      assert.strictEqual((await third).result?.agentHostRun?.turnOutcome, "queued");
+      assert.deepStrictEqual(queued.map((request) => request.resume), [ref("first"), ref("first"), undefined]);
+      assert.deepStrictEqual(queued.map((request) => request.taskId), ["first", "second", "third"]);
+      assert.strictEqual(queued[1].occurrenceId, "occurrence");
+      assert.strictEqual(queued[0].occurrenceId, undefined);
+    });
+
+    test("replaces a confirmed expired continue session but never an explicitly bound chat", async () => {
+      let runs = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          const id = ++runs === 1 ? "expired" : "replacement";
+          request.onSessionStarted?.(ref(id), `turn-${id}`, `2026-01-01T10:00:0${runs}.000Z`);
+          return result(id);
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async () => {
+          throw new agentHostClient.AgentHostError("sessionExpired", "expired");
+        },
+      });
+
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      const replacement = await executor.tryExecuteViaAgentHost(routing, options, config, "continue");
+      assert.strictEqual(replacement.result?.agentHostRun?.turnOutcome, "completed");
+      assert.strictEqual(runs, 2);
+      await assert.rejects(executor.tryExecuteViaAgentHost(
+        routing,
+        { ...options, targetChatId: agentHostClient.toAgentHostChatBindingId(ref("bound").chatUri) },
+        config,
+        "new",
+      ));
+      assert.strictEqual(runs, 2);
+    });
+
+    test("never replaces a continued session when an expired error follows dispatch", async () => {
+      const chat = ref("expired-after-send");
+      let runs = 0;
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          runs++;
+          request.onSessionStarted?.(chat, "turn", "2026-01-01T10:00:01.000Z");
+          return result("expired-after-send");
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, "queued-message");
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          throw new agentHostClient.AgentHostError("sessionExpired", "expired");
+        },
+      });
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      assert.strictEqual(runs, 1);
+      assert.strictEqual(sends, 1);
+    });
+
+    test("blocks a whitespace binding while preserving the empty unbound sentinel", async () => {
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true, value: async () => assert.fail("must not create a session"),
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true, value: async () => assert.fail("must not queue without a target"),
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(
+        routing, { ...options, targetChatId: "  " }, config, "new",
+      ));
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: () => ({ get: (key: string, defaultValue: unknown) =>
+          key === "executionRoute" ? "chat" : defaultValue }),
+      });
+      for (const useCopilotCli of [false, true]) {
+        await assert.rejects(
+          (executor as unknown as CopilotExecutor).executePrompt("synthetic", {
+            targetChatId: "  ", useCopilotCli, model: "selected",
+          }),
+        );
+      }
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true, value: async () => result("unbound"),
+      });
+      const unbound = await executor.tryExecuteViaAgentHost(
+        routing, { ...options, targetChatId: "" }, config, "new",
+      );
+      assert.strictEqual(unbound.result?.agentHostRun?.turnOutcome, "completed");
+      let cliCalls = 0;
+      Object.defineProperty(executor, "executePromptViaCopilotCli", {
+        configurable: true,
+        value: async () => { cliCalls++; return {}; },
+      });
+      await (executor as unknown as CopilotExecutor).executePrompt("synthetic", {
+        targetChatId: "", useCopilotCli: true, model: "selected",
+      });
+      assert.strictEqual(cliCalls, 1);
+    });
+
+    test("blocks an unknown earlier turn until the same Host confirms its exact terminal state", async () => {
+      let activeEndpoint = endpoint;
+      let terminal = false;
+      let reconciliations = 0;
+      let dispatches = 0;
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true, value: () => activeEndpoint,
+      });
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          request.onSessionStarted?.(ref("unknown"), "turn-unknown", "2026-01-01T10:00:01.000Z");
+          throw new agentHostClient.AgentHostError("failed", "unknown", "unknown");
+        },
+      });
+      Object.defineProperty(agentHostClient, "isAgentHostTurnTerminal", {
+        configurable: true,
+        value: async (_endpoint: agentHostClient.AgentHostEndpoint, seenRef: agentHostClient.AgentHostSessionRef, turnId: string) => {
+          reconciliations++;
+          assert.deepStrictEqual(seenRef, ref("unknown"));
+          assert.strictEqual(turnId, "turn-unknown");
+          return terminal;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async () => {
+          dispatches++;
+          return { ...ref("unknown"), messageId: "queued" };
+        },
+      });
+
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"));
+      activeEndpoint = { ...endpoint, token: "different-host" };
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      assert.strictEqual(reconciliations, 0);
+      activeEndpoint = endpoint;
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      assert.strictEqual(reconciliations, 1);
+      assert.strictEqual(dispatches, 0);
+      terminal = true;
+      const continued = await executor.tryExecuteViaAgentHost(routing, options, config, "continue");
+      assert.strictEqual(continued.result?.agentHostRun?.turnOutcome, "queued");
+      assert.strictEqual(dispatches, 1);
+    });
+
+    test("does not resend an unknown queued message without an identified turn", async () => {
+      let dispatches = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          request.onSessionStarted?.(ref("unknown-queue"), "turn", "2026-01-01T10:00:01.000Z");
+          return result("unknown-queue");
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          dispatches++;
+          request.onMessageDispatched?.(ref("unknown-queue"));
+          throw new agentHostClient.AgentHostError("failed", "unknown", "unknown");
+        },
+      });
+      Object.defineProperty(agentHostClient, "isAgentHostTurnTerminal", {
+        configurable: true,
+        value: async () => assert.fail("an unidentified turn cannot be reconciled"),
+      });
+
+      await executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "continue"));
+      assert.strictEqual(dispatches, 1);
+    });
+
+    test("blocks an explicitly targeted chat when a new message became unknown before start", async () => {
+      let dispatches = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          request.onMessageDispatched?.(ref("not-started"));
+          throw new agentHostClient.AgentHostError("failed", "unknown", "unknown");
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async () => {
+          dispatches++;
+          return { ...ref("not-started"), messageId: "queued" };
+        },
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"));
+      await assert.rejects(executor.tryExecuteViaAgentHost(
+        routing,
+        { ...options, targetChatId: agentHostClient.toAgentHostChatBindingId(ref("not-started").chatUri) },
+        config,
+        "new",
+      ));
+      assert.strictEqual(dispatches, 0);
+    });
+
+    test("persists an unknown turn and requires the same Host to confirm it after restart", async () => {
+      const chat = ref("durable");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      let activeEndpoint = endpoint;
+      let terminal = false;
+      let checks = 0;
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true, value: () => activeEndpoint,
+      });
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(chat, "message-durable");
+          await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+            assert.strictEqual(journal.records.length, 1, "intent must be saved before dispatch");
+            assert.strictEqual(journal.records[0].turnId, undefined);
+          });
+          request.onMessageDispatched?.(chat);
+          request.onSessionStarted?.(chat, "turn-durable", "2026-01-01T10:00:01.000Z");
+          throw new agentHostClient.AgentHostError("failed", "unknown", "unknown");
+        },
+      });
+      Object.defineProperty(agentHostClient, "isAgentHostTurnTerminal", {
+        configurable: true,
+        value: async (_endpoint: agentHostClient.AgentHostEndpoint, seen: agentHostClient.AgentHostSessionRef, turnId: string) => {
+          checks++;
+          assert.deepStrictEqual(seen, chat);
+          assert.strictEqual(turnId, "turn-durable");
+          return terminal;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, "next-message");
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          return { ...chat, messageId: "next-message" };
+        },
+      });
+
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"));
+      await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+        assert.strictEqual(journal.records[0]?.turnId, "turn-durable");
+      });
+      Reflect.get(CopilotExecutor, "agentHostUncertainChats").clear();
+      Object.defineProperty(CopilotExecutor, "agentHostDispatchOwner", {
+        configurable: true, value: "restarted-window",
+      });
+      const targeted = { ...options, targetChatId: chatId };
+      activeEndpoint = { ...endpoint, token: "other-host" };
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, targeted, config, "new"));
+      assert.strictEqual(checks, 0, "a different Host cannot confirm the old turn");
+      activeEndpoint = endpoint;
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, targeted, config, "new"));
+      assert.strictEqual(checks, 1);
+      assert.strictEqual(sends, 0);
+      terminal = true;
+      await executor.tryExecuteViaAgentHost(routing, targeted, config, "new");
+      assert.strictEqual(sends, 1);
+      await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+        assert.deepStrictEqual(journal.records, []);
+      });
+    });
+
+    test("keeps an unidentified queued dispatch blocked across restart", async () => {
+      const chat = ref("unknown-queued");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, "message-queued");
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          throw new agentHostClient.AgentHostError("failed", "unknown", "unknown");
+        },
+      });
+      Object.defineProperty(agentHostClient, "isAgentHostTurnTerminal", {
+        configurable: true, value: async () => assert.fail("no turn identity was confirmed"),
+      });
+      const targeted = { ...options, targetChatId: chatId };
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, targeted, config, "new"));
+      Reflect.get(CopilotExecutor, "agentHostUncertainChats").clear();
+      Object.defineProperty(CopilotExecutor, "agentHostDispatchOwner", {
+        configurable: true, value: "restarted-window",
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, targeted, config, "new"));
+      assert.strictEqual(sends, 1);
+      await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+        assert.strictEqual(journal.records.length, 1);
+        assert.strictEqual(journal.records[0].turnId, undefined);
+      });
+    });
+
+    test("allows same-window queueing but blocks another window until the turn ends", async () => {
+      const chat = ref("active");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      const started = deferred<void>();
+      const completion = deferred<agentHostClient.AgentHostTurnResult>();
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(chat, "message-active");
+          request.onMessageDispatched?.(chat);
+          request.onSessionStarted?.(chat, "turn-active", "2026-01-01T10:00:01.000Z");
+          started.resolve();
+          return completion.promise;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, `message-${sends}`);
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          return { ...chat, messageId: `message-${sends}` };
+        },
+      });
+      Object.defineProperty(agentHostClient, "isAgentHostTurnTerminal", {
+        configurable: true, value: async () => false,
+      });
+      const running = executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await started.promise;
+      const targeted = { ...options, targetChatId: chatId };
+      await executor.tryExecuteViaAgentHost(routing, targeted, config, "new");
+      assert.strictEqual(sends, 1);
+      Object.defineProperty(CopilotExecutor, "agentHostDispatchOwner", {
+        configurable: true, value: "other-window",
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, targeted, config, "new"));
+      assert.strictEqual(sends, 1);
+      completion.resolve(result("active"));
+      await running;
+      await executor.tryExecuteViaAgentHost(routing, targeted, config, "new");
+      assert.strictEqual(sends, 2);
+    });
+
+    test("rechecks an earlier active dispatch after waiting for the task guard", async () => {
+      const chat = ref("guard-race");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      const started = deferred<void>();
+      const completion = deferred<agentHostClient.AgentHostTurnResult>();
+      const guardEntered = deferred<void>();
+      const guardReleased = deferred<void>();
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(chat, "message-running");
+          request.onMessageDispatched?.(chat);
+          request.onSessionStarted?.(chat, "turn-running", "2026-01-01T10:00:01.000Z");
+          started.resolve();
+          return completion.promise;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, "message-waiting");
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          return { ...chat, messageId: "message-waiting" };
+        },
+      });
+      const running = executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      const runningRejected = assert.rejects(running);
+      await started.promise;
+      const queued = executor.tryExecuteViaAgentHost(routing, {
+        ...options,
+        targetChatId: chatId,
+        dispatchGuard: async (dispatch) => {
+          guardEntered.resolve();
+          await guardReleased.promise;
+          try {
+            dispatch();
+          } catch {
+            throw createPromptBlockedError("task changed", "taskClaimChanged");
+          }
+        },
+      }, config, "new");
+      const queuedRejected = assert.rejects(queued, (error: unknown) => {
+        assert.strictEqual(getPromptBlockedReason(error), "agentHostFailed");
+        return true;
+      });
+      await guardEntered.promise;
+      completion.reject(new agentHostClient.AgentHostError("failed", "unknown", "unknown"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      guardReleased.resolve();
+      await Promise.all([runningRejected, queuedRejected]);
+      assert.strictEqual(sends, 0);
+      await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+        assert.strictEqual(journal.records.length, 1);
+        assert.strictEqual(journal.records[0].turnId, "turn-running");
+      });
+    });
+
+    test("does not treat an earlier run that finishes cleanly during the guard as unknown", async () => {
+      const chat = ref("guard-race-ok");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      const started = deferred<void>();
+      const completion = deferred<agentHostClient.AgentHostTurnResult>();
+      const guardEntered = deferred<void>();
+      const guardReleased = deferred<void>();
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(chat, "message-running");
+          request.onMessageDispatched?.(chat);
+          request.onSessionStarted?.(chat, "turn-running", "2026-01-01T10:00:01.000Z");
+          started.resolve();
+          return completion.promise;
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          await request.beforeDispatch?.(chat, "message-waiting");
+          await request.dispatchGuard?.(() => {
+            sends++;
+            request.onMessageDispatched?.(chat);
+          });
+          return { ...chat, messageId: "message-waiting" };
+        },
+      });
+      const running = executor.tryExecuteViaAgentHost(routing, options, config, "new");
+      await started.promise;
+      const queued = executor.tryExecuteViaAgentHost(routing, {
+        ...options,
+        targetChatId: chatId,
+        dispatchGuard: async (dispatch) => {
+          guardEntered.resolve();
+          await guardReleased.promise;
+          dispatch();
+        },
+      }, config, "new");
+      await guardEntered.promise;
+      completion.resolve(result("guard-race-ok"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      guardReleased.resolve();
+      await Promise.all([running, queued]);
+      assert.strictEqual(sends, 1);
+      await withAgentHostDispatchJournal(storageDirectory, chatId, async (journal) => {
+        assert.deepStrictEqual(journal.records, []);
+      });
+    });
+
+    test("forwards the input and queue-blocked handlers to the matching Host call", async () => {
+      const chat = ref("handlers");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      const onInput = () => undefined;
+      const onBlocked = () => undefined;
+      let runRequest: agentHostClient.AgentHostTurnRequest | undefined;
+      let queueRequest: agentHostClient.AgentHostQueuedMessageRequest | undefined;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          runRequest = request;
+          return result("handlers");
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostQueuedMessageRequest) => {
+          queueRequest = request;
+          return { ...chat, messageId: "message-handlers" };
+        },
+      });
+      const handlers = { onAgentHostInputNeeded: onInput, onAgentHostQueueBlocked: onBlocked };
+      await executor.tryExecuteViaAgentHost(routing, { ...options, ...handlers }, config, "new");
+      assert.strictEqual(runRequest?.onInputNeeded, onInput);
+      await executor.tryExecuteViaAgentHost(
+        routing, { ...options, ...handlers, targetChatId: chatId }, config, "new",
+      );
+      assert.strictEqual(queueRequest?.onInputNeeded, onInput);
+      assert.strictEqual(queueRequest?.onQueueBlocked, onBlocked);
+      // A queue-blocked handler alone must still start the observation.
+      await executor.tryExecuteViaAgentHost(
+        routing, { ...options, onAgentHostQueueBlocked: onBlocked, targetChatId: chatId }, config, "new",
+      );
+      assert.strictEqual(queueRequest?.onQueueBlocked, onBlocked);
+      assert.strictEqual(queueRequest?.onInputNeeded, undefined);
+    });
+
+    test("does not dispatch when the safety journal cannot be written", async () => {
+      const blockedStorage = path.join(storageDirectory, "not-a-directory");
+      fs.writeFileSync(blockedStorage, "blocked", "utf8");
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", {
+        configurable: true, value: vscode.Uri.file(blockedStorage),
+      });
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(ref("storage-error"), "message");
+          sends++;
+          return result("storage-error");
+        },
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"));
+      assert.strictEqual(sends, 0);
+    });
+
+    test("explains a context-budget failure instead of the raw Host error", async () => {
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async () => {
+          throw new agentHostClient.AgentHostError(
+            "failed",
+            "(query) No response was returned because static system messages and tool definitions exceed this model's context budget.",
+            "failed",
+          );
+        },
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"), (error: unknown) => {
+        assert.strictEqual(getPromptBlockedReason(error), "agentHostFailed");
+        assert.strictEqual((error as Error).message, messages.agentHostContextBudgetExceeded());
+        return true;
+      });
+    });
+
+    test("keeps the raw Host detail for other failed turns", async () => {
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async () => {
+          throw new agentHostClient.AgentHostError("failed", "rate limited", "failed");
+        },
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"), (error: unknown) => {
+        assert.strictEqual((error as Error).message, messages.agentHostFailed("rate limited"));
+        return true;
+      });
+    });
+
+    test("treats any unexpected post-dispatch error as an unknown outcome", async () => {
+      const chat = ref("unexpected-after-send");
+      const chatId = agentHostClient.toAgentHostChatBindingId(chat.chatUri);
+      let sends = 0;
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          await request.beforeDispatch?.(chat, "message");
+          request.onMessageDispatched?.(chat);
+          sends++;
+          throw new agentHostClient.AgentHostError("unsupported", "late failure");
+        },
+      });
+      Object.defineProperty(agentHostClient, "queueAgentHostMessage", {
+        configurable: true, value: async () => assert.fail("must not send to an uncertain chat"),
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(routing, options, config, "new"), (error: unknown) => {
+        assert.strictEqual(getPromptBlockedReason(error), "agentHostFailed");
+        return true;
+      });
+      await assert.rejects(executor.tryExecuteViaAgentHost(
+        routing, { ...options, targetChatId: chatId }, config, "new",
+      ));
+      assert.strictEqual(sends, 1);
+    });
   });
 
   test("the task guard blocks only Host-to-Chat fallback and unresolved identity", async () => {
@@ -1572,6 +2399,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     });
 
     test("model fallback never overrides the Host route guard or resends an unknown turn", async () => {
+      const releaseStorage = useAgentHostTestStorage();
       const getConfig = vscode.workspace.getConfiguration;
       const warning = vscode.window.showWarningMessage;
       const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
@@ -1677,6 +2505,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
         Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
         Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+        releaseStorage();
       }
     });
 

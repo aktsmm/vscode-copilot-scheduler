@@ -7,11 +7,13 @@ import {
   buildJsonTextResult,
   describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
+  describeOverlappingRunsForConfirmation,
   formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
   validateAgentHostToolFields,
+  validateOverlappingRuns,
 } from "../shared";
 
 interface UpdateTaskToolInput {
@@ -23,7 +25,7 @@ interface UpdateTaskToolInput {
  * `enabled` is recognized but not schema-exposed: letting it through keeps the
  * dedicated `enabled_not_allowed` error from taskMutationService.
  */
-const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
+export const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "name",
   "cronExpression",
   "runAt",
@@ -46,6 +48,7 @@ const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "preventAgentHostFallback",
   "jitterSeconds",
   "maxExecutionsPerDay",
+  "allowOverlappingRuns",
   "allowedTimeStart",
   "allowedTimeEnd",
   "attachments",
@@ -96,6 +99,9 @@ export function createSchedulerUpdateTaskTool(
               attachmentDetail
                 ? `\n\nThe attachment list is replaced by:\n${attachmentDetail}`
                 : "",
+              updateKeys.includes("allowOverlappingRuns")
+                ? `\n\n${describeOverlappingRunsForConfirmation(input.updates?.allowOverlappingRuns)}`
+                : "",
               updateKeys.includes("targetChatId")
                 ? "\n\nThe task's prompts will be queued into the selected existing Copilot chat (an empty value unbinds it)."
                 : "",
@@ -143,6 +149,10 @@ export function createSchedulerUpdateTaskTool(
       const fieldError = validateAgentHostToolFields(input.updates);
       if (fieldError) {
         return fieldError;
+      }
+      const overlapError = validateOverlappingRuns(input.updates.allowOverlappingRuns);
+      if (overlapError) {
+        return overlapError;
       }
       const result = await client.updateTask(input.id, input.updates);
       if (!result.ok) {
