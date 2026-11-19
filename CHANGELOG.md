@@ -5,11 +5,11 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.17.1] - 2026-11-20
 
 ### Fixed
 
-- Agent Host runs failed with "The Agent Host dispatch safety store is unavailable" on every run (scheduled and manual) since 1.16.0 (Stable) and 1.17.0 (Pre-release). VS Code 1.147 reports the local global storage folder with the `vscode-userdata` scheme, which the dispatch record check rejected. The check now uses the folder's file-system path. Nothing was sent to the Agent Host in those runs, so re-running them is safe.
+- Agent Host runs failed with "The Agent Host dispatch safety store is unavailable" on every run (scheduled and manual) since 1.17.0 (Pre-release; Stable 1.16.0 was affected the same way). VS Code 1.147 reports the local global storage folder with the `vscode-userdata` scheme, which the dispatch record check rejected. The check now uses the folder's file-system path. Nothing was sent to the Agent Host in those runs, so re-running them is safe.
 - When that store really is unavailable, the run is now reported as a failure that was not dispatched, instead of "outcome unknown, may still be running".
 
 ## [1.17.0] - 2026-11-19
