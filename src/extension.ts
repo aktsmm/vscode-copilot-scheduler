@@ -11,6 +11,7 @@ import {
   type TaskExecutionCallbackResult,
 } from "./scheduleManager";
 import { CopilotExecutor } from "./copilotExecutor";
+import { disposeAgentHostInputObservers } from "./agentHostClient";
 import { ScheduledTaskTreeProvider, ScheduledTaskItem } from "./treeProvider";
 import { SchedulerWebview } from "./schedulerWebview";
 import { messages } from "./i18n";
@@ -87,10 +88,16 @@ import type {
   AgentHostResponseTextObservation,
   AgentHostTurnOutcome,
   ModelExecutionObservation,
+  ExecutePromptResult,
 } from "./types";
 
 type NotificationMode = "sound" | "silentToast" | "silentStatus";
 type PromptExecutionOptions = Omit<PromptExecutionRequest, "prompt">;
+
+const agentHostAttentionNotifications = new Map<
+  string,
+  { observers: Set<symbol>; item: vscode.StatusBarItem }
+>();
 
 /**
  * What to do when a file-backed prompt cannot be read at execution time.
@@ -159,6 +166,80 @@ function getNotificationMode(): NotificationMode {
     config.get<boolean>("showNotifications", true),
     config.get<NotificationMode>("notificationMode", "sound"),
   );
+}
+
+function createAgentHostAttentionHandler(): (
+  ref: { sessionUri: string; chatUri: string },
+  change: { id: string; kind: import("./agentHostInputObserver").AgentHostInputKind | "queueBlocked"; waiting: boolean },
+) => void {
+  const observer = Symbol();
+  return (ref, change) => {
+    const key = JSON.stringify([ref.sessionUri, ref.chatUri, change.kind, change.id]);
+    const existing = agentHostAttentionNotifications.get(key);
+    if (!change.waiting) {
+      existing?.observers.delete(observer);
+      if (existing && existing.observers.size === 0) {
+        existing.item.dispose();
+        agentHostAttentionNotifications.delete(key);
+      }
+      return;
+    }
+    if (existing) {
+      existing.observers.add(observer);
+      return;
+    }
+    const sessionId = ref.sessionUri.split("/").pop();
+    if (!sessionId) {
+      logDebug("[CopilotScheduler] Could not open the waiting Agent Host chat.");
+      return;
+    }
+    const resource = vscode.Uri.from({
+      scheme: "agent-host-copilotcli",
+      path: `/${sessionId}`,
+    });
+    const queueBlocked = change.kind === "queueBlocked";
+    const title = change.kind === "queueBlocked"
+      ? messages.agentHostQueueBlocked()
+      : messages.agentHostInputNeeded(change.kind);
+    const open = messages.agentHostOpenChat();
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+    item.text = `$(comment-discussion) ${queueBlocked ? messages.agentHostQueueBlockedStatus() : messages.agentHostInputStatus()}`;
+    item.tooltip = title;
+    item.command = {
+      command: "workbench.action.chat.openSessionInEditorGroup",
+      title: open,
+      arguments: [{ resource }],
+    };
+    item.show();
+    agentHostAttentionNotifications.set(key, { observers: new Set([observer]), item });
+    if (shouldNotify() && getNotificationMode() === "silentToast") {
+      notifyInfo(title);
+    } else if (shouldNotify() && getNotificationMode() === "sound") {
+      void Promise.resolve(vscode.window.showWarningMessage(title, open)).then(
+        (selection) => {
+          if (selection !== open) return;
+          void Promise.resolve(
+            vscode.commands.executeCommand(
+              "workbench.action.chat.openSessionInEditorGroup",
+              { resource },
+            ),
+          ).then(undefined, () =>
+            logDebug("[CopilotScheduler] Could not open the waiting Agent Host chat."),
+          );
+        },
+        () => logDebug("[CopilotScheduler] Could not show the Agent Host input notification."),
+      );
+    }
+  };
+}
+
+function createAgentHostInputHandler(): NonNullable<ExecuteOptions["onAgentHostInputNeeded"]> {
+  return createAgentHostAttentionHandler();
+}
+
+function createAgentHostQueueBlockedHandler(): NonNullable<ExecuteOptions["onAgentHostQueueBlocked"]> {
+  const notify = createAgentHostAttentionHandler();
+  return (ref, change) => notify(ref, { ...change, kind: "queueBlocked" });
 }
 
 function resolveDisplayErrorMessage(message: string): string {
@@ -703,21 +784,35 @@ let promptResourceWatchers: vscode.Disposable[] = [];
 let extensionContextRef: vscode.ExtensionContext | undefined;
 const manualRunInFlightTaskIds = new Set<string>();
 
-/** Fallback model used by the most recent run per task, consumed by history writers. */
+/** Manual-run metadata, consumed by the manual history writer. */
 const lastModelFallbackByTaskId = new Map<string, ModelFallbackInfo>();
 const lastCopilotCliRunByTaskId = new Map<string, CopilotCliRunInfo>();
 const lastAgentHostRunByTaskId = new Map<string, AgentHostRunInfo>();
 const lastModelExecutionByTaskId = new Map<string, ModelExecutionObservation>();
 
 function takeModelFallbackDetail(taskId: string): string | undefined {
-  const fallback = lastModelFallbackByTaskId.get(taskId);
+  const result: ExecutePromptResult = {
+    modelFallback: lastModelFallbackByTaskId.get(taskId),
+    cliRun: lastCopilotCliRunByTaskId.get(taskId),
+    agentHostRun: lastAgentHostRunByTaskId.get(taskId),
+    modelExecution: lastModelExecutionByTaskId.get(taskId),
+  };
   lastModelFallbackByTaskId.delete(taskId);
-  const cliRun = lastCopilotCliRunByTaskId.get(taskId);
   lastCopilotCliRunByTaskId.delete(taskId);
-  const agentHostRun = lastAgentHostRunByTaskId.get(taskId);
   lastAgentHostRunByTaskId.delete(taskId);
-  const modelExecution = lastModelExecutionByTaskId.get(taskId);
   lastModelExecutionByTaskId.delete(taskId);
+  return buildExecutionResultDetail(result);
+}
+
+function buildExecutionResultDetail(
+  result: ExecutePromptResult | undefined,
+): string | undefined {
+  const {
+    modelFallback: fallback,
+    cliRun,
+    agentHostRun,
+    modelExecution,
+  } = result ?? {};
   const chatRoute =
     modelExecution?.route === "chat" ||
     modelExecution?.route === "local" ||
@@ -1217,6 +1312,11 @@ async function handleOpenPromptFile(taskId: string): Promise<void> {
 async function appendManualRunHistory(
   task: ScheduledTask,
   runResult: ManualRunSuccessResult | ManualRunFailureResult,
+  deps?: {
+    getTask(id: string): ScheduledTask | undefined;
+    recordHistory(entry: ExecutionHistoryEntry): Promise<void>;
+    notifyInfo(message: string): void;
+  },
 ): Promise<void> {
   const promptMetadata = buildPromptHistoryMetadata(
     takePromptResolution(task.id),
@@ -1225,13 +1325,14 @@ async function appendManualRunHistory(
   const modelExecution = lastModelExecutionByTaskId.get(task.id);
 
   if (runResult.ok) {
-    const latestTask = scheduleManager.getTask(task.id) ?? task;
+    const latestTask =
+      (deps ? deps.getTask(task.id) : scheduleManager.getTask(task.id)) ?? task;
     const nextRunDate =
       latestTask.nextRun instanceof Date &&
       !Number.isNaN(latestTask.nextRun.getTime())
         ? latestTask.nextRun
         : undefined;
-    notifyInfo(
+    (deps?.notifyInfo ?? notifyInfo)(
       buildExecutionSummary(
         task.name,
         "success",
@@ -1281,7 +1382,7 @@ async function appendManualRunHistory(
         );
       }
     } else {
-      await recordExecutionHistoryBestEffort(entry);
+      await (deps?.recordHistory ?? recordExecutionHistoryBestEffort)(entry);
     }
     return;
   }
@@ -1295,7 +1396,7 @@ async function appendManualRunHistory(
         ? messages.manualRunUnavailable()
         : messages.taskNotFound();
   const executionDetail = takeModelFallbackDetail(task.id);
-  await recordExecutionHistoryBestEffort({
+  await (deps?.recordHistory ?? recordExecutionHistoryBestEffort)({
     taskId: task.id,
     taskName: task.name,
     trigger: "manual",
@@ -1634,6 +1735,11 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   scheduleManager?.stopScheduler();
   terminateActiveCopilotCliProcesses();
+  disposeAgentHostInputObservers();
+  for (const notification of agentHostAttentionNotifications.values()) {
+    notification.item.dispose();
+  }
+  agentHostAttentionNotifications.clear();
   disposePromptResourceWatchers();
   SchedulerWebview.dispose();
   extensionContextRef = undefined;
@@ -1648,6 +1754,20 @@ export function deactivate(): void {
   // promptSyncInterval is cleared by the disposable registered in context.subscriptions.
 }
 
+type TaskExecutionDependencies = {
+  resolvePromptSnapshot?: typeof resolvePromptSnapshot;
+  executePrompt?: (
+    prompt: string,
+    options: ExecuteOptions,
+  ) => Promise<ExecutePromptResult>;
+  updateTaskPrompts?: (
+    updates: Array<{ id: string; prompt: string; expectedSnapshot?: string }>,
+  ) => Promise<number>;
+  recordHistory?: typeof recordExecutionHistoryBestEffort;
+  enqueueHistory?: typeof enqueueExecutionHistory;
+  notifyInfo?: (message: string) => void;
+};
+
 /**
  * Execute a scheduled task
  */
@@ -1655,6 +1775,7 @@ async function executeTask(
   task: ScheduledTask,
   trigger: ExecutionTrigger,
   dispatchGuard?: (dispatch: () => void) => Promise<void>,
+  deps?: TaskExecutionDependencies,
 ): Promise<void | TaskExecutionCallbackResult> {
   const taskSnapshot = JSON.stringify(task);
   const dueAt =
@@ -1663,20 +1784,35 @@ async function executeTask(
     !Number.isNaN(task.lastFiredDueAt.getTime())
       ? task.lastFiredDueAt.toISOString()
       : undefined;
-  // notifyInfo already checks shouldNotify() internally — no need for an outer guard.
-  notifyInfo(messages.taskExecuting(task.name));
-  lastModelFallbackByTaskId.delete(task.id);
-  lastCopilotCliRunByTaskId.delete(task.id);
-  lastAgentHostRunByTaskId.delete(task.id);
-  lastModelExecutionByTaskId.delete(task.id);
+  const notify = deps?.notifyInfo ?? notifyInfo;
+  notify(messages.taskExecuting(task.name));
+  if (trigger === "manual") {
+    lastModelFallbackByTaskId.delete(task.id);
+    lastCopilotCliRunByTaskId.delete(task.id);
+    lastAgentHostRunByTaskId.delete(task.id);
+    lastModelExecutionByTaskId.delete(task.id);
+  }
+  let promptResolution: PromptResolution | undefined;
+  let executionResult: ExecutePromptResult | undefined;
 
   try {
-    const resolved = await resolvePromptExecution(task);
+    const resolved = await resolvePromptExecution(
+      task,
+      true,
+      (resolution) => {
+        promptResolution = resolution;
+        if (trigger === "manual") {
+          lastPromptResolutionByTaskId.set(task.id, resolution);
+        }
+      },
+      deps?.resolvePromptSnapshot,
+    );
     await assertSkillAvailable(task, resolved.prompt);
 
     // Execute the prompt
     try {
-      const executionResult = await copilotExecutor.executePrompt(
+      executionResult = await (deps?.executePrompt ??
+        ((prompt, options) => copilotExecutor.executePrompt(prompt, options)))(
         resolved.prompt,
         {
           ...buildPromptExecutionOptions(
@@ -1686,23 +1822,38 @@ async function executeTask(
           ),
           targetChatId: task.targetChatId,
           taskId: task.id,
+          onAgentHostInputNeeded: createAgentHostInputHandler(),
+          onAgentHostQueueBlocked: createAgentHostQueueBlockedHandler(),
+          ...(trigger === "auto" &&
+          !task.runAt &&
+          task.allowOverlappingRuns === true &&
+          dueAt
+            ? { queueOccurrenceId: dueAt }
+            : {}),
           ...(dispatchGuard
             ? { dispatchGuard, allowUnguardedFallback: !task.runAt }
             : {}),
         },
       );
-      if (executionResult?.cliRun) {
-        lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
-      }
-      if (executionResult?.agentHostRun) {
-        lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
-      }
-      if (executionResult?.modelExecution) {
-        lastModelExecutionByTaskId.set(task.id, executionResult.modelExecution);
+      if (trigger === "manual") {
+        if (executionResult?.cliRun) {
+          lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
+        }
+        if (executionResult?.agentHostRun) {
+          lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
+        }
+        if (executionResult?.modelExecution) {
+          lastModelExecutionByTaskId.set(
+            task.id,
+            executionResult.modelExecution,
+          );
+        }
+        if (executionResult?.modelFallback) {
+          lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
+        }
       }
       if (executionResult?.modelFallback) {
-        lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
-        notifyInfo(
+        notify(
           messages.modelFallbackApplied(
             executionResult.modelFallback.from,
             executionResult.modelFallback.to,
@@ -1715,14 +1866,19 @@ async function executeTask(
       throw error;
     }
 
-    await syncPromptSnapshotAfterRun(task, taskSnapshot);
+    await syncPromptSnapshotAfterRun(
+      task,
+      taskSnapshot,
+      promptResolution,
+      deps?.updateTaskPrompts,
+    );
     attachmentBlockNotifications.delete(task.id);
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
-      const agentHostRun = lastAgentHostRunByTaskId.get(task.id);
-      const modelExecution = lastModelExecutionByTaskId.get(task.id);
-      notifyInfo(
+      const agentHostRun = executionResult?.agentHostRun;
+      const modelExecution = executionResult?.modelExecution;
+      notify(
         buildExecutionSummary(
           task.name,
           "success",
@@ -1740,19 +1896,17 @@ async function executeTask(
         runAt: task.runAt,
         nextRunAt: nextRunDate?.toISOString(),
         attachmentCount: task.attachments?.length,
-        detail: takeModelFallbackDetail(task.id),
+        detail: buildExecutionResultDetail(executionResult),
         turnOutcome: agentHostRun?.turnOutcome,
         responseText: agentHostRun?.responseText,
         workspaceMode: agentHostRun?.workspaceMode,
         workspaceModeApplication: agentHostRun?.workspaceModeApplication,
         modelExecution,
-        ...buildPromptHistoryMetadata(
-          lastPromptResolutionByTaskId.get(task.id),
-        ),
+        ...buildPromptHistoryMetadata(promptResolution),
       };
       if (task.runAt && task.afterRun === "delete") {
         try {
-          await enqueueExecutionHistory(entry);
+          await (deps?.enqueueHistory ?? enqueueExecutionHistory)(entry);
         } catch (error) {
           logError(
             "[CopilotScheduler] One-time task history failed; task retained:",
@@ -1763,7 +1917,7 @@ async function executeTask(
           return { retainOneTimeTask: true };
         }
       } else {
-        void recordExecutionHistoryBestEffort(entry);
+        void (deps?.recordHistory ?? recordExecutionHistoryBestEffort)(entry);
       }
     }
   } catch (error) {
@@ -1784,8 +1938,8 @@ async function executeTask(
       if (trigger === "auto") {
         const nextRunDate = getNotificationNextRun(task, new Date());
         const turnOutcome = getAgentHostTurnFailure(error);
-        const modelExecution = lastModelExecutionByTaskId.get(task.id);
-        const executionDetail = takeModelFallbackDetail(task.id);
+        const modelExecution = executionResult?.modelExecution;
+        const executionDetail = buildExecutionResultDetail(executionResult);
         const status = turnOutcome ? "failed" : "blocked";
         const summary = buildExecutionSummary(
           task.name,
@@ -1793,7 +1947,7 @@ async function executeTask(
           nextRunDate,
         );
         vscode.window.setStatusBarMessage(`⛔ ${summary}`, 6000);
-        void recordExecutionHistoryBestEffort({
+        void (deps?.recordHistory ?? recordExecutionHistoryBestEffort)({
           taskId: task.id,
           taskName: task.name,
           trigger,
@@ -1812,9 +1966,7 @@ async function executeTask(
             .join(" / "),
           turnOutcome,
           modelExecution,
-          ...buildPromptHistoryMetadata(
-            lastPromptResolutionByTaskId.get(task.id),
-          ),
+          ...buildPromptHistoryMetadata(promptResolution),
         });
       }
 
@@ -1831,11 +1983,11 @@ async function executeTask(
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
-      const modelExecution = lastModelExecutionByTaskId.get(task.id);
-      const executionDetail = takeModelFallbackDetail(task.id);
+      const modelExecution = executionResult?.modelExecution;
+      const executionDetail = buildExecutionResultDetail(executionResult);
       const summary = buildExecutionSummary(task.name, "failed", nextRunDate);
       vscode.window.setStatusBarMessage(`⚠ ${summary}`, 6000);
-      void recordExecutionHistoryBestEffort({
+      void (deps?.recordHistory ?? recordExecutionHistoryBestEffort)({
         taskId: task.id,
         taskName: task.name,
         trigger,
@@ -1851,18 +2003,11 @@ async function executeTask(
           .filter((item): item is string => !!item)
           .join(" / "),
         modelExecution,
-        ...buildPromptHistoryMetadata(
-          lastPromptResolutionByTaskId.get(task.id),
-        ),
+        ...buildPromptHistoryMetadata(promptResolution),
       });
     }
 
     throw error;
-  } finally {
-    // Manual runs read the metadata later in appendManualRunHistory.
-    if (trigger === "auto") {
-      lastPromptResolutionByTaskId.delete(task.id);
-    }
   }
 }
 
@@ -1873,14 +2018,16 @@ async function executeTask(
 async function syncPromptSnapshotAfterRun(
   task: ScheduledTask,
   expectedSnapshot: string,
+  resolution: PromptResolution | undefined,
+  updateTaskPrompts?: TaskExecutionDependencies["updateTaskPrompts"],
 ): Promise<void> {
-  const resolution = lastPromptResolutionByTaskId.get(task.id);
   if (!resolution || resolution.source !== "file") return;
   if (!resolution.text.trim()) return;
   if (resolution.text === task.prompt) return;
 
   try {
-    await scheduleManager.updateTaskPrompts([
+    await (updateTaskPrompts ??
+      ((updates) => scheduleManager.updateTaskPrompts(updates)))([
       { id: task.id, prompt: resolution.text, expectedSnapshot },
     ]);
   } catch (error) {
@@ -2230,9 +2377,7 @@ function applyAutoModeHint(promptText: string, enabled: boolean): string {
 }
 
 /**
- * Prompt resolution metadata for the most recent execution attempt per task.
- * Written at resolve time so history writers never re-read the file and record
- * content that differs from what was actually executed.
+ * Prompt resolution metadata for manual executions until their history is written.
  */
 const lastPromptResolutionByTaskId = new Map<string, PromptResolution>();
 
@@ -2273,9 +2418,11 @@ function buildPromptHistoryMetadata(
 async function resolvePromptExecution(
   task: ScheduledTask,
   preferOpenDocument = true,
+  onResolved?: (resolution: PromptResolution) => void,
+  resolveSnapshot = resolvePromptSnapshot,
 ): Promise<PromptExecutionPayload> {
-  const resolution = await resolvePromptSnapshot(task, preferOpenDocument);
-  lastPromptResolutionByTaskId.set(task.id, resolution);
+  const resolution = await resolveSnapshot(task, preferOpenDocument);
+  onResolved?.(resolution);
   assertPromptResolutionAllowed(task, resolution);
 
   const parsed = parsePromptFrontmatter(resolution.text);
@@ -2327,6 +2474,8 @@ async function assertSkillAvailable(
 
 export const __testOnly = {
   assertSkillAvailable,
+  createAgentHostInputHandler,
+  createAgentHostQueueBlockedHandler,
   normalizeNotificationMode,
   resolveNotificationMode,
   resolvePromptText,
@@ -2345,6 +2494,8 @@ export const __testOnly = {
   buildExecutionHistoryQuickPickItems,
   buildExecutionSummary,
   showExecutionHistoryView,
+  executeTask,
+  appendManualRunHistory,
   confirmManualRunIfWorkspaceMismatch,
   shouldWarnCronInterval,
   runTaskManually,
@@ -2857,7 +3008,11 @@ async function handleTestPromptAction(
   try {
     await copilotExecutor.executePrompt(
       request.prompt,
-      buildPromptExecutionOptions(request),
+      {
+        ...buildPromptExecutionOptions(request),
+        onAgentHostInputNeeded: createAgentHostInputHandler(),
+        onAgentHostQueueBlocked: createAgentHostQueueBlockedHandler(),
+      },
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

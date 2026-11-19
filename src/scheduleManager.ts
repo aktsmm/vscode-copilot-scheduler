@@ -357,7 +357,24 @@ interface TaskRunClaim {
   expectedNextRun: number | undefined;
   expectedUpdatedAt: number;
   expectedEnabled: boolean;
+  executionFingerprint?: string;
   deleteAfterRun?: boolean;
+}
+
+function markTaskUpdated(task: ScheduledTask, now = new Date()): void {
+  const next = new Date(Math.max(now.getTime(), task.updatedAt.getTime() + 1));
+  task.updatedAt = Number.isNaN(next.getTime()) ? now : next;
+}
+
+function taskExecutionFingerprint(
+  task: ScheduledTask | Record<string, unknown>,
+): string {
+  const execution = { ...task };
+  delete execution.nextRun;
+  delete execution.lastRun;
+  delete execution.lastFiredDueAt;
+  delete execution.lastFiredClaimId;
+  return JSON.stringify(execution);
 }
 
 interface TaskRunSkip {
@@ -370,6 +387,7 @@ interface TaskRunSkip {
   expectedAllowedTimeStart: string | undefined;
   expectedAllowedTimeEnd: string | undefined;
   expectedMaxExecutionsPerDay: number | undefined;
+  expectedAllowOverlappingRuns: boolean | undefined;
   expectedScope: TaskScope;
   expectedWorkspacePath: string | undefined;
   evaluatedAt: Date;
@@ -390,6 +408,7 @@ export class ScheduleManager {
   private schedulerTickPending = false;
   private schedulerStartedAt: Date | undefined;
   private automaticRunsInFlight = 0;
+  private automaticRunsInFlightByTask = new Map<string, number>();
   private detachedRuns: Set<Promise<void>> = new Set();
   private context: vscode.ExtensionContext;
   private storageFilePath: string;
@@ -409,7 +428,7 @@ export class ScheduleManager {
   private dailyTaskExecCounts: Record<string, number> = {};
   private dailyTaskExecDate = "";
   private dailyLimitNotifiedDate = "";
-  private inFlightTaskIds: Set<string> = new Set();
+  private inFlightTaskRuns = new Map<string, number>();
 
   private storageRevision = 0;
   private storageCommitId: string | undefined;
@@ -852,22 +871,43 @@ export class ScheduleManager {
     return this.dailyTaskExecCounts[taskId] ?? 0;
   }
 
-  private tryStartTaskRun(taskId: string): boolean {
+  private tryStartTaskRun(taskId: string, allowOverlap = false): boolean {
     if (!taskId) {
       return false;
     }
-    if (this.inFlightTaskIds.has(taskId)) {
+    const active = this.inFlightTaskRuns.get(taskId) ?? 0;
+    const automatic = this.automaticRunsInFlightByTask.get(taskId) ?? 0;
+    if (active > 0 && (!allowOverlap || active > automatic)) {
       return false;
     }
-    this.inFlightTaskIds.add(taskId);
+    this.inFlightTaskRuns.set(taskId, active + 1);
     return true;
   }
 
   private finishTaskRun(taskId: string): void {
-    if (!taskId) {
-      return;
+    const active = this.inFlightTaskRuns.get(taskId) ?? 0;
+    if (active <= 1) {
+      this.inFlightTaskRuns.delete(taskId);
+    } else {
+      this.inFlightTaskRuns.set(taskId, active - 1);
     }
-    this.inFlightTaskIds.delete(taskId);
+  }
+
+  private reserveAutomaticRun(taskId: string): void {
+    this.automaticRunsInFlight++;
+    const active = this.automaticRunsInFlightByTask.get(taskId) ?? 0;
+    this.automaticRunsInFlightByTask.set(taskId, active + 1);
+  }
+
+  private finishAutomaticRun(taskId: string): void {
+    this.automaticRunsInFlight--;
+    const active = this.automaticRunsInFlightByTask.get(taskId) ?? 0;
+    if (active <= 1) {
+      this.automaticRunsInFlightByTask.delete(taskId);
+    } else {
+      this.automaticRunsInFlightByTask.set(taskId, active - 1);
+    }
+    this.finishTaskRun(taskId);
   }
 
   private async persistDailyExecCount(): Promise<void> {
@@ -915,7 +955,7 @@ export class ScheduleManager {
       ) continue;
       if (task.prompt === nextPrompt) continue;
       task.prompt = nextPrompt;
-      task.updatedAt = now;
+      markTaskUpdated(task, now);
       changed++;
     }
 
@@ -1403,6 +1443,17 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      if (
+        task.allowOverlappingRuns !== undefined &&
+        typeof task.allowOverlappingRuns !== "boolean"
+      ) {
+        logError(
+          "[CopilotScheduler] Invalid overlapping-run setting disabled.",
+        );
+        task.allowOverlappingRuns = false;
+        needsSave = true;
+      }
+
       if (task.skillRef !== undefined) {
         const cleanSkillRef = normalizeSkillRef(task.skillRef);
         if (JSON.stringify(cleanSkillRef) !== JSON.stringify(task.skillRef)) {
@@ -1870,14 +1921,6 @@ export class ScheduleManager {
       : "runOnce";
   }
 
-  private getMaxConcurrentAutomaticRuns(): number {
-    const config = vscode.workspace.getConfiguration("copilotScheduler");
-    const value = config.get<number>("maxConcurrentAutomaticRuns", 1);
-    return Number.isFinite(value)
-      ? Math.min(Math.max(Math.floor(value), 1), 10)
-      : 1;
-  }
-
   /**
    * Calculate next run time from cron expression
    */
@@ -2040,6 +2083,12 @@ export class ScheduleManager {
     ) {
       throw new Error(messages.agentHostFallbackGuardInvalid());
     }
+    if (
+      input.allowOverlappingRuns !== undefined &&
+      typeof input.allowOverlappingRuns !== "boolean"
+    ) {
+      throw new Error(messages.allowOverlappingRunsInvalid());
+    }
     const agentHostWorkspaceMode = normalizeAgentHostWorkspaceModeOrThrow(
       input.agentHostWorkspaceMode,
     );
@@ -2163,6 +2212,8 @@ export class ScheduleManager {
           ? this.clampJitterSeconds(input.jitterSeconds)
           : defaultJitter,
       maxExecutionsPerDay,
+      allowOverlappingRuns:
+        input.allowOverlappingRuns === true && !input.runAt ? true : undefined,
       allowedTimeStart,
       allowedTimeEnd,
       nextRun,
@@ -2258,7 +2309,7 @@ export class ScheduleManager {
           )
         : matchedSelection;
       if (applyModelSelectionToTask(task, nextSelection)) {
-        task.updatedAt = new Date();
+        markTaskUpdated(task);
         changed += 1;
       }
     }
@@ -2318,6 +2369,12 @@ export class ScheduleManager {
     }
     if (updates.promptPath?.includes("\0")) {
       throw new Error(messages.templateLoadError());
+    }
+    if (
+      updates.allowOverlappingRuns !== undefined &&
+      typeof updates.allowOverlappingRuns !== "boolean"
+    ) {
+      throw new Error(messages.allowOverlappingRunsInvalid());
     }
     const agentHostWorkspaceMode = normalizeAgentHostWorkspaceModeOrThrow(
       updates.agentHostWorkspaceMode,
@@ -2568,6 +2625,15 @@ export class ScheduleManager {
         updates.maxExecutionsPerDay,
       );
     }
+    if (updates.allowOverlappingRuns !== undefined) {
+      task.allowOverlappingRuns =
+        updates.allowOverlappingRuns === true ? true : undefined;
+    }
+    // The option only applies to recurring tasks; a one-time task must not
+    // carry it back into a later recurring schedule.
+    if (task.runAt) {
+      task.allowOverlappingRuns = undefined;
+    }
     if (updates.allowedTimeStart !== undefined) {
       task.allowedTimeStart = this.normalizeTimeWindowOrThrow(
         updates.allowedTimeStart,
@@ -2611,7 +2677,7 @@ export class ScheduleManager {
       task.lastFiredClaimId = undefined;
     }
 
-    task.updatedAt = now;
+    markTaskUpdated(task, now);
 
     await this.saveTasksOrRestore();
 
@@ -2648,7 +2714,7 @@ export class ScheduleManager {
     }
 
     task.enabled = nextEnabled;
-    task.updatedAt = new Date();
+    markTaskUpdated(task);
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
@@ -2683,7 +2749,7 @@ export class ScheduleManager {
     }
 
     task.enabled = enabled;
-    task.updatedAt = new Date();
+    markTaskUpdated(task);
 
     // Keep nextRun consistent with enabled state
     if (task.enabled) {
@@ -2737,6 +2803,7 @@ export class ScheduleManager {
       targetChatTitle: original.targetChatTitle,
       jitterSeconds: original.jitterSeconds,
       maxExecutionsPerDay: original.maxExecutionsPerDay,
+      allowOverlappingRuns: original.allowOverlappingRuns,
       allowedTimeStart: original.allowedTimeStart,
       allowedTimeEnd: original.allowedTimeEnd,
     };
@@ -2756,7 +2823,7 @@ export class ScheduleManager {
 
       if (!sameWorkspacePath) {
         duplicated.workspacePath = originalWorkspacePath;
-        duplicated.updatedAt = new Date();
+        markTaskUpdated(duplicated);
         await this.saveTasksOrRestore();
       }
     }
@@ -2799,7 +2866,7 @@ export class ScheduleManager {
     }
 
     task.workspacePath = workspaceRoot;
-    task.updatedAt = new Date();
+    markTaskUpdated(task);
     await this.saveTasksOrRestore();
     return task;
   }
@@ -2937,7 +3004,6 @@ export class ScheduleManager {
       safeMaxDaily === 0 ? 0 : Math.min(Math.max(safeMaxDaily, 1), 100);
     const defaultJitterSeconds = config.get<number>("jitterSeconds", 600);
     const missedRunPolicy = this.getMissedRunPolicy();
-    const maxConcurrentAutomaticRuns = this.getMaxConcurrentAutomaticRuns();
     const schedulerStartedAt = this.schedulerStartedAt;
 
     let executedCount = 0;
@@ -2955,6 +3021,7 @@ export class ScheduleManager {
         expectedAllowedTimeStart: task.allowedTimeStart,
         expectedAllowedTimeEnd: task.allowedTimeEnd,
         expectedMaxExecutionsPerDay: task.maxExecutionsPerDay,
+        expectedAllowOverlappingRuns: task.allowOverlappingRuns,
         expectedScope: task.scope,
         expectedWorkspacePath: task.workspacePath,
         evaluatedAt: now,
@@ -3041,10 +3108,6 @@ export class ScheduleManager {
           continue;
         }
 
-        if (this.automaticRunsInFlight >= maxConcurrentAutomaticRuns) {
-          continue;
-        }
-
         // Safety: Check daily execution limit
         if (this.isDailyLimitReached(maxDailyLimit)) {
           logDebug(
@@ -3077,7 +3140,22 @@ export class ScheduleManager {
           continue;
         }
 
-        if (!this.tryStartTaskRun(task.id)) {
+        const taskDailyLimit = this.clampTaskMaxExecutionsPerDay(
+          task.maxExecutionsPerDay,
+        );
+        if (
+          taskDailyLimit !== undefined &&
+          taskDailyLimit > 0 &&
+          this.getTaskDailyExecCount(task.id, now) +
+            (this.automaticRunsInFlightByTask.get(task.id) ?? 0) >=
+            taskDailyLimit
+        ) {
+          continue;
+        }
+
+        const allowOverlap =
+          !task.runAt && task.allowOverlappingRuns === true;
+        if (!this.tryStartTaskRun(task.id, allowOverlap)) {
           logDebug(
             `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
           );
@@ -3099,8 +3177,11 @@ export class ScheduleManager {
           expectedNextRun: task.nextRun?.getTime(),
           expectedUpdatedAt: task.updatedAt.getTime(),
           expectedEnabled: task.enabled,
+          ...(allowOverlap
+            ? { executionFingerprint: taskExecutionFingerprint(task) }
+            : {}),
         });
-        this.automaticRunsInFlight++;
+        this.reserveAutomaticRun(task.id);
       }
     }
 
@@ -3111,8 +3192,7 @@ export class ScheduleManager {
       const accepted = new Set(claimResult.claimed);
       for (const claim of claims) {
         if (!accepted.has(claim)) {
-          this.automaticRunsInFlight--;
-          this.finishTaskRun(claim.taskId);
+          this.finishAutomaticRun(claim.taskId);
         }
       }
       if (!claimResult.failed) {
@@ -3190,7 +3270,7 @@ export class ScheduleManager {
 
   /**
    * Runs a claimed occurrence without holding up the tick, then records its result.
-   * The automatic-run slot stays taken until the run ends (executeClaimedTask frees it).
+   * Its daily reservation remains held until executeClaimedTask finishes.
    */
   private startDetachedClaim(
     claim: TaskRunClaim,
@@ -3243,6 +3323,8 @@ export class ScheduleManager {
       task.enabled === claim.expectedEnabled &&
       task.nextRun?.getTime() === claim.expectedNextRun &&
       task.updatedAt.getTime() === claim.expectedUpdatedAt &&
+      (claim.executionFingerprint === undefined ||
+        taskExecutionFingerprint(task) === claim.executionFingerprint) &&
       (!task.lastFiredDueAt ||
         task.lastFiredDueAt.getTime() < claim.dueAt.getTime())
     );
@@ -3264,7 +3346,10 @@ export class ScheduleManager {
     claim: TaskRunClaim,
     task: ScheduledTask,
   ): (dispatch: () => void) => Promise<void> {
-    const snapshot = JSON.stringify(task);
+    const snapshot =
+      claim.executionFingerprint === undefined
+        ? JSON.stringify(task)
+        : taskExecutionFingerprint(task);
     return async (dispatch) => {
       try {
         await this.saveQueue;
@@ -3272,10 +3357,12 @@ export class ScheduleManager {
           const shared = this.loadSharedFileMetadata();
           const current = this.tasks.get(claim.taskId);
           const stored = shared.meta?.tasksSnapshot?.find(
-            (item) =>
-              !!item &&
+            (item): item is Record<string, unknown> =>
               typeof item === "object" &&
-              (item as Record<string, unknown>).id === claim.taskId,
+              item !== null &&
+              !Array.isArray(item) &&
+              "id" in item &&
+              item.id === claim.taskId,
           );
           if (
             shared.error ||
@@ -3283,8 +3370,14 @@ export class ScheduleManager {
             !(claim.runAt
               ? this.ownsOneTimeClaim(claim, current)
               : this.ownsRecurringClaim(claim, current)) ||
-            JSON.stringify(current) !== snapshot ||
-            JSON.stringify(stored) !== snapshot
+            (claim.executionFingerprint === undefined
+              ? JSON.stringify(current)
+              : taskExecutionFingerprint(current)) !== snapshot ||
+            (claim.executionFingerprint === undefined
+              ? JSON.stringify(stored)
+              : stored
+                ? taskExecutionFingerprint(stored)
+                : undefined) !== snapshot
           ) {
             throw new Error("The claimed task changed before dispatch");
           }
@@ -3306,11 +3399,23 @@ export class ScheduleManager {
   }
 
   private ownsRecurringClaim(claim: TaskRunClaim, task: ScheduledTask): boolean {
-    return (
+    const matchingTask =
       !claim.runAt &&
       !task.runAt &&
       task.cronExpression === claim.cronExpression &&
-      task.enabled === claim.expectedEnabled &&
+      task.enabled === claim.expectedEnabled;
+    if (!matchingTask) {
+      return false;
+    }
+    if (claim.executionFingerprint !== undefined) {
+      return (
+        task.allowOverlappingRuns === true &&
+        task.lastFiredDueAt instanceof Date &&
+        task.lastFiredDueAt.getTime() >= claim.dueAt.getTime() &&
+        taskExecutionFingerprint(task) === claim.executionFingerprint
+      );
+    }
+    return (
       task.nextRun?.getTime() === claim.nextRun?.getTime() &&
       task.lastFiredDueAt?.getTime() === claim.dueAt.getTime()
     );
@@ -3326,6 +3431,7 @@ export class ScheduleManager {
       task.allowedTimeStart === skip.expectedAllowedTimeStart &&
       task.allowedTimeEnd === skip.expectedAllowedTimeEnd &&
       task.maxExecutionsPerDay === skip.expectedMaxExecutionsPerDay &&
+      task.allowOverlappingRuns === skip.expectedAllowOverlappingRuns &&
       task.scope === skip.expectedScope &&
       task.workspacePath === skip.expectedWorkspacePath
     );
@@ -3507,7 +3613,9 @@ export class ScheduleManager {
         ) {
           continue;
         }
-        task.lastRun = executedAt;
+        if (!task.lastRun || task.lastRun.getTime() < executedAt.getTime()) {
+          task.lastRun = executedAt;
+        }
         if (
           claim.runAt &&
           task.afterRun === "delete" &&
@@ -3594,7 +3702,12 @@ export class ScheduleManager {
         return undefined;
       }
 
-      const executionTask = { ...task };
+      const executionTask = {
+        ...task,
+        ...(claim.executionFingerprint !== undefined
+          ? { lastFiredDueAt: claim.dueAt }
+          : {}),
+      };
       let callbackResult: void | TaskExecutionCallbackResult;
       try {
         callbackResult = await this.onExecuteCallback(
@@ -3621,8 +3734,7 @@ export class ScheduleManager {
       }
       return executedAt;
     } finally {
-      this.automaticRunsInFlight--;
-      this.finishTaskRun(claim.taskId);
+      this.finishAutomaticRun(claim.taskId);
     }
   }
 

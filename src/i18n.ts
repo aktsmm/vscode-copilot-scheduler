@@ -526,6 +526,26 @@ export const messages = {
       "The Agent Host fallback guard must be on or off.",
       "Agent Host の経路切替ガードはオンまたはオフで指定してください。",
     ),
+  allowOverlappingRunsInvalid: () =>
+    t(
+      "The per-task overlap setting must be a boolean.",
+      "タスクごとの重複実行設定は真偽値で指定してください。",
+    ),
+  allowOverlappingRunsConfirmationEnabled: () =>
+    t(
+      "Overlapping automatic runs of this recurring task: allowed. Manual and one-time runs retain their guards.",
+      "この定期タスクの自動実行の重複: 許可。手動実行と 1 回限りの実行は従来のガードを維持します。",
+    ),
+  allowOverlappingRunsConfirmationDisabled: () =>
+    t(
+      "Overlapping automatic runs of this recurring task: not allowed (default). Manual and one-time runs retain their guards.",
+      "この定期タスクの自動実行の重複: 禁止（既定）。手動実行と 1 回限りの実行は従来のガードを維持します。",
+    ),
+  allowOverlappingRunsConfirmationInvalid: () =>
+    t(
+      "Overlapping automatic runs: invalid value; a boolean is required.",
+      "自動実行の重複設定: 無効な値です。真偽値が必要です。",
+    ),
   labelAgentHostModel: () =>
     t("Agent Host model ID", "Agent Host のモデル ID"),
   labelAgentHostWorkspaceMode: () =>
@@ -545,6 +565,11 @@ export const messages = {
     t(
       "Applies only to NEW Agent Host sessions. Resume keeps the original location; this choice never forces a new session. Existing folder shares uncommitted changes and local records. No override preserves previous Host behavior (normally worktree for Git). An explicit choice that cannot be honored stops without sending the prompt.",
       "新しい Agent Host セッションにのみ適用します。再開時は元の場所を維持し、この選択だけで新規セッションにはしません。既存フォルダーは未コミット変更やローカル記録を共有します。上書きなしは従来の Host 動作（Git では通常 worktree）を維持します。明示指定を適用できなければプロンプトを送信せず停止します。",
+    ),
+  webviewAgentHostWorkspaceModeNote: () =>
+    t(
+      "New sessions only; resume keeps its location. The existing folder shares uncommitted changes and local records. Default preserves previous Host behavior (normally a Git worktree). If a selected location cannot be used, execution stops.",
+      "新規セッションのみに適用し、再開時は元の場所を維持します。既存フォルダーは未コミット変更とローカル記録を共有します。既定は従来の Host 動作（Git では通常 worktree）です。指定した場所を使えなければ実行を停止します。",
     ),
   agentHostWorkspaceModeInactive: () =>
     t(
@@ -615,8 +640,8 @@ export const messages = {
     ),
   webviewPreventAgentHostFallbackNote: () =>
     t(
-      "Off by default. When on, an Agent Host failure stops the task instead of switching routes. It does not apply when Chat, Local, a remote window, or the CLI is selected from the start.",
-      "既定はオフです。オンにすると Agent Host で実行できない場合は経路を切り替えず停止します。最初から Chat、Local、リモートウィンドウ、CLI を選ぶ場合は対象外です。",
+      "Stops instead of switching from Agent Host to Chat. Does not affect Chat, Local, remote, or CLI routes selected initially.",
+      "Agent Host から Chat へ切り替えず停止します。最初から Chat、Local、リモート、CLI を選ぶ場合は対象外です。",
     ),
   agentHostModelSelectionRequired: () =>
     t(
@@ -625,13 +650,13 @@ export const messages = {
     ),
   webviewModelFallbackNote: () =>
     t(
-      "Off by default. When on, an unavailable model is replaced by the first available model in the copilotScheduler.modelFallbackChain setting (default: HydraFusion, then Auto). HydraFusion is skipped unless the model list includes it. Explicit detailed model options are not carried over. The change is recorded in the execution history. Whether the replacement is applied depends on the session type; see the note under the model selector.",
-      "既定はオフです。オンにすると、利用できないモデルを copilotScheduler.modelFallbackChain 設定（既定: HydraFusion → Auto）で最初に使えるモデルへ置き換えます。モデル一覧に無い HydraFusion は飛ばされます。モデルの詳細オプションは引き継ぎません。切り替えは実行履歴に記録されます。置き換えが反映されるかはセッションの種類によります。モデル選択欄の注記を参照してください。",
+      "If the selected model is absent from the live catalog, use the configured fallback chain. Detailed model options are not carried over. The switch is recorded; application depends on the route.",
+      "選択したモデルが現在の一覧にない場合、設定した代替モデルの順序を使います。詳細オプションは引き継ぎません。切り替えは履歴に記録され、適用は実行経路によります。",
     ),
   webviewModelHarnessNote: () =>
     t(
-      "By default, the Agent Host receives the selected model ID and supported options. Its reported model ID does not independently verify the backend. If the task switches to the chat route, model application is unverified. Use the CLI option below for a background Copilot CLI process.",
-      "既定では Agent Host に選択したモデル ID と対応するオプションを送ります。Host が報告した ID は実バックエンドの独立した確認ではありません。チャット経路へ切り替わった場合、モデルの適用は未確認です。下の CLI オプションでバックグラウンドの Copilot CLI を利用できます。",
+      "Agent Host receives the selected model and supported options; its reported ID does not verify the backend. Model application on the Chat route is unverified.",
+      "Agent Host に選択したモデルと対応オプションを送ります。Host の報告 ID は実バックエンドの確認ではありません。Chat 経路での適用は未確認です。",
     ),
   labelUseCopilotCli: () =>
     t(
@@ -640,8 +665,13 @@ export const messages = {
     ),
   webviewUseCopilotCliNote: () =>
     t(
-      "Off by default. Only a task with a model selected runs this way; without a model the task runs in chat as usual. When on, the task runs as a background `copilot` process instead of a chat session, so the model and reasoning effort above are applied (Copilot models only) and the answer is not shown in the chat window. A skill (/name) is expanded by Scheduler because the CLI does not run slash commands. Attachments, detailed model options and the custom agent are not supported. Tools run only if copilotScheduler.cliAllowAllTools is on. The execution history records the model the CLI reported.",
-      "既定はオフです。モデルを選択したタスクだけがこの方法で実行され、モデル未選択のタスクはこれまでどおりチャットで実行されます。オンにすると、チャットセッションではなくバックグラウンドの `copilot` プロセスとして実行するため、上のモデルと reasoning effort が反映されます（Copilot のモデルのみ）。応答はチャット画面には表示されません。CLI はスラッシュコマンドを実行しないため、スキル（/名前）は Scheduler が展開します。添付ファイル、モデルの詳細オプション、カスタムエージェントには対応していません。ツールの実行は copilotScheduler.cliAllowAllTools がオンのときだけ許可されます。実行履歴には CLI が報告したモデルを記録します。",
+      "Runs selected Copilot models in a background process; without a model the normal route is used. No chat output, attachments, custom agent, or detailed model options. Scheduler expands skills; tools require copilotScheduler.cliAllowAllTools. One-time tasks require Agent Host.",
+      "選択した Copilot モデルをバックグラウンドで実行し、モデル未選択時は通常の経路を使います。チャットへの応答表示、添付、カスタムエージェント、モデルの詳細設定には非対応です。スキルは Scheduler が展開し、ツールには copilotScheduler.cliAllowAllTools が必要です。1 回限りのタスクは Agent Host が必要です。",
+    ),
+  webviewCopilotCliConfigured: () =>
+    t(
+      "Copilot CLI option selected. The actual route depends on the selected model and execution guards. To change it, open Advanced and enable copilotScheduler.showCopilotCliControls if needed.",
+      "Copilot CLI オプションを選択中です。実際の経路は選択モデルと実行ガードによります。変更するには詳細設定を開き、必要に応じて copilotScheduler.showCopilotCliControls を有効にしてください。",
     ),
   copilotCliUnsupportedModel: () =>
     t(
@@ -686,6 +716,11 @@ export const messages = {
       `The Agent Host run failed.${detail ? ` ${detail}` : ""}`,
       `Agent Host での実行に失敗しました。${detail ? ` ${detail}` : ""}`,
     ),
+  agentHostContextBudgetExceeded: () =>
+    t(
+      "The Agent Host run failed because the selected model's context budget is smaller than the session's system messages and tool definitions. Choose a model with a larger context window for this task, or reduce the enabled tools and MCP servers. The size cannot be checked before the run.",
+      "選択したモデルのコンテキスト予算が、セッションのシステムメッセージとツール定義より小さいため、Agent Host での実行に失敗しました。このタスクではコンテキストの大きいモデルを選ぶか、有効なツールや MCP サーバーを減らしてください。サイズは実行前には確認できません。",
+    ),
   agentHostCancelled: (detail: string) =>
     t(
       `The Agent Host turn was cancelled.${detail ? ` ${detail}` : ""}`,
@@ -696,6 +731,35 @@ export const messages = {
       `The Agent Host turn outcome is unknown and it may still be running. Check Chat and history before retrying.${detail ? ` ${detail}` : ""}`,
       `Agent Host のターン結果は不明で、実行が続いている可能性があります。再実行する前に Chat と履歴を確認してください。${detail ? ` ${detail}` : ""}`,
     ),
+  agentHostInputStatus: () =>
+    t("Copilot needs input", "Copilot が入力待ち"),
+  agentHostOpenChat: () => t("Open Copilot Chat", "Copilot Chat を開く"),
+  agentHostQueueBlockedStatus: () =>
+    t("Copilot queue needs attention", "Copilot のキューを確認"),
+  agentHostQueueBlocked: () =>
+    t(
+      "A queued task may remain pending after the previous turn failed or was cancelled. Open the chat to review it; it has not been resent.",
+      "先行ターンの失敗またはキャンセル後、タスクがキューに保留されたままになる場合があります。チャットを開いて確認してください。自動再送はしていません。",
+    ),
+  agentHostInputNeeded: (kind: import("./agentHostInputObserver").AgentHostInputKind) => {
+    switch (kind) {
+      case "chatInput":
+        return t(
+          "A Copilot chat is waiting for your answer. Open the chat to continue.",
+          "Copilot チャットが回答を待っています。チャットを開いて対応してください。",
+        );
+      case "toolConfirmation":
+        return t(
+          "A Copilot chat is waiting for tool approval. Open the chat to continue.",
+          "Copilot チャットがツールの承認を待っています。チャットを開いて対応してください。",
+        );
+      case "toolAuthentication":
+        return t(
+          "A Copilot chat needs authentication. Open the chat to continue.",
+          "Copilot チャットで認証が必要です。チャットを開いて対応してください。",
+        );
+    }
+  },
   agentHostModelMismatch: (requested: string, applied: string) =>
     t(
       `The Agent Host reported ${applied}, which differs from the requested ${requested}. The backend was not independently verified.`,
@@ -853,6 +917,8 @@ export const messages = {
   sectionBasics: () => t("Basics", "基本情報"),
   sectionTarget: () => t("Target", "実行対象"),
   sectionGuardrails: () => t("Guardrails", "安全設定"),
+  sectionScopeLocation: () =>
+    t("Scope and new-session location", "スコープと新規セッションの実行場所"),
   summaryTotalTasks: () => t("Total tasks", "総タスク数"),
   summaryEnabledTasks: () => t("Enabled", "有効"),
   summaryPausedTasks: () => t("Paused", "停止中"),
@@ -990,6 +1056,7 @@ export const messages = {
   labelModelUnavailableSuffix: () =>
     t("(saved, unavailable)", "（保存済み・現在利用不可）"),
   labelScope: () => t("Scope", "スコープ"),
+  labelTaskScope: () => t("Task scope", "タスクのスコープ"),
   labelScopeGlobal: () =>
     t("Global (All Workspaces)", "グローバル（全ワークスペース）"),
   labelScopeWorkspace: () => t("Workspace Only", "ワークスペースのみ"),
@@ -1029,6 +1096,16 @@ export const messages = {
     t("Jitter (max seconds, 0=off)", "ジッター(最大秒数, 0=無効)"),
   labelMaxExecutionsPerDay: () =>
     t("Task Max Runs/Day (0=unlimited)", "タスク上限/日（0=無制限）"),
+  labelAllowOverlappingRuns: () =>
+    t(
+      "Allow overlapping automatic runs",
+      "自動実行の重複を許可する",
+    ),
+  webviewAllowOverlappingRunsNote: () =>
+    t(
+      "Recurring automatic runs may overlap and edit the same files. Manual and one-time guards remain. Runs in the same chat may queue.",
+      "定期自動実行が重複し、同じファイルを編集する場合があります。手動実行と 1 回限りの実行のガードは維持します。同じチャットの実行はキュー待ちになる場合があります。",
+    ),
   labelAllowedTimeWindow: () => t("Allowed Time Window", "実行許可時間帯"),
   labelAllowedTimeWindowEnabled: () =>
     t("Limit execution to a time window", "実行時間帯を制限する"),
@@ -1036,8 +1113,8 @@ export const messages = {
   labelAllowedTimeEnd: () => t("End (HH:mm)", "終了（HH:mm）"),
   webviewAutoModeNote: () =>
     t(
-      "When enabled, inserts an autonomous-execution instruction at the beginning of the runtime prompt (after frontmatter, if present). It is not added when the prompt starts with a slash command, such as a skill, because the command must come first.",
-      "有効時、実行時プロンプトの先頭（フロントマターがあればその直後）に自律実行の指示を自動挿入します。スキルなどのスラッシュコマンドで始まるプロンプトには、コマンドを先頭に置く必要があるため挿入しません。",
+      "Adds an instruction to the prompt, except for slash commands. This is not native Autopilot.",
+      "プロンプトに指示を追加します（スラッシュコマンドを除く）。ネイティブの Autopilot ではありません。",
     ),
   webviewChatSessionNote: (modeLabel: string) =>
     t(

@@ -8,6 +8,7 @@
   var successToastFadeTimer = null;
   var successToastHideTimer = null;
   var invalidFieldElement = null;
+  var invalidFieldOriginalDescription = null;
 
   // Initial data (JSON from inline script tag)
   var initialData = {};
@@ -189,8 +190,16 @@
   function clearInvalidField() {
     if (!invalidFieldElement) return;
     invalidFieldElement.removeAttribute("aria-invalid");
-    invalidFieldElement.removeAttribute("aria-describedby");
+    if (invalidFieldOriginalDescription === null) {
+      invalidFieldElement.removeAttribute("aria-describedby");
+    } else {
+      invalidFieldElement.setAttribute(
+        "aria-describedby",
+        invalidFieldOriginalDescription,
+      );
+    }
     invalidFieldElement = null;
+    invalidFieldOriginalDescription = null;
   }
 
   // Hiding a container that owns focus strands keyboard users, so move focus first.
@@ -205,14 +214,32 @@
     }
   }
 
+  function revealFieldForValidation(fieldElement) {
+    if (!fieldElement || typeof fieldElement.closest !== "function") return;
+    var details = fieldElement.closest("details");
+    while (details) {
+      details.open = true;
+      details = details.parentElement
+        ? details.parentElement.closest("details")
+        : null;
+    }
+  }
+
   // Point the user at the field that failed instead of only showing a banner.
   function failValidation(message, fieldElement) {
     clearInvalidField();
     showFormError(message);
     if (!fieldElement) return;
     invalidFieldElement = fieldElement;
+    revealFieldForValidation(fieldElement);
+    invalidFieldOriginalDescription = fieldElement.getAttribute("aria-describedby");
     fieldElement.setAttribute("aria-invalid", "true");
-    fieldElement.setAttribute("aria-describedby", "form-error");
+    fieldElement.setAttribute(
+      "aria-describedby",
+      invalidFieldOriginalDescription
+        ? invalidFieldOriginalDescription + " form-error"
+        : "form-error",
+    );
     if (typeof fieldElement.focus === "function") {
       fieldElement.focus();
     }
@@ -654,6 +681,7 @@
       : "";
   var defaultScope =
     initialData.defaultScope === "global" ? "global" : "workspace";
+  var showCopilotCliControls = initialData.showCopilotCliControls === true;
   var locale =
     typeof initialData.locale === "string" && initialData.locale
       ? initialData.locale
@@ -705,6 +733,7 @@
     if (cronFields) cronFields.hidden = once;
     if (runAtInput) runAtInput.required = once;
     if (cronExpression) cronExpression.required = !once;
+    if (allowOverlappingRunsInput) allowOverlappingRunsInput.disabled = once;
   }
   Array.prototype.forEach.call(scheduleModes, function (radio) {
     radio.addEventListener("change", updateScheduleMode);
@@ -894,6 +923,7 @@
   }
 
   var autoModeInput = document.getElementById("auto-mode");
+  var allowOverlappingRunsInput = document.getElementById("allow-overlapping-runs");
   var modelFallbackInput = document.getElementById("model-fallback");
   var preventAgentHostFallbackInput = document.getElementById(
     "prevent-agent-host-fallback",
@@ -902,6 +932,10 @@
   var agentHostModelRefresh = document.getElementById("agent-host-model-refresh");
   var agentHostModelStatus = document.getElementById("agent-host-model-status");
   var useCopilotCliInput = document.getElementById("use-copilot-cli");
+  var copilotCliControls = document.getElementById("copilot-cli-controls");
+  var copilotCliConfigured = document.getElementById("copilot-cli-configured");
+  var advancedSettings = document.getElementById("advanced-settings");
+  var advancedSummary = document.getElementById("advanced-summary");
   var chatSessionSelect = document.getElementById("chat-session");
   var chatSessionNote = document.getElementById("chat-session-note");
   var agentHostWorkspaceModeSelect = document.getElementById(
@@ -939,6 +973,43 @@
   var summaryPaused = document.getElementById("summary-paused");
   var modelSelectionStatus = document.getElementById("model-selection-status");
 
+  function getSavedTaskField(name, fallback) {
+    if (editingTaskSnapshot && editingTaskSnapshot[name] !== undefined) {
+      return editingTaskSnapshot[name];
+    }
+    return fallback;
+  }
+
+  function getUseCopilotCliForSubmit() {
+    return useCopilotCliInput
+      ? useCopilotCliInput.checked === true
+      : getSavedTaskField("useCopilotCli", false) === true;
+  }
+
+  function updateCliControlVisibility() {
+    var visible = !!(
+      showCopilotCliControls &&
+      copilotCliControls &&
+      useCopilotCliInput
+    );
+    if (copilotCliControls) {
+      if (!visible) rescueFocusFrom(copilotCliControls, advancedSummary);
+      copilotCliControls.hidden = !visible;
+    }
+    if (copilotCliConfigured) {
+      var controlIsVisible =
+        visible && (!advancedSettings || advancedSettings.open);
+      copilotCliConfigured.hidden =
+        controlIsVisible || !getUseCopilotCliForSubmit();
+    }
+  }
+
+  function collapseAdvancedSettings() {
+    if (!advancedSettings) return;
+    rescueFocusFrom(advancedSettings, advancedSummary);
+    advancedSettings.open = false;
+  }
+
   function getSelectedBaseModelOption() {
     if (!modelSelect || modelSelect.selectedIndex < 0) return null;
     return modelSelect.options[modelSelect.selectedIndex] || null;
@@ -973,7 +1044,9 @@
   }
 
   function getAgentHostWorkspaceModeForSubmit() {
-    if (!agentHostWorkspaceModeSelect) return undefined;
+    if (!agentHostWorkspaceModeSelect) {
+      return getSavedTaskField("agentHostWorkspaceMode", undefined);
+    }
     var value = agentHostWorkspaceModeSelect.value;
     return value === "invalid-saved"
       ? savedAgentHostWorkspaceMode
@@ -1009,10 +1082,12 @@
     if (!agentHostWorkspaceModeSelect) return;
     var selection = getCurrentModelSelection();
     var cli =
-      useCopilotCliInput &&
-      useCopilotCliInput.checked &&
+      getUseCopilotCliForSubmit() &&
       !!String((selection && selection.model) || pendingModelValue || "").trim();
-    var inactive = !!((targetChatSelect && targetChatSelect.value) || cli);
+    var targetChatId = targetChatSelect
+      ? targetChatSelect.value
+      : getSavedTaskField("targetChatId", "");
+    var inactive = !!(targetChatId || cli);
     agentHostWorkspaceModeSelect.disabled = inactive;
     if (agentHostWorkspaceModeStatus) {
       agentHostWorkspaceModeStatus.textContent = [
@@ -1252,6 +1327,7 @@
       enabled: source.enabled !== false,
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
+      allowOverlappingRuns: source.allowOverlappingRuns === true,
       modelFallback: source.modelFallback === true,
       preventAgentHostFallback: source.preventAgentHostFallback === true,
       useCopilotCli: source.useCopilotCli === true,
@@ -2411,6 +2487,13 @@
 
   // Form submission with null checks
   if (taskForm) {
+    taskForm.addEventListener(
+      "invalid",
+      function (event) {
+        revealFieldForValidation(event.target);
+      },
+      true,
+    );
     taskForm.addEventListener("submit", function (e) {
       e.preventDefault();
 
@@ -2494,11 +2577,15 @@
         promptPathValue = pendingTemplatePath;
       }
 
+      var savedAllowedTimeStart = getSavedTaskField("allowedTimeStart", "");
+      var savedAllowedTimeEnd = getSavedTaskField("allowedTimeEnd", "");
       var isAllowedTimeWindowEnabled = allowedTimeEnabledInput
         ? allowedTimeEnabledInput.checked
         : !!(
-            (allowedTimeStartInput && allowedTimeStartInput.value) ||
-            (allowedTimeEndInput && allowedTimeEndInput.value)
+            (allowedTimeStartInput
+              ? allowedTimeStartInput.value
+              : savedAllowedTimeStart) ||
+            (allowedTimeEndInput ? allowedTimeEndInput.value : savedAllowedTimeEnd)
           );
 
       var parsedRunAt =
@@ -2538,7 +2625,9 @@
         modelVendor: modelVendorValue,
         modelFamily: modelFamilyValue,
         modelVersion: modelVersionValue,
-        agentHostModelId: agentHostModelSelect ? agentHostModelSelect.value : "",
+        agentHostModelId: agentHostModelSelect
+          ? agentHostModelSelect.value
+          : getSavedTaskField("agentHostModelId", ""),
         modelReasoningEffort: modelReasoningEffortValue,
         modelConfiguration:
           modelConfigurationState !== undefined
@@ -2549,29 +2638,46 @@
         promptPath: promptPathValue,
         runFirstInOneMinute:
           !isOneTimeMode() && runFirstEl ? runFirstEl.checked : false,
-        autoMode: autoModeInput ? autoModeInput.checked : false,
-        modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        autoMode: autoModeInput
+          ? autoModeInput.checked
+          : getSavedTaskField("autoMode", editingTaskSnapshot ? false : defaultAutoMode) === true,
+        allowOverlappingRuns: allowOverlappingRunsInput
+          ? allowOverlappingRunsInput.checked
+          : getSavedTaskField("allowOverlappingRuns", false) === true,
+        modelFallback: modelFallbackInput
+          ? modelFallbackInput.checked
+          : getSavedTaskField("modelFallback", false) === true,
         preventAgentHostFallback: preventAgentHostFallbackInput
           ? preventAgentHostFallbackInput.checked
-          : false,
-        useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
+          : getSavedTaskField("preventAgentHostFallback", false) === true,
+        useCopilotCli: getUseCopilotCliForSubmit(),
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
-        chatSession: chatSessionSelect ? chatSessionSelect.value : "default",
+        chatSession: chatSessionSelect
+          ? chatSessionSelect.value
+          : getSavedTaskField("chatSession", "default"),
         agentHostWorkspaceMode: getAgentHostWorkspaceModeForSubmit(),
-        targetChatId: targetChatSelect ? targetChatSelect.value : "",
+        targetChatId: targetChatSelect
+          ? targetChatSelect.value
+          : getSavedTaskField("targetChatId", ""),
         jitterSeconds: jitterSecondsInput
           ? boundedNumber(jitterSecondsInput.value || 0, 0, 1800, 0)
-          : 0,
+          : getSavedTaskField("jitterSeconds", defaultJitterSeconds),
         maxExecutionsPerDay: maxExecutionsPerDayInput
           ? boundedNumber(maxExecutionsPerDayInput.value || 0, 0, 100, 0)
-          : 0,
+          : getSavedTaskField("maxExecutionsPerDay", 0),
         allowedTimeStart:
-          isAllowedTimeWindowEnabled && allowedTimeStartInput
-            ? String(allowedTimeStartInput.value || "").trim()
+          isAllowedTimeWindowEnabled
+            ? String(
+                (allowedTimeStartInput
+                  ? allowedTimeStartInput.value
+                  : savedAllowedTimeStart) || "",
+              ).trim()
             : "",
         allowedTimeEnd:
-          isAllowedTimeWindowEnabled && allowedTimeEndInput
-            ? String(allowedTimeEndInput.value || "").trim()
+          isAllowedTimeWindowEnabled
+            ? String(
+                (allowedTimeEndInput ? allowedTimeEndInput.value : savedAllowedTimeEnd) || "",
+              ).trim()
             : "",
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
@@ -2698,7 +2804,12 @@
     testBtn.addEventListener("click", function () {
       var promptTextEl = document.getElementById("prompt-text");
       var prompt = promptTextEl ? promptTextEl.value : "";
-      var agent = agentSelect ? agentSelect.value : "";
+      var agent = agentSelect
+        ? agentSelect.value
+        : getSavedTaskField("agent", "");
+      if (editingTaskId && !agent && pendingAgentValue) {
+        agent = pendingAgentValue;
+      }
       var currentModelSelection = getCurrentModelSelection() || {
         model: pendingModelValue,
         modelName: pendingModelName,
@@ -2713,7 +2824,10 @@
       var normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
 
       if (!normalizedPrompt) {
-        showFormError(strings.promptRequired || "", 5000);
+        failValidation(
+          strings.promptRequired || "",
+          getEffectivePromptSource() === "inline" ? promptTextEl : templateSelect,
+        );
         return;
       }
       var workspaceMode = getAgentHostWorkspaceModeForSubmit();
@@ -2722,21 +2836,27 @@
         workspaceMode !== "folder" &&
         workspaceMode !== "worktree"
       ) {
-        showFormError(strings.agentHostWorkspaceModeInvalid || "", 5000);
+        failValidation(
+          strings.agentHostWorkspaceModeInvalid || "",
+          agentHostWorkspaceModeSelect,
+        );
         return;
       }
+      var chatSession = chatSessionSelect
+        ? chatSessionSelect.value
+        : getSavedTaskField("chatSession", "default");
 
       vscode.postMessage({
         type: "testPrompt",
         prompt: prompt,
         agent: agent,
-        targetChatId: targetChatSelect ? targetChatSelect.value : "",
+        targetChatId: targetChatSelect
+          ? targetChatSelect.value
+          : getSavedTaskField("targetChatId", ""),
         agentHostWorkspaceMode: workspaceMode,
         chatSession:
-          chatSessionSelect &&
-          (chatSessionSelect.value === "new" ||
-            chatSessionSelect.value === "continue")
-            ? chatSessionSelect.value
+          chatSession === "new" || chatSession === "continue"
+            ? chatSession
             : undefined,
         model: model,
         modelName: currentModelSelection
@@ -2751,7 +2871,9 @@
         modelVersion: currentModelSelection
           ? currentModelSelection.modelVersion || ""
           : "",
-        agentHostModelId: agentHostModelSelect ? agentHostModelSelect.value : "",
+        agentHostModelId: agentHostModelSelect
+          ? agentHostModelSelect.value
+          : getSavedTaskField("agentHostModelId", ""),
         modelReasoningEffort: currentModelSelection
           ? currentModelSelection.modelReasoningEffort || ""
           : "",
@@ -2759,11 +2881,13 @@
           modelConfigurationState !== undefined
             ? copyModelConfigurationForForm(modelConfigurationState)
             : undefined,
-        modelFallback: modelFallbackInput ? modelFallbackInput.checked : false,
+        modelFallback: modelFallbackInput
+          ? modelFallbackInput.checked
+          : getSavedTaskField("modelFallback", false) === true,
         preventAgentHostFallback: preventAgentHostFallbackInput
           ? preventAgentHostFallbackInput.checked
-          : false,
-        useCopilotCli: useCopilotCliInput ? useCopilotCliInput.checked : false,
+          : getSavedTaskField("preventAgentHostFallback", false) === true,
+        useCopilotCli: getUseCopilotCliForSubmit(),
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
         }),
@@ -2804,6 +2928,12 @@
   }
   if (agentHostModelRefresh) {
     agentHostModelRefresh.addEventListener("click", refreshAgentHostModels);
+  }
+  if (useCopilotCliInput) {
+    useCopilotCliInput.addEventListener("change", updateCliControlVisibility);
+  }
+  if (advancedSettings) {
+    advancedSettings.addEventListener("toggle", updateCliControlVisibility);
   }
   [
     agentHostWorkspaceModeSelect,
@@ -3743,6 +3873,7 @@
   function resetForm() {
     modelConfigurationState = {};
     if (taskForm) taskForm.reset();
+    collapseAdvancedSettings();
     updateScheduleMode();
     setEditingMode(null);
     clearInvalidField();
@@ -3777,6 +3908,7 @@
     }
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
+    if (allowOverlappingRunsInput) allowOverlappingRunsInput.checked = false;
     if (modelFallbackInput) modelFallbackInput.checked = false;
     if (preventAgentHostFallbackInput)
       preventAgentHostFallbackInput.checked = false;
@@ -3794,6 +3926,7 @@
     if (defaultScopeInput) {
       defaultScopeInput.checked = true;
     }
+    updateCliControlVisibility();
     updateChatSessionDefaultNote();
     updateFriendlyVisibility();
     updateCronPreview();
@@ -4184,6 +4317,7 @@
     });
   }
   renderSkillOptions();
+  updateCliControlVisibility();
   updateChatSessionDefaultNote();
   updateFriendlyVisibility();
   updateCronPreview();
@@ -4212,6 +4346,7 @@
     if (!task) return;
     editingTaskSnapshot = Object.assign({}, task);
     editingTaskNormalizedSnapshot = normalizeTaskForEditDiff(task);
+    collapseAdvancedSettings();
 
     var canDeleteInEdit =
       task.scope === "global" || isTaskInCurrentWorkspace(task);
@@ -4387,6 +4522,9 @@
     if (autoModeInput) {
       autoModeInput.checked = task.autoMode === true;
     }
+    if (allowOverlappingRunsInput) {
+      allowOverlappingRunsInput.checked = task.allowOverlappingRuns === true;
+    }
     if (modelFallbackInput) {
       modelFallbackInput.checked = task.modelFallback === true;
     }
@@ -4397,6 +4535,7 @@
     if (useCopilotCliInput) {
       useCopilotCliInput.checked = task.useCopilotCli === true;
     }
+    updateCliControlVisibility();
     if (chatSessionSelect) {
       chatSessionSelect.value = task.chatSession || "default";
     }
@@ -4653,6 +4792,10 @@
             }
           }
           applyUpdatedDefaultsToCreateForm();
+          break;
+        case "updateDisplaySettings":
+          showCopilotCliControls = message.showCopilotCliControls === true;
+          updateCliControlVisibility();
           break;
         case "promptTemplateLoaded":
           {

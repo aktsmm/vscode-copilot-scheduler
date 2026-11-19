@@ -11,12 +11,14 @@ import {
   buildJsonTextResult,
   describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
+  describeOverlappingRunsForConfirmation,
   escapeConfirmationText,
   formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
   validateAgentHostToolFields,
+  validateOverlappingRuns,
 } from "../shared";
 
 interface CreateTaskToolInput {
@@ -43,6 +45,7 @@ interface CreateTaskToolInput {
   preventAgentHostFallback?: boolean;
   jitterSeconds?: number;
   maxExecutionsPerDay?: number;
+  allowOverlappingRuns?: boolean;
   allowedTimeStart?: string;
   allowedTimeEnd?: string;
   attachments?: TaskAttachment[];
@@ -78,6 +81,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     preventAgentHostFallback: input.preventAgentHostFallback,
     jitterSeconds: input.jitterSeconds,
     maxExecutionsPerDay: input.maxExecutionsPerDay,
+    allowOverlappingRuns: input.allowOverlappingRuns,
     allowedTimeStart: input.allowedTimeStart,
     allowedTimeEnd: input.allowedTimeEnd,
     attachments: input.attachments,
@@ -113,6 +117,7 @@ export function createSchedulerCreateTaskTool(
           : undefined,
         ...describeAgentHostFieldsForConfirmation(input, true),
         describeAttachmentsForConfirmation(input.attachments),
+        describeOverlappingRunsForConfirmation(input.allowOverlappingRuns),
         input.targetChatId
           ? `- existing chat: ${formatConfirmationCode(String(input.targetChatId).slice(0, 12))}… (prompts are queued into that chat)`
           : undefined,
@@ -160,6 +165,10 @@ export function createSchedulerCreateTaskTool(
       const fieldError = validateAgentHostToolFields(input);
       if (fieldError) {
         return fieldError;
+      }
+      const overlapError = validateOverlappingRuns(input.allowOverlappingRuns);
+      if (overlapError) {
+        return overlapError;
       }
       const result = await client.createTask(toCreateInput(input));
       if (!result.ok) {

@@ -5,6 +5,26 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-11-19
+
+### Changed
+
+- **Breaking:** removed the window-wide automatic-run limit. `copilotScheduler.maxConcurrentAutomaticRuns` is now ignored (remove it from `settings.json` manually; it is not edited for you). Separate tasks run in parallel, still bounded by `maxDailyExecutions` and the per-task daily limit. Multiple runs in the same folder can conflict; use the worktree option when isolation matters.
+- New Agent Host sessions no longer wait for each other. Continuing a session targets the last session whose start was confirmed. Messages to the same chat are queued, never injected into a running turn; queue acceptance is not completion.
+- A recurring task skips an occurrence while its previous run is still going, as before. A new per-task **Allow overlapping automatic runs** option lets each occurrence run (in parallel in new sessions, in order in one chat).
+- The task form is reorganised: advanced options are collapsed and the Copilot CLI controls are hidden by default (`copilotScheduler.showCopilotCliControls`). Saved CLI settings are kept on save, duplicate and test run.
+
+### Added
+
+- Notify when an Agent Host chat waits for input, approval or authentication, or when a queued message is held after a failed or cancelled earlier turn. Scheduler never answers or resends for you.
+- Record each Agent Host dispatch before sending. If an earlier send has an unknown outcome, later sends to that chat stop until its end is confirmed, including after a restart or in another window. When it cannot be confirmed, check the chat and history, then choose a new session or chat.
+- Explain the Agent Host "static system messages and tool definitions exceed this model's context budget" failure: choose a model with a larger context window or reduce enabled tools and MCP servers. It cannot be checked before the run.
+
+### Notes
+
+- Native Agent Host modes (`plan`, `autopilot`) are not offered: the Host does not report whether a mode was applied, so a run could not be verified.
+- Verified with the full automated suite and an installed-package activation check on VS Code 1.147.0 (Windows). Parallel runs, queued chats and input notifications were exercised against a simulated Host, not a live chat run.
+
 ## [1.14.0] - 2026-11-19
 
 ### Added

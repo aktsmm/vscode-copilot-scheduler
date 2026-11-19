@@ -147,6 +147,14 @@ export class SchedulerWebview {
     };
   }
 
+  private static getDisplaySettings(): { showCopilotCliControls: boolean } {
+    const config = vscode.workspace.getConfiguration("copilotScheduler");
+    return {
+      showCopilotCliControls:
+        config.get<boolean>("showCopilotCliControls", false) === true,
+    };
+  }
+
   private static resetWebviewReadyState(): void {
     this.webviewReady = false;
     this.pendingMessages = [];
@@ -411,6 +419,16 @@ export class SchedulerWebview {
 
       // New webview instance (or re-created panel) starts as not-ready.
       this.resetWebviewReadyState();
+      const displaySettingsWatcher = vscode.workspace.onDidChangeConfiguration(
+        (event) => {
+          if (event.affectsConfiguration("copilotScheduler.showCopilotCliControls")) {
+            this.postMessage({
+              type: "updateDisplaySettings",
+              ...this.getDisplaySettings(),
+            });
+          }
+        },
+      );
 
       // Set icon
       this.panel.iconPath = {
@@ -453,6 +471,7 @@ export class SchedulerWebview {
 
       // Handle panel disposal
       this.panel.onDidDispose(() => {
+        displaySettingsWatcher.dispose();
         this.panel = undefined;
         this.resetWebviewReadyState();
       });
@@ -722,6 +741,7 @@ export class SchedulerWebview {
             agentHostModelId: message.agentHostModelId,
             agentHostWorkspaceMode: message.agentHostWorkspaceMode,
             chatSession: message.chatSession,
+            attachments: message.attachments,
             modelReasoningEffort: message.modelReasoningEffort,
             modelConfiguration: message.modelConfiguration,
             targetChatId: message.targetChatId,
@@ -1767,6 +1787,7 @@ export class SchedulerWebview {
       labelModelVariantNote: messages.labelModelVariantNote(),
       labelModelDefaultOnlyNote: messages.labelModelDefaultOnlyNote(),
       labelScope: messages.labelScope(),
+      labelTaskScope: messages.labelTaskScope(),
       labelScopeGlobal: messages.labelScopeGlobal(),
       labelScopeWorkspace: messages.labelScopeWorkspace(),
       labelEnabled: messages.labelEnabled(),
@@ -1800,12 +1821,13 @@ export class SchedulerWebview {
         messages.webviewPreventAgentHostFallbackNote(),
       labelUseCopilotCli: messages.labelUseCopilotCli(),
       webviewUseCopilotCliNote: messages.webviewUseCopilotCliNote(),
+      webviewCopilotCliConfigured: messages.webviewCopilotCliConfigured(),
       labelChatSession: messages.labelChatSession(),
       labelAgentHostWorkspaceMode: messages.labelAgentHostWorkspaceMode(),
       agentHostWorkspaceModeDefault: messages.agentHostWorkspaceModeDefault(),
       agentHostWorkspaceModeFolder: messages.agentHostWorkspaceModeFolder(),
       agentHostWorkspaceModeWorktree: messages.agentHostWorkspaceModeWorktree(),
-      agentHostWorkspaceModeNote: messages.agentHostWorkspaceModeNote(),
+      agentHostWorkspaceModeNote: messages.webviewAgentHostWorkspaceModeNote(),
       agentHostWorkspaceModeInactive: messages.agentHostWorkspaceModeInactive(),
       agentHostWorkspaceModeInvalid: messages.agentHostWorkspaceModeInvalid(),
       labelChatSessionDefault: messages.labelChatSessionDefault(),
@@ -1818,6 +1840,8 @@ export class SchedulerWebview {
       targetChatLoadFailed: messages.targetChatLoadFailed(),
       labelJitterSeconds: messages.labelJitterSeconds(),
       labelMaxExecutionsPerDay: messages.labelMaxExecutionsPerDay(),
+      labelAllowOverlappingRuns: messages.labelAllowOverlappingRuns(),
+      webviewAllowOverlappingRunsNote: messages.webviewAllowOverlappingRunsNote(),
       labelAllowedTimeWindow: messages.labelAllowedTimeWindow(),
       labelAllowedTimeWindowEnabled: messages.labelAllowedTimeWindowEnabled(),
       labelAllowedTimeStart: messages.labelAllowedTimeStart(),
@@ -1930,6 +1954,7 @@ export class SchedulerWebview {
       sectionBasics: messages.sectionBasics(),
       sectionTarget: messages.sectionTarget(),
       sectionGuardrails: messages.sectionGuardrails(),
+      sectionScopeLocation: messages.sectionScopeLocation(),
       summaryTotalTasks: messages.summaryTotalTasks(),
       summaryEnabledTasks: messages.summaryEnabledTasks(),
       summaryPausedTasks: messages.summaryPausedTasks(),
@@ -1982,6 +2007,7 @@ export class SchedulerWebview {
       defaultChatSession,
       defaultChatSessionNote,
       defaultJitterSeconds,
+      ...this.getDisplaySettings(),
       maxAttachments: MAX_TASK_ATTACHMENTS,
       locale: isJa ? "ja-JP" : "en-US",
       strings,
@@ -2151,6 +2177,14 @@ export class SchedulerWebview {
 
     .form-section {
       padding: 18px;
+    }
+
+    .advanced-settings > summary {
+      cursor: pointer;
+    }
+
+    .advanced-settings[open] > summary {
+      margin-bottom: 14px;
     }
 
     .form-section-header {
@@ -2809,81 +2843,9 @@ export class SchedulerWebview {
             <h2>${escapeHtml(strings.sectionBasics)}</h2>
           </div>
           <div class="form-grid">
-            <div class="form-group col-6">
+            <div class="form-group col-12">
               <label for="task-name">${escapeHtml(strings.labelTaskName)}</label>
               <input type="text" id="task-name" placeholder="${escapeHtmlAttr(strings.placeholderTaskName)}" required>
-            </div>
-
-            <div class="form-group col-6">
-              <label>${escapeHtml(strings.labelPromptType)}</label>
-              <div class="radio-group">
-                <label>
-                  <input type="radio" name="prompt-source" value="inline" checked>
-                  ${escapeHtml(strings.labelPromptInline)}
-                </label>
-                <label>
-                  <input type="radio" name="prompt-source" value="local">
-                  ${escapeHtml(strings.labelPromptLocal)}
-                </label>
-                <label>
-                  <input type="radio" name="prompt-source" value="global">
-                  ${escapeHtml(strings.labelPromptGlobal)}
-                </label>
-              </div>
-            </div>
-
-            <div class="form-group col-12" id="template-select-group" style="display: none;">
-              <label for="template-select">${escapeHtml(strings.labelPromptFile)}</label>
-              <div class="template-row">
-                <select id="template-select">
-                  <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
-                </select>
-                <button type="button" class="btn-secondary" id="template-refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshTemplates)}">${escapeHtml(strings.actionRefresh)}</button>
-              </div>
-            </div>
-
-            <div class="form-group col-12" id="skill-select-group" style="display: none;">
-              <label for="skill-select">${escapeHtml(strings.labelSkill)}</label>
-              <div class="template-row">
-                <select id="skill-select" aria-describedby="skill-detail">
-                  <option value="">${escapeHtml(strings.placeholderSelectSkill)}</option>
-                </select>
-              </div>
-              <div class="checkbox-group">
-                <input type="checkbox" id="skill-show-all">
-                <label for="skill-show-all">${escapeHtml(strings.labelSkillShowAll)}</label>
-              </div>
-              <p class="note" id="skill-detail" role="status" aria-live="polite" aria-atomic="true" style="display:none;"></p>
-              <p class="note">${escapeHtml(strings.webviewSkillNote)}</p>
-            </div>
-
-            <div class="form-group col-12" id="prompt-group">
-              <div id="prompt-inline-fields">
-                <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
-                <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
-              </div>
-              <div id="prompt-file-notice" class="prompt-file-notice" style="display:none;">
-                <div id="prompt-file-notice-live" role="status" aria-live="polite" aria-atomic="true">
-                  <div id="prompt-file-notice-message"></div>
-                  <div id="prompt-file-notice-meta" class="prompt-file-notice-meta"></div>
-                </div>
-                <div class="prompt-file-notice-actions">
-                  <button type="button" class="btn-secondary" id="load-latest-prompt-btn" style="display:none;">${escapeHtml(strings.actionLoadLatestPrompt)}</button>
-                  <button type="button" class="btn-secondary" id="open-prompt-file-btn" style="display:none;">${escapeHtml(strings.actionOpenPromptFile)}</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-group col-12" id="attachments-group">
-              <label id="attachments-label">${escapeHtml(strings.labelAttachments)}</label>
-              <div class="attachment-actions">
-                <button type="button" class="btn-secondary" id="add-attachment-btn">${escapeHtml(strings.actionAddAttachment)}</button>
-                <button type="button" class="btn-secondary" id="browse-attachment-btn">${escapeHtml(strings.actionBrowseAttachment)}</button>
-              </div>
-              <ul id="attachment-list" class="attachment-list" aria-labelledby="attachments-label"></ul>
-              <p id="attachment-empty" class="note">${escapeHtml(strings.labelNoAttachments)}</p>
-              <p id="attachment-status" class="note" role="status" aria-live="polite" aria-atomic="true"></p>
-              <p class="note">${escapeHtml(strings.labelAttachmentsNote)}</p>
             </div>
           </div>
         </section>
@@ -2977,7 +2939,118 @@ export class SchedulerWebview {
                   <button type="button" class="btn-secondary" id="friendly-generate">${escapeHtml(strings.labelFriendlyGenerate)}</button>
                 </div>
               </div>
+              <div class="checkbox-group">
+                <input type="checkbox" id="run-first">
+                <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
               </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.sectionScopeLocation)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-6">
+              <label>${escapeHtml(strings.labelTaskScope)}</label>
+              <div class="radio-group">
+                <label>
+                  <input type="radio" name="scope" value="workspace" ${defaultScope === "workspace" ? "checked" : ""}>
+                  ${escapeHtml(strings.labelScopeWorkspace)}
+                </label>
+                <label>
+                  <input type="radio" name="scope" value="global" ${defaultScope === "global" ? "checked" : ""}>
+                  ${escapeHtml(strings.labelScopeGlobal)}
+                </label>
+              </div>
+            </div>
+            <div class="form-group col-6">
+              <label for="agent-host-workspace-mode">${escapeHtml(strings.labelAgentHostWorkspaceMode)}</label>
+              <select id="agent-host-workspace-mode" aria-describedby="agent-host-workspace-mode-note agent-host-workspace-mode-status">
+                <option value="default">${escapeHtml(strings.agentHostWorkspaceModeDefault)}</option>
+                <option value="folder">${escapeHtml(strings.agentHostWorkspaceModeFolder)}</option>
+                <option value="worktree">${escapeHtml(strings.agentHostWorkspaceModeWorktree)}</option>
+              </select>
+              <p class="note" id="agent-host-workspace-mode-note">${escapeHtml(strings.agentHostWorkspaceModeNote)}</p>
+              <p class="note" id="agent-host-workspace-mode-status" role="status"></p>
+            </div>
+            <p class="note col-12" id="copilot-cli-configured" role="status" hidden>${escapeHtml(strings.webviewCopilotCliConfigured)}</p>
+          </div>
+        </section>
+
+        <section class="surface form-section">
+          <div class="form-section-header">
+            <h2>${escapeHtml(strings.labelPrompt)}</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-12">
+              <label>${escapeHtml(strings.labelPromptType)}</label>
+              <div class="radio-group">
+                <label>
+                  <input type="radio" name="prompt-source" value="inline" checked>
+                  ${escapeHtml(strings.labelPromptInline)}
+                </label>
+                <label>
+                  <input type="radio" name="prompt-source" value="local">
+                  ${escapeHtml(strings.labelPromptLocal)}
+                </label>
+                <label>
+                  <input type="radio" name="prompt-source" value="global">
+                  ${escapeHtml(strings.labelPromptGlobal)}
+                </label>
+              </div>
+            </div>
+            <div class="form-group col-12" id="template-select-group" style="display: none;">
+              <label for="template-select">${escapeHtml(strings.labelPromptFile)}</label>
+              <div class="template-row">
+                <select id="template-select">
+                  <option value="">${escapeHtml(strings.placeholderSelectTemplate)}</option>
+                </select>
+                <button type="button" class="btn-secondary" id="template-refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshTemplates)}">${escapeHtml(strings.actionRefresh)}</button>
+              </div>
+            </div>
+            <div class="form-group col-12" id="skill-select-group" style="display: none;">
+              <label for="skill-select">${escapeHtml(strings.labelSkill)}</label>
+              <div class="template-row">
+                <select id="skill-select" aria-describedby="skill-detail">
+                  <option value="">${escapeHtml(strings.placeholderSelectSkill)}</option>
+                </select>
+              </div>
+              <div class="checkbox-group">
+                <input type="checkbox" id="skill-show-all">
+                <label for="skill-show-all">${escapeHtml(strings.labelSkillShowAll)}</label>
+              </div>
+              <p class="note" id="skill-detail" role="status" aria-live="polite" aria-atomic="true" style="display:none;"></p>
+              <p class="note">${escapeHtml(strings.webviewSkillNote)}</p>
+            </div>
+            <div class="form-group col-12" id="prompt-group">
+              <div id="prompt-inline-fields">
+                <label for="prompt-text">${escapeHtml(strings.labelPrompt)}</label>
+                <textarea id="prompt-text" placeholder="${escapeHtmlAttr(strings.placeholderPrompt)}" required></textarea>
+              </div>
+              <div id="prompt-file-notice" class="prompt-file-notice" style="display:none;">
+                <div id="prompt-file-notice-live" role="status" aria-live="polite" aria-atomic="true">
+                  <div id="prompt-file-notice-message"></div>
+                  <div id="prompt-file-notice-meta" class="prompt-file-notice-meta"></div>
+                </div>
+                <div class="prompt-file-notice-actions">
+                  <button type="button" class="btn-secondary" id="load-latest-prompt-btn" style="display:none;">${escapeHtml(strings.actionLoadLatestPrompt)}</button>
+                  <button type="button" class="btn-secondary" id="open-prompt-file-btn" style="display:none;">${escapeHtml(strings.actionOpenPromptFile)}</button>
+                </div>
+              </div>
+            </div>
+            <div class="form-group col-12" id="attachments-group">
+              <label id="attachments-label">${escapeHtml(strings.labelAttachments)}</label>
+              <div class="attachment-actions">
+                <button type="button" class="btn-secondary" id="add-attachment-btn">${escapeHtml(strings.actionAddAttachment)}</button>
+                <button type="button" class="btn-secondary" id="browse-attachment-btn">${escapeHtml(strings.actionBrowseAttachment)}</button>
+              </div>
+              <ul id="attachment-list" class="attachment-list" aria-labelledby="attachments-label"></ul>
+              <p id="attachment-empty" class="note">${escapeHtml(strings.labelNoAttachments)}</p>
+              <p id="attachment-status" class="note" role="status" aria-live="polite" aria-atomic="true"></p>
+              <p class="note">${escapeHtml(strings.labelAttachmentsNote)}</p>
             </div>
           </div>
         </section>
@@ -3016,6 +3089,22 @@ export class SchedulerWebview {
               <p class="note">${escapeHtml(strings.labelModelVariantNote)}</p>
             </div>
 
+            <div class="form-group col-12" id="model-configuration-group" style="display:none;">
+              <div class="form-grid" id="model-configuration-controls"></div>
+              <p class="note" id="model-configuration-note"></p>
+              <div id="model-configuration-setup" style="display:none;">
+                <p class="note" id="model-configuration-setup-note"></p>
+                <code id="model-configuration-setup-code" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml('"enable-proposed-api": ["yamapan.copilot-scheduler"]')}</code>
+                <button type="button" class="btn-secondary" id="model-configuration-setup-button" style="display:none;">${escapeHtml(strings.actionOpenModelRuntimeArguments)}</button>
+              </div>
+              <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
+            </div>
+          </div>
+        </section>
+
+        <details id="advanced-settings" class="surface form-section advanced-settings">
+          <summary id="advanced-summary" class="section-title">${escapeHtml(strings.labelAdvanced)}</summary>
+          <div class="form-grid">
             <div class="form-group col-12">
               <label for="agent-host-model">${escapeHtml(strings.labelAgentHostModel)}</label>
               <div class="template-row">
@@ -3044,59 +3133,12 @@ export class SchedulerWebview {
               <p class="note">${escapeHtml(strings.webviewPreventAgentHostFallbackNote)}</p>
             </div>
 
-            <div class="form-group col-12">
+            <div class="form-group col-12" id="copilot-cli-controls" hidden>
               <div class="checkbox-group">
                 <input type="checkbox" id="use-copilot-cli" aria-describedby="use-copilot-cli-note">
                 <label for="use-copilot-cli">${escapeHtml(strings.labelUseCopilotCli)}</label>
               </div>
               <p class="note" id="use-copilot-cli-note">${escapeHtml(strings.webviewUseCopilotCliNote)}</p>
-            </div>
-
-            <div class="form-group col-12">
-              <button type="button" class="btn-secondary" id="release-channel-button">${escapeHtml(strings.actionOpenReleaseChannel)}</button>
-            </div>
-            <div class="form-group col-12" id="model-configuration-group" style="display:none;">
-              <div class="form-grid" id="model-configuration-controls"></div>
-              <p class="note" id="model-configuration-note"></p>
-              <div id="model-configuration-setup" style="display:none;">
-                <p class="note" id="model-configuration-setup-note"></p>
-                <code id="model-configuration-setup-code" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml('"enable-proposed-api": ["yamapan.copilot-scheduler"]')}</code>
-                <button type="button" class="btn-secondary" id="model-configuration-setup-button" style="display:none;">${escapeHtml(strings.actionOpenModelRuntimeArguments)}</button>
-              </div>
-              <button type="button" class="btn-secondary" id="model-configuration-reset" style="display:none;">${escapeHtml(strings.actionInheritModelConfiguration)}</button>
-            </div>
-
-            <div class="form-group col-6">
-              <label>${escapeHtml(strings.labelScope)}</label>
-              <div class="radio-group">
-                <label>
-                  <input type="radio" name="scope" value="workspace" ${defaultScope === "workspace" ? "checked" : ""}>
-                  ${escapeHtml(strings.labelScopeWorkspace)}
-                </label>
-                <label>
-                  <input type="radio" name="scope" value="global" ${defaultScope === "global" ? "checked" : ""}>
-                  ${escapeHtml(strings.labelScopeGlobal)}
-                </label>
-              </div>
-            </div>
-
-            <div class="form-group col-6">
-              <label>${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
-              <div class="checkbox-group">
-                <input type="checkbox" id="run-first">
-                <label for="run-first">${escapeHtml(strings.labelRunFirstInOneMinute)}</label>
-              </div>
-            </div>
-
-            <div class="form-group col-12">
-              <label for="agent-host-workspace-mode">${escapeHtml(strings.labelAgentHostWorkspaceMode)}</label>
-              <select id="agent-host-workspace-mode" aria-describedby="agent-host-workspace-mode-note agent-host-workspace-mode-status">
-                <option value="default">${escapeHtml(strings.agentHostWorkspaceModeDefault)}</option>
-                <option value="folder">${escapeHtml(strings.agentHostWorkspaceModeFolder)}</option>
-                <option value="worktree">${escapeHtml(strings.agentHostWorkspaceModeWorktree)}</option>
-              </select>
-              <p class="note" id="agent-host-workspace-mode-note">${escapeHtml(strings.agentHostWorkspaceModeNote)}</p>
-              <p class="note" id="agent-host-workspace-mode-status" role="status"></p>
             </div>
 
             <div class="form-group col-6">
@@ -3118,14 +3160,15 @@ export class SchedulerWebview {
               </div>
               <p class="note" id="target-chat-note" role="status" aria-live="polite" aria-atomic="true">${escapeHtml(strings.targetChatLoadNote)}</p>
             </div>
-          </div>
-        </section>
 
-        <section class="surface form-section">
-          <div class="form-section-header">
-            <h2>${escapeHtml(strings.sectionGuardrails)}</h2>
-          </div>
-          <div class="form-grid">
+            <div class="section-title col-12">${escapeHtml(strings.sectionGuardrails)}</div>
+            <div class="form-group col-12">
+              <div class="checkbox-group">
+                <input type="checkbox" id="allow-overlapping-runs" aria-describedby="allow-overlapping-runs-note">
+                <label for="allow-overlapping-runs">${escapeHtml(strings.labelAllowOverlappingRuns)}</label>
+              </div>
+              <p class="note" id="allow-overlapping-runs-note">${escapeHtml(strings.webviewAllowOverlappingRunsNote)}</p>
+            </div>
             <div class="form-group col-12">
               <div class="checkbox-group">
                 <input type="checkbox" id="auto-mode" ${defaultAutoMode ? "checked" : ""}>
@@ -3165,7 +3208,7 @@ export class SchedulerWebview {
               <p class="note">${escapeHtml(strings.webviewAllowedTimeWindowNote)}</p>
             </div>
           </div>
-        </section>
+        </details>
 
         <div class="surface form-actions">
           <div class="button-group">
@@ -3188,6 +3231,7 @@ export class SchedulerWebview {
         <div class="list-toolbar">
           <button type="button" class="btn-primary" id="open-create-btn">${escapeHtml(strings.actionNewTask)}</button>
           <button type="button" class="btn-secondary" id="refresh-btn" title="${escapeHtmlAttr(strings.actionRefreshAll)}">${escapeHtml(strings.actionRefresh)}</button>
+          <button type="button" class="btn-secondary" id="release-channel-button">${escapeHtml(strings.actionOpenReleaseChannel)}</button>
         </div>
       </div>
       <div class="summary-grid">

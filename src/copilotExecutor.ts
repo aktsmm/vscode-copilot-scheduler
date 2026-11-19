@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
+import { createHash, randomUUID } from "crypto";
 import { notifyInfo } from "./extension";
 import type {
   AgentInfo,
@@ -44,20 +45,28 @@ import { getPreferredWorkspaceName } from "./workspaceRoots";
 import {
   AgentHostError,
   findAgentHostEndpoint,
+  isAgentHostTurnTerminal,
   listAgentHostChats,
   listAgentHostModels,
   queueAgentHostMessage,
   resolveAgentHostChatBinding,
   resolveUserDataDir,
   runAgentHostTurn,
+  toAgentHostChatBindingId,
   toFileUri,
   WORKSPACE_FOLDER_REQUIRED_DETAIL,
   type AgentHostChatInfo,
+  type AgentHostEndpoint,
   type AgentHostModelInfo,
   type AgentHostSessionRef,
 } from "./agentHostClient";
 import {
+  withAgentHostDispatchJournal,
+  type AgentHostDispatchRecord,
+} from "./agentHostDispatchJournal";
+import {
   createPromptBlockedError,
+  isAgentHostContextBudgetFailure,
   isPromptBlockedError,
 } from "./promptExecutionErrors";
 import {
@@ -612,19 +621,63 @@ export const __testOnly = {
 /**
  * Executes prompts through GitHub Copilot Chat
  */
+interface CachedAgentHostSession {
+  ref: AgentHostSessionRef;
+  hostIdentity: string;
+  startedAt?: number;
+  orderUncertain?: boolean;
+}
+
+interface UncertainAgentHostTurn {
+  hostIdentity: string;
+  ref?: AgentHostSessionRef;
+  turnId?: string;
+}
+
 export class CopilotExecutor {
   private static extensionGlobalStorageUri: vscode.Uri | undefined;
   private static agentHostUserDataDir: string | undefined;
-  /** Last Agent Host session per working folder, reused by `continue` runs. */
+  /** Latest confirmed session start per working folder and approval policy. */
   private static readonly agentHostSessions = new Map<
     string,
-    AgentHostSessionRef
+    CachedAgentHostSession
   >();
   private static readonly agentHostQueues = new Map<string, Promise<void>>();
+  private static readonly agentHostUncertainChats = new Map<string, UncertainAgentHostTurn>();
+  private static readonly agentHostDispatchOwner = randomUUID();
+  private static readonly agentHostActiveDispatches = new Set<string>();
 
   static configureForExtensionContext(globalStorageUri: vscode.Uri): void {
     this.extensionGlobalStorageUri = globalStorageUri;
     this.agentHostUserDataDir = resolveUserDataDir(globalStorageUri.fsPath);
+  }
+
+  private static agentHostDispatchStorage(): string {
+    if (!this.extensionGlobalStorageUri || this.extensionGlobalStorageUri.scheme !== "file") {
+      throw new AgentHostError("failed", "The Agent Host dispatch safety store is unavailable.");
+    }
+    return this.extensionGlobalStorageUri.fsPath;
+  }
+
+  private static async updateAgentHostDispatch(
+    storage: string,
+    chatId: string,
+    recordId: string,
+    action: "started" | "uncertain" | "remove",
+    turnId?: string,
+  ): Promise<void> {
+    await withAgentHostDispatchJournal(storage, chatId, async (journal) => {
+      const index = journal.records.findIndex((record) => record.id === recordId);
+      if (index < 0) return;
+      if (action === "remove") {
+        journal.records.splice(index, 1);
+      } else if (turnId) {
+        journal.records[index].turnId = turnId;
+      } else {
+        return;
+      }
+      await journal.save();
+    });
   }
 
   static async listAvailableAgentHostChats(): Promise<AgentHostChatInfo[]> {
@@ -674,6 +727,8 @@ export class CopilotExecutor {
   ): Promise<ExecutePromptResult> {
     // Apply prompt commands/placeholders
     const processedPrompt = this.applyPromptCommands(prompt);
+    const hasExplicitTarget =
+      options?.targetChatId !== undefined && options.targetChatId !== "";
     if (
       options?.agentHostWorkspaceMode !== undefined &&
       options.agentHostWorkspaceMode !== "folder" &&
@@ -685,7 +740,7 @@ export class CopilotExecutor {
       );
     }
 
-    if (options?.targetChatId && options.useCopilotCli === true) {
+    if (hasExplicitTarget && options?.useCopilotCli === true) {
       return this.warnAndThrow(
         createPromptBlockedError(
           messages.targetChatRequiresAgentHost(),
@@ -726,12 +781,12 @@ export class CopilotExecutor {
     // Get chat session behavior and command delay factor once per execution
     const config = vscode.workspace.getConfiguration("copilotScheduler");
     if (
-      (options?.targetChatId || options?.agentHostWorkspaceMode) &&
+      (hasExplicitTarget || options?.agentHostWorkspaceMode) &&
       resolveExecutionRoute(config) !== "agentHost"
     ) {
       return this.warnAndThrow(
         createPromptBlockedError(
-          options?.targetChatId
+          hasExplicitTarget
             ? messages.targetChatRequiresAgentHost()
             : messages.agentHostWorkspaceUnavailable(""),
           "agentHostUnavailable",
@@ -978,8 +1033,9 @@ export class CopilotExecutor {
     chatSession: ChatSessionBehavior,
   ): Promise<{ result?: ExecutePromptResult; fallbackReason?: string }> {
     const targetChatId = options?.targetChatId;
-    const failOnFallback =
-      !!targetChatId ||
+    const hasExplicitTarget = targetChatId !== undefined && targetChatId !== "";
+    let failOnFallback =
+      hasExplicitTarget ||
       !!options?.agentHostWorkspaceMode ||
       options?.preventAgentHostFallback === true ||
       config.get<string>("executionFallback", "chat") === "fail";
@@ -992,9 +1048,9 @@ export class CopilotExecutor {
       if (failOnFallback) {
         await this.warnAndThrow(
           createPromptBlockedError(
-            options?.agentHostWorkspaceMode && !targetChatId
+            options?.agentHostWorkspaceMode && !hasExplicitTarget
               ? messages.agentHostWorkspaceUnavailable(detail)
-              : options?.preventAgentHostFallback === true || targetChatId
+              : options?.preventAgentHostFallback === true || hasExplicitTarget
                 ? messages.agentHostFallbackPrevented(detail)
                 : messages.agentHostNotUsed(detail),
             "agentHostUnavailable",
@@ -1004,6 +1060,12 @@ export class CopilotExecutor {
       }
       return { fallbackReason: detail };
     };
+    const explicitTargetId = typeof targetChatId === "string"
+      ? targetChatId.trim().toLowerCase()
+      : "";
+    if (hasExplicitTarget && !explicitTargetId) {
+      return decline("the selected Copilot chat is no longer available");
+    }
 
     let modelId: string | undefined;
     let hostModelIdExplicit = false;
@@ -1055,32 +1117,6 @@ export class CopilotExecutor {
       modelId = selection.agentHostModelId ?? selection.model?.trim();
     }
 
-    const userDataDir = CopilotExecutor.agentHostUserDataDir;
-    const endpoint = userDataDir
-      ? findAgentHostEndpoint(userDataDir)
-      : undefined;
-    if (!endpoint) {
-      return decline("no running Agent Host was found");
-    }
-
-    let agentUri: string | undefined;
-    if (routing.runtimeAgent) {
-      const mode = routing.chatOpenMode;
-      if (!mode || mode === "ask" || mode === "edit") {
-        return decline("the task's agent is not available in the Agent Host");
-      }
-      if (mode !== "agent") {
-        const filePath = await CopilotExecutor.findCustomAgentFile(
-          routing.requestedAgent,
-          routing.runtimeAgent,
-        );
-        if (!filePath) {
-          return decline("the task's custom agent file was not found");
-        }
-        agentUri = toFileUri(filePath);
-      }
-    }
-
     const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
       .filter((folder) => folder.uri.scheme === "file")
       .map((folder) => folder.uri.fsPath);
@@ -1098,7 +1134,7 @@ export class CopilotExecutor {
     const cwd = requestedCwd
       ? requestedCwd
       : workspaceFolders.find((candidate) => isDirectory(candidate));
-    const workspaceModeActive = !!options?.agentHostWorkspaceMode && !targetChatId;
+    const workspaceModeActive = !!options?.agentHostWorkspaceMode && !hasExplicitTarget;
     if (workspaceModeActive && (!cwd || !path.isAbsolute(cwd))) {
       return decline(WORKSPACE_FOLDER_REQUIRED_DETAIL);
     }
@@ -1115,17 +1151,59 @@ export class CopilotExecutor {
       config.get<boolean>("agentHostAutoApprove", true) !== false;
     // The approval policy is fixed when a session is created, so sessions with a
     // different policy are never shared.
-    const sessionKey = `${cwd ?? ""}|${autoApprove ? "auto" : "ask"}`;
+    const resolvedCwd = cwd ? path.resolve(cwd) : "";
+    const sessionKey = JSON.stringify([
+      process.platform === "win32" ? resolvedCwd.toLowerCase() : resolvedCwd,
+      autoApprove,
+    ]);
+    // Capture once, before waiting for a same-chat operation.
+    const selectedSession = !hasExplicitTarget && chatSession === "continue"
+      ? CopilotExecutor.agentHostSessions.get(sessionKey)
+      : undefined;
+    failOnFallback ||= !!selectedSession;
     const ambiguousWorkspaceMode =
       workspaceModeActive && !requestedCwd && workspaceFolders.length !== 1;
-    if (
-      ambiguousWorkspaceMode &&
-      !(chatSession === "continue" && CopilotExecutor.agentHostSessions.has(sessionKey))
-    ) {
+    if (ambiguousWorkspaceMode && !selectedSession) {
       return decline(WORKSPACE_FOLDER_REQUIRED_DETAIL);
     }
-    const run = () =>
-      runAgentHostTurn({
+    const userDataDir = CopilotExecutor.agentHostUserDataDir;
+    const endpoint = userDataDir ? findAgentHostEndpoint(userDataDir) : undefined;
+    if (!endpoint) {
+      return decline("no running Agent Host was found");
+    }
+    const hostIdentity = createHash("sha256")
+      .update(endpoint.socketPath)
+      .update("\0")
+      .update(endpoint.token)
+      .digest("hex");
+    let agentUri: string | undefined;
+    let agentResolved = false;
+    let newMessageDispatchedRef: AgentHostSessionRef | undefined;
+    let startedRef: AgentHostSessionRef | undefined;
+    let startedTurnId: string | undefined;
+    const resolveAgent = async (): Promise<string | undefined> => {
+      if (agentResolved || !routing.runtimeAgent) return undefined;
+      const mode = routing.chatOpenMode;
+      if (!mode || mode === "ask" || mode === "edit") {
+        return "the task's agent is not available in the Agent Host";
+      }
+      if (mode !== "agent") {
+        const filePath = await CopilotExecutor.findCustomAgentFile(
+          routing.requestedAgent,
+          routing.runtimeAgent,
+        );
+        if (!filePath) return "the task's custom agent file was not found";
+        agentUri = toFileUri(filePath);
+      }
+      agentResolved = true;
+      return undefined;
+    };
+    const run = async () => {
+      const storage = CopilotExecutor.agentHostDispatchStorage();
+      let recordId: string | undefined;
+      let recordChatId: string | undefined;
+      try {
+        const result = await runAgentHostTurn({
         endpoint,
         text: routing.chatOpenPrompt,
         ...(cwd ? { cwdUri: toFileUri(cwd) } : {}),
@@ -1147,8 +1225,46 @@ export class CopilotExecutor {
         })),
         autoApprove,
         timeoutMs: timeoutMinutes * 60 * 1000,
+        ...(options?.onAgentHostInputNeeded
+          ? {
+              onInputNeeded: options.onAgentHostInputNeeded,
+              onInputObservationError: () =>
+                logDebug("[CopilotScheduler] Agent Host input status could not be fully observed."),
+            }
+          : {}),
         ...(options?.dispatchGuard ? { dispatchGuard: options.dispatchGuard } : {}),
-        onSessionStarted: (ref) => {
+        beforeDispatch: async (ref, messageId) => {
+          const id = randomUUID();
+          const chatId = toAgentHostChatBindingId(ref.chatUri);
+          recordId = id;
+          recordChatId = chatId;
+          await withAgentHostDispatchJournal(storage, chatId, async (journal) => {
+            await CopilotExecutor.requireKnownChatOutcome(
+              chatId, hostIdentity, endpoint, journal.records,
+            );
+            journal.records.push({
+              id,
+              owner: CopilotExecutor.agentHostDispatchOwner,
+              hostIdentity,
+              ref: { sessionUri: ref.sessionUri, chatUri: ref.chatUri },
+              messageId,
+            });
+            await journal.save();
+          });
+        },
+        onMessageDispatched: (ref) => { newMessageDispatchedRef = ref; },
+        onSessionStarted: (ref, turnId, startedAt) => {
+          startedRef = ref;
+          startedTurnId = turnId;
+          if (recordId && recordChatId) {
+            CopilotExecutor.agentHostActiveDispatches.add(recordId);
+            void CopilotExecutor.updateAgentHostDispatch(
+              storage, recordChatId, recordId, "started", turnId,
+            ).catch(() =>
+              logError("[CopilotScheduler] Could not persist the Agent Host turn identity."),
+            );
+          }
+          CopilotExecutor.recordAgentHostStart(sessionKey, hostIdentity, ref, startedAt);
           if (config.get<boolean>("agentHostOpenSession", true) === false) {
             return;
           }
@@ -1174,68 +1290,238 @@ export class CopilotExecutor {
             ),
           );
         },
-        ...(chatSession === "continue" &&
-        CopilotExecutor.agentHostSessions.has(sessionKey)
-          ? { resume: CopilotExecutor.agentHostSessions.get(sessionKey) }
-          : {}),
-      });
-    const queueTargetChat = targetChatId
-      ? () =>
-          queueAgentHostMessage({
-        endpoint,
-        targetChatId,
-        text: routing.chatOpenPrompt,
-        ...(options?.taskId ? { taskId: options.taskId } : {}),
-        ...(requestedCwd ? { expectedWorkspacePath: requestedCwd } : {}),
-        ...(modelId ? { modelId } : {}),
-        ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
-        modelOptions: {
-          ...configuration,
-          reasoningEffort:
-            configuration.reasoningEffort ?? options?.modelReasoningEffort,
-        },
-        ...(agentUri ? { agentUri } : {}),
-        attachments: (options?.attachFilePaths ?? []).map((filePath) => ({
-          label: path.basename(filePath),
-          uri: toFileUri(filePath),
-        })),
-        ...(options?.dispatchGuard ? { dispatchGuard: options.dispatchGuard } : {}),
-          })
-      : undefined;
+        });
+        if (recordId && recordChatId) {
+          // Keep the dispatch active until its record is gone, so a queued send
+          // racing with this completion does not read it as an unknown outcome.
+          await CopilotExecutor.updateAgentHostDispatch(storage, recordChatId, recordId, "remove");
+          CopilotExecutor.agentHostActiveDispatches.delete(recordId);
+        }
+        return result;
+      } catch (error) {
+        const knownTerminal = error instanceof AgentHostError &&
+          (error.turnOutcome === "failed" || error.turnOutcome === "cancelled");
+        if (recordId && recordChatId) {
+          CopilotExecutor.agentHostActiveDispatches.delete(recordId);
+          try {
+            await CopilotExecutor.updateAgentHostDispatch(
+              storage,
+              recordChatId,
+              recordId,
+              newMessageDispatchedRef && !knownTerminal ? "uncertain" : "remove",
+              startedTurnId,
+            );
+          } catch {
+            logError("[CopilotScheduler] Could not update Agent Host dispatch safety state.");
+            throw new AgentHostError(
+              "failed",
+              "The Agent Host dispatch safety state could not be updated. Check Chat before retrying.",
+              "unknown",
+            );
+          }
+        }
+        if (
+          newMessageDispatchedRef &&
+          !knownTerminal &&
+          (!(error instanceof AgentHostError) ||
+            error.kind !== "failed" ||
+            error.turnOutcome !== "unknown")
+        ) {
+          throw new AgentHostError(
+            "failed",
+            "The Agent Host dispatch outcome could not be confirmed.",
+            "unknown",
+          );
+        }
+        throw error;
+      }
+    };
+    const targetId = hasExplicitTarget
+      ? explicitTargetId
+      : selectedSession ? toAgentHostChatBindingId(selectedSession.ref.chatUri) : undefined;
 
     try {
       logDebug(
-        `[CopilotScheduler] ${targetChatId ? "Queueing to a bound Agent Host chat" : "Running through the Agent Host"}: model=${modelId ? "selected" : "default"}, agent=${agentUri ? "custom" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
+        `[CopilotScheduler] ${targetId ? "Queueing to an Agent Host chat" : "Running through the Agent Host"}: model=${modelId ? "selected" : "default"}, agent=${routing.runtimeAgent ? "selected" : "default"}, continue=${chatSession === "continue"}, prompt length: ${routing.chatOpenPrompt.length}`,
       );
-      if (targetChatId && queueTargetChat) {
-        const queued = await CopilotExecutor.runSerialized(
-          `target:${targetChatId}`,
-          queueTargetChat,
+      if (targetId) {
+        const storage = CopilotExecutor.agentHostDispatchStorage();
+        const queueResult = await CopilotExecutor.runSerialized(`chat:${targetId}`, () =>
+          withAgentHostDispatchJournal(storage, targetId, async (journal) => {
+          if (selectedSession && (selectedSession.orderUncertain || selectedSession.hostIdentity !== hostIdentity)) {
+            throw new AgentHostError("failed", "The continued Agent Host target could not be verified.", "unknown");
+          }
+          await CopilotExecutor.requireKnownChatOutcome(targetId, hostIdentity, endpoint, journal.records);
+          const activeDispatches = journal.records
+            .filter((record) =>
+              record.owner === CopilotExecutor.agentHostDispatchOwner &&
+              CopilotExecutor.agentHostActiveDispatches.has(record.id),
+            )
+            .map((record) => record.id);
+          const agentFailure = await resolveAgent();
+          if (agentFailure) return { agentFailure };
+          let dispatchedRef: AgentHostSessionRef | undefined;
+          let queuedTurnId: string | undefined;
+          let record: AgentHostDispatchRecord | undefined;
+          try {
+            const queued = await queueAgentHostMessage({
+              endpoint,
+              targetChatId: targetId,
+              ...(selectedSession ? { resume: selectedSession.ref } : {}),
+              text: routing.chatOpenPrompt,
+              ...(options?.taskId ? { taskId: options.taskId } : {}),
+              ...(options?.queueOccurrenceId !== undefined
+                ? { occurrenceId: options.queueOccurrenceId }
+                : {}),
+              ...(hasExplicitTarget && requestedCwd ? { expectedWorkspacePath: requestedCwd } : {}),
+              ...(modelId ? { modelId } : {}),
+              ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
+              modelOptions: {
+                ...configuration,
+                reasoningEffort:
+                  configuration.reasoningEffort ?? options?.modelReasoningEffort,
+              },
+              ...(agentUri ? { agentUri } : {}),
+              attachments: (options?.attachFilePaths ?? []).map((filePath) => ({
+                label: path.basename(filePath),
+                uri: toFileUri(filePath),
+              })),
+              ...(options?.onAgentHostInputNeeded || options?.onAgentHostQueueBlocked
+                ? {
+                    ...(options.onAgentHostInputNeeded
+                      ? { onInputNeeded: options.onAgentHostInputNeeded }
+                      : {}),
+                    ...(options.onAgentHostQueueBlocked
+                      ? { onQueueBlocked: options.onAgentHostQueueBlocked }
+                      : {}),
+                    onInputObservationError: () =>
+                      logDebug("[CopilotScheduler] Agent Host input status could not be fully observed."),
+                    inputObservationTimeoutMs: timeoutMinutes * 60 * 1000,
+                  }
+                : {}),
+              beforeDispatch: async (ref, messageId) => {
+                record = {
+                  id: randomUUID(),
+                  owner: CopilotExecutor.agentHostDispatchOwner,
+                  hostIdentity,
+                  ref: { sessionUri: ref.sessionUri, chatUri: ref.chatUri },
+                  messageId,
+                };
+                journal.records.push(record);
+                await journal.save();
+              },
+              dispatchGuard: async (dispatch) => {
+                let earlierOutcomeUnknown = false;
+                const checkedDispatch = () => {
+                  if (
+                    activeDispatches.some((id) => !CopilotExecutor.agentHostActiveDispatches.has(id)) ||
+                    CopilotExecutor.agentHostUncertainChats.has(targetId)
+                  ) {
+                    earlierOutcomeUnknown = true;
+                    return;
+                  }
+                  dispatch();
+                };
+                if (options?.dispatchGuard) await options.dispatchGuard(checkedDispatch);
+                else checkedDispatch();
+                if (earlierOutcomeUnknown) {
+                  throw new AgentHostError("failed", "The earlier Agent Host outcome is still unknown.", "unknown");
+                }
+              },
+              onMessageDispatched: (ref) => { dispatchedRef = ref; },
+              onQueuedTurnStarted: (_ref, turnId) => { queuedTurnId = turnId; },
+            });
+            if (record) {
+              const recordId = record.id;
+              const index = journal.records.findIndex((entry) => entry.id === recordId);
+              if (index >= 0) journal.records.splice(index, 1);
+              await journal.save();
+            }
+            return { queued };
+          } catch (error) {
+            const knownTerminal = error instanceof AgentHostError &&
+              (error.turnOutcome === "failed" || error.turnOutcome === "cancelled");
+            const uncertain = !!dispatchedRef && !knownTerminal;
+            if (uncertain && dispatchedRef) {
+              CopilotExecutor.agentHostUncertainChats.set(targetId, {
+                hostIdentity,
+                ref: dispatchedRef,
+                turnId: queuedTurnId,
+              });
+            }
+            if (record) {
+              const recordId = record.id;
+              const index = journal.records.findIndex((entry) => entry.id === recordId);
+              if (uncertain) {
+                if (queuedTurnId) record.turnId = queuedTurnId;
+                if (index < 0) journal.records.push(record);
+              } else if (index >= 0) {
+                journal.records.splice(index, 1);
+              }
+              try {
+                await journal.save();
+              } catch {
+                logError("[CopilotScheduler] Could not update Agent Host dispatch safety state.");
+                throw new AgentHostError(
+                  "failed",
+                  "The Agent Host dispatch safety state could not be updated. Check Chat before retrying.",
+                  "unknown",
+                );
+              }
+            }
+            if (
+              !dispatchedRef &&
+              selectedSession &&
+              error instanceof AgentHostError &&
+              error.kind === "sessionExpired"
+            ) {
+              return { expired: true };
+            }
+            if (
+              uncertain &&
+              (!(error instanceof AgentHostError) ||
+                error.kind !== "failed" ||
+                error.turnOutcome !== "unknown")
+            ) {
+              throw new AgentHostError(
+                "failed",
+                "The queued Agent Host dispatch outcome could not be confirmed.",
+                "unknown",
+              );
+            }
+            throw error;
+          }
+          }),
         );
-        return {
-          result: {
-            agentHostRun: {
-              ...(queued.requestedModel
-                ? { requestedModel: queued.requestedModel }
-                : {}),
-              turnOutcome: "queued",
-              messageId: queued.messageId,
+        if (queueResult.agentFailure) return decline(queueResult.agentFailure);
+        if (queueResult.queued) {
+          const queued = queueResult.queued;
+          return {
+            result: {
+              agentHostRun: {
+                ...(queued.requestedModel ? { requestedModel: queued.requestedModel } : {}),
+                turnOutcome: "queued",
+                messageId: queued.messageId,
+                ...(selectedSession && options?.agentHostWorkspaceMode
+                  ? {
+                      workspaceMode: options.agentHostWorkspaceMode,
+                      workspaceModeApplication: "not_applied_resumed",
+                    }
+                  : {}),
+              },
+              modelExecution: {
+                route: "agentHost",
+                ...(queued.requestedModel ? { requestedModel: queued.requestedModel } : {}),
+                verification: "unverified",
+              },
             },
-            modelExecution: {
-              route: "agentHost",
-              ...(queued.requestedModel
-                ? { requestedModel: queued.requestedModel }
-                : {}),
-              verification: "unverified",
-            },
-          },
-        };
+          };
+        }
+        if (ambiguousWorkspaceMode) return decline(WORKSPACE_FOLDER_REQUIRED_DETAIL);
       }
-      const turn = await CopilotExecutor.runSerialized(sessionKey, run);
-      CopilotExecutor.agentHostSessions.set(sessionKey, {
-        sessionUri: turn.sessionUri,
-        chatUri: turn.chatUri,
-      });
+      const agentFailure = await resolveAgent();
+      if (agentFailure) return decline(agentFailure);
+      const turn = await run();
       const requested = turn.requestedModel;
       const applied = turn.appliedModel;
       const verification = classifyModelReport(requested, applied);
@@ -1265,6 +1551,18 @@ export class CopilotExecutor {
         },
       };
     } catch (error) {
+      const uncertainRef = startedRef ?? newMessageDispatchedRef;
+      if (
+        uncertainRef &&
+        error instanceof AgentHostError &&
+        error.kind === "failed" &&
+        (error.turnOutcome ?? "unknown") === "unknown"
+      ) {
+        CopilotExecutor.agentHostUncertainChats.set(
+          toAgentHostChatBindingId(uncertainRef.chatUri),
+          { hostIdentity, ref: uncertainRef, turnId: startedTurnId },
+        );
+      }
       if (isPromptBlockedError(error)) {
         return this.warnAndThrow(error, routing.legacyPrompt);
       }
@@ -1307,7 +1605,10 @@ export class CopilotExecutor {
             ? messages.agentHostOutcomeUnknown(detail)
             : turnOutcome === "cancelled"
               ? messages.agentHostCancelled(detail)
-              : messages.agentHostFailed(detail),
+              : turnOutcome === "failed" &&
+                  isAgentHostContextBudgetFailure(detail)
+                ? messages.agentHostContextBudgetExceeded()
+                : messages.agentHostFailed(detail),
           "agentHostFailed",
           turnOutcome,
         ),
@@ -1316,7 +1617,82 @@ export class CopilotExecutor {
     }
   }
 
-  /** Runs one run at a time per key, so continued runs do not interleave in one chat. */
+  private static recordAgentHostStart(
+    sessionKey: string,
+    hostIdentity: string,
+    ref: AgentHostSessionRef,
+    startedAt: string,
+  ): void {
+    const previous = this.agentHostSessions.get(sessionKey);
+    const timestamp = Date.parse(startedAt);
+    if (!Number.isFinite(timestamp)) {
+      this.agentHostSessions.set(sessionKey, {
+        ...(previous ?? { ref, hostIdentity }),
+        startedAt: undefined,
+        orderUncertain: true,
+      });
+      return;
+    }
+    if (previous?.orderUncertain && previous.startedAt === undefined) return;
+    if (previous?.startedAt !== undefined && timestamp < previous.startedAt) return;
+    if (
+      previous?.startedAt === timestamp &&
+      previous.ref.chatUri !== ref.chatUri
+    ) {
+      this.agentHostSessions.set(sessionKey, { ...previous, orderUncertain: true });
+      return;
+    }
+    this.agentHostSessions.set(sessionKey, { ref, hostIdentity, startedAt: timestamp });
+  }
+
+  private static async requireKnownChatOutcome(
+    chatId: string,
+    hostIdentity: string,
+    endpoint: AgentHostEndpoint,
+    records: AgentHostDispatchRecord[],
+  ): Promise<void> {
+    const uncertain = this.agentHostUncertainChats.get(chatId);
+    if (uncertain) {
+      let terminal = false;
+      if (uncertain.hostIdentity === hostIdentity && uncertain.ref && uncertain.turnId) {
+        try {
+          terminal = await isAgentHostTurnTerminal(endpoint, uncertain.ref, uncertain.turnId);
+        } catch {
+          // A missing or unreadable snapshot is not a terminal-state confirmation.
+        }
+      }
+      if (!terminal) {
+        throw new AgentHostError("failed", "The earlier Agent Host outcome is still unknown.", "unknown");
+      }
+      if (this.agentHostUncertainChats.get(chatId) === uncertain) {
+        this.agentHostUncertainChats.delete(chatId);
+      }
+    }
+    for (let index = records.length - 1; index >= 0; index--) {
+      const record = records[index];
+      if (
+        record.hostIdentity === hostIdentity &&
+        record.owner === this.agentHostDispatchOwner &&
+        this.agentHostActiveDispatches.has(record.id)
+      ) {
+        continue;
+      }
+      let terminal = false;
+      if (record.hostIdentity === hostIdentity && record.turnId) {
+        try {
+          terminal = await isAgentHostTurnTerminal(endpoint, record.ref, record.turnId);
+        } catch {
+          // Unavailable state must not release a persisted dispatch.
+        }
+      }
+      if (!terminal) {
+        throw new AgentHostError("failed", "The earlier Agent Host outcome is still unknown.", "unknown");
+      }
+      records.splice(index, 1);
+    }
+  }
+
+  /** Serialize queue submissions for the same actual chat, not for a folder. */
   private static runSerialized<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = CopilotExecutor.agentHostQueues.get(key) ?? Promise.resolve();
     const next = previous.then(task, task);
