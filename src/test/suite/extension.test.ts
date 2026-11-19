@@ -3938,15 +3938,15 @@ suite("resolvePromptText Tests", () => {
       } catch {
         // ignore
       }
-      try {
-        fs.rmSync(wsRoot, {
-          recursive: true,
-          force: true,
-          maxRetries: 3,
-          retryDelay: 50,
-        });
-      } catch {
-        // ignore
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      // An editor or file watcher can hold the file for a moment after it closes.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        try {
+          fs.rmSync(wsRoot, { recursive: true, force: true });
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
       }
     }
   });

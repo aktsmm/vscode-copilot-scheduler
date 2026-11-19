@@ -5,6 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { ScheduleManager, __testOnly } from "../../scheduleManager";
+import "./tempFolderGuard";
 import { messages } from "../../i18n";
 import { getFirstDistinctCronRuns } from "../../cronExpressions";
 import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
@@ -2171,7 +2172,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
     }
   });
 
-  test("skips invalid task entries and keeps valid persisted tasks", () => {
+  test("skips invalid task entries and keeps valid persisted tasks", async () => {
     const nowIso = new Date().toISOString();
     const validTask = {
       id: "t-valid",
@@ -2194,6 +2195,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
       const tasks = manager.getAllTasks();
       assert.strictEqual(tasks.length, 1);
       assert.strictEqual(tasks[0].id, validTask.id);
+      await waitForStartupSave(manager);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -2208,7 +2210,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
     }
   });
 
-  test("normalizes non-boolean enabled values to false", () => {
+  test("normalizes non-boolean enabled values to false", async () => {
     const nowIso = new Date().toISOString();
     const rawTask = {
       id: "t-invalid-enabled",
@@ -2231,6 +2233,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
       const loaded = manager.getTask(rawTask.id);
       assert.ok(loaded);
       assert.strictEqual(loaded?.enabled, false);
+      await waitForStartupSave(manager);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -2245,7 +2248,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
     }
   });
 
-  test("normalizes invalid scope and disables task for safety", () => {
+  test("normalizes invalid scope and disables task for safety", async () => {
     const nowIso = new Date().toISOString();
     const rawTask = {
       id: "t-invalid-scope",
@@ -2269,6 +2272,7 @@ suite("ScheduleManager Corrupted Storage Recovery Tests", () => {
       assert.ok(loaded);
       assert.strictEqual(loaded?.scope, "global");
       assert.strictEqual(loaded?.enabled, false);
+      await waitForStartupSave(manager);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -2395,6 +2399,7 @@ suite("ScheduleManager Workspace Scope Validation Tests", () => {
       assert.strictEqual(loaded?.model, "copilot-gpt-4o");
       assert.strictEqual(loaded?.modelVersion, "high");
       assert.strictEqual(loaded?.modelName, "GPT-4o High");
+      await waitForStartupSave(manager);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -2713,10 +2718,13 @@ suite("ScheduleManager Auto Mode Tests", () => {
         { ...base, id: "invalid", modelFallback: true, modelFallbackPolicy: { strategy: "future" } },
       ]));
       await waitForStartupSave(manager);
-      assert.strictEqual(manager.hasMigratedModelFallback, true);
+      assert.strictEqual(await manager.whenModelFallbackMigrationSaved(), true);
+      const persisted = JSON.parse(fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8")) as
+        Array<{ id: string; modelFallbackPolicy?: unknown }>;
+      assert.deepStrictEqual(persisted.find((task) => task.id === "on")?.modelFallbackPolicy, { strategy: "diverse" });
       const restored = new ScheduleManager(createMockContext(tmp));
       await waitForStartupSave(restored);
-      assert.strictEqual(restored.hasMigratedModelFallback, false);
+      assert.strictEqual(await restored.whenModelFallbackMigrationSaved(), false);
       assert.deepStrictEqual(restored.getTask("on")?.modelFallbackPolicy, { strategy: "diverse" });
       assert.strictEqual(restored.getTask("off")?.modelFallback, false);
       assert.strictEqual(restored.getTask("absent")?.modelFallback, undefined);
@@ -2728,6 +2736,31 @@ suite("ScheduleManager Auto Mode Tests", () => {
       await waitForStartupSave(reloaded);
       assert.deepStrictEqual(reloaded.getTask("invalid")?.modelFallbackPolicy, { strategy: "future" });
     } finally {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
+  test("a failed migration save is not reported as saved, so the notice waits for a later load", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const prototype = ScheduleManager.prototype as unknown as { saveTasks: () => Promise<void> };
+    const originalSave = prototype.saveTasks;
+    prototype.saveTasks = async () => {
+      throw new Error("disk full");
+    };
+    try {
+      const manager = new ScheduleManager(createMockContextWithGlobalTasks(tmp, [{
+        id: "legacy",
+        name: "legacy-model-fallback",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: false,
+        modelFallback: true,
+      }]));
+      assert.strictEqual(await manager.whenModelFallbackMigrationSaved(), false);
+    } finally {
+      prototype.saveTasks = originalSave;
       fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     }
   });
@@ -4414,6 +4447,7 @@ suite("ScheduleManager RunNow Tests", () => {
       assert.deepStrictEqual(task.attachments, [
         { source: "local", path: "docs/a.md" },
       ]);
+      await waitForStartupSave(manager);
     } finally {
       try {
         fs.rmSync(tmp, {
@@ -5096,9 +5130,11 @@ suite("ScheduleManager RunNow Tests", () => {
       if (!result.ok) assert.strictEqual(result.reason, "claimFailed");
       assert.strictEqual(dispatches, 0);
 
-      const reloaded = new ScheduleManager(createMockContext(tmp)).getTask(task.id);
+      const reloadedManager = new ScheduleManager(createMockContext(tmp));
+      const reloaded = reloadedManager.getTask(task.id);
       assert.strictEqual(reloaded?.enabled, true);
       assert.strictEqual(reloaded?.lastFiredDueAt, undefined);
+      await waitForStartupSave(reloadedManager);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -5389,6 +5425,7 @@ suite("ScheduleManager RunNow Tests", () => {
       assert.strictEqual(first.getTask(skipped.id)?.enabled, false);
       const reloaded = new ScheduleManager(createMockContext(tmp));
       assert.strictEqual(reloaded.getTask(skipped.id)?.enabled, false);
+      await waitForStartupSave(reloaded);
     } finally {
       restore();
       fs.rmSync(tmp, { recursive: true, force: true });

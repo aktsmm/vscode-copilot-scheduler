@@ -453,9 +453,11 @@ export class ScheduleManager {
   }
 
   private migratedModelFallback = false;
+  private modelFallbackMigrationSaved: Promise<boolean> | undefined;
 
-  get hasMigratedModelFallback(): boolean {
-    return this.migratedModelFallback;
+  /** Resolves true only after the tasks migrated to model fallback policies were saved. */
+  whenModelFallbackMigrationSaved(): Promise<boolean> {
+    return this.modelFallbackMigrationSaved ?? Promise.resolve(false);
   }
 
   constructor(context: vscode.ExtensionContext) {
@@ -1590,12 +1592,19 @@ export class ScheduleManager {
       return;
     }
     if (needsSave) {
-      void this.saveTasks().catch((error) =>
-        logError(
-          "[CopilotScheduler] Failed to save migrated tasks:",
-          toSafeErrorDetails(error),
-        ),
+      const saved = this.saveTasks().then(
+        () => true,
+        (error) => {
+          logError(
+            "[CopilotScheduler] Failed to save migrated tasks:",
+            toSafeErrorDetails(error),
+          );
+          return false;
+        },
       );
+      if (this.migratedModelFallback) {
+        this.modelFallbackMigrationSaved = saved;
+      }
     } else {
       // Heal the other store if needed (best effort, do not bump revision)
       if (
