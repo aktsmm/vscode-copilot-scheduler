@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
+import * as fs from "fs";
 import {
   ScheduleManager,
   type ManualRunExecutionInfo,
@@ -73,6 +74,9 @@ import {
   applyEnableProposedApi,
   resolveRuntimeArgumentsPath,
 } from "./runtime-arguments";
+import { DEFAULT_MODEL_FALLBACK_POLICY, normalizeModelFallbackPolicy } from "./modelFallback";
+import { withTaskStoreLock } from "./task-store-lock";
+import { writeFileAtomically } from "./atomic-file-write";
 import {
   buildEffectiveModelSelection,
   createModelSelectionResolver,
@@ -294,7 +298,10 @@ function buildPromptExecutionOptions(
     modelVersion: request.modelVersion,
     agentHostModelId: request.agentHostModelId,
     modelReasoningEffort: request.modelReasoningEffort,
-    ...(request.modelFallback === true ? { modelFallback: true } : {}),
+    ...(request.modelFallback === true ? {
+      modelFallback: true,
+      modelFallbackPolicy: request.modelFallbackPolicy,
+    } : {}),
     ...(request.preventAgentHostFallback === true
       ? { preventAgentHostFallback: true }
       : {}),
@@ -830,7 +837,13 @@ function buildExecutionResultDetail(
       : undefined;
   const details = [
     fallback
-      ? messages.executionHistoryModelFallback(fallback.from, fallback.to)
+      ? fallback.route
+        ? messages.executionHistoryModelReplacement(
+            [fallback.fromProvider, fallback.fromId ?? fallback.from].filter(Boolean).join(" / "),
+            [fallback.toProvider, fallback.toId ?? fallback.to].filter(Boolean).join(" / "),
+            fallback.route === "agentHost",
+          )
+        : messages.executionHistoryModelFallback(fallback.from, fallback.to)
       : undefined,
     cliRun
       ? messages.executionHistoryCopilotCli(
@@ -1533,6 +1546,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Initialize components
   scheduleManager = new ScheduleManager(context);
+  if (scheduleManager.hasMigratedModelFallback && path.isAbsolute(context.globalStorageUri.fsPath)) {
+    const marker = path.join(context.globalStorageUri.fsPath, "model-fallback-v2-notified");
+    void withTaskStoreLock(`${marker}.lock`, async () => {
+      if (fs.existsSync(marker)) return;
+      await writeFileAtomically(marker, "1");
+      void vscode.window.showInformationMessage(messages.modelFallbackMigrated());
+    }).catch(() => logDebug("[CopilotScheduler] Could not record model fallback migration notice."));
+  }
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
   registerConfiguredModelProvider(context);
@@ -1905,10 +1926,16 @@ async function executeTask(
       }
       if (executionResult?.modelFallback) {
         notify(
-          messages.modelFallbackApplied(
-            executionResult.modelFallback.from,
-            executionResult.modelFallback.to,
-          ),
+          executionResult.modelFallback.route
+            ? messages.executionHistoryModelReplacement(
+                executionResult.modelFallback.from,
+                executionResult.modelFallback.to,
+                executionResult.modelFallback.route === "agentHost",
+              )
+            : messages.modelFallbackApplied(
+                executionResult.modelFallback.from,
+                executionResult.modelFallback.to,
+              ),
         );
       }
     } catch (error) {
@@ -2493,7 +2520,10 @@ async function resolvePromptExecution(
     agentHostModelId: task.agentHostModelId,
     modelReasoningEffort: task.modelReasoningEffort,
     modelConfiguration: task.modelConfiguration,
-    ...(task.modelFallback === true ? { modelFallback: true } : {}),
+    ...(task.modelFallback === true ? {
+      modelFallback: true,
+      modelFallbackPolicy: task.modelFallbackPolicy ?? DEFAULT_MODEL_FALLBACK_POLICY,
+    } : {}),
     ...(task.preventAgentHostFallback === true
       ? { preventAgentHostFallback: true }
       : {}),
@@ -2688,6 +2718,31 @@ async function confirmManualRunIfWorkspaceMismatch(
   return choice === messages.confirmRunAnyway();
 }
 
+async function validateWebviewFallbackModels(
+  data: Partial<CreateTaskInput>,
+  existing?: ScheduledTask,
+): Promise<void> {
+  if (data.modelFallback === false || data.modelFallbackPolicy === undefined) return;
+  const policy = normalizeModelFallbackPolicy(data.modelFallbackPolicy);
+  if (!policy) throw new Error(messages.modelFallbackPolicyInvalid());
+  const previous = existing?.modelFallbackPolicy;
+  if (policy.chatModel && (policy.chatModel.id !== previous?.chatModel?.id ||
+    policy.chatModel.vendor !== previous?.chatModel?.vendor)) {
+    const { liveFallbackModels } = await CopilotExecutor.getAvailableModelsWithSource();
+    if (filterPickerModelCatalog(liveFallbackModels ?? []).filter((model) => model.id === policy.chatModel?.id &&
+      model.vendor === policy.chatModel?.vendor).length !== 1) {
+      throw new Error(messages.chatFallbackModelUnavailable());
+    }
+  }
+  if (policy.agentHostModelId && policy.agentHostModelId !== previous?.agentHostModelId) {
+    const models = await CopilotExecutor.listAvailableAgentHostModels()
+      .catch(() => { throw new Error(messages.agentHostModelsLoadFailed()); });
+    if (models.filter((model) => model.id === policy.agentHostModelId).length !== 1) {
+      throw new Error(messages.agentHostFallbackModelUnavailable());
+    }
+  }
+}
+
 async function resolveWebviewTargetChatBinding(
   data: Partial<CreateTaskInput>,
   existing?: ScheduledTask,
@@ -2838,6 +2893,7 @@ async function handleTaskActionAsync(action: TaskAction): Promise<void> {
             ? undefined
             : scheduleManager.getTask(action.taskId);
         if (action.data) {
+          await validateWebviewFallbackModels(action.data, current);
           await validateAgentHostModelChoice(
             action.data.model === ""
               ? {}

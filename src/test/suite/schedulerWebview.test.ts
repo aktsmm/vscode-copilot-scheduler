@@ -5,7 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { SchedulerWebview } from "../../schedulerWebview";
 import { messages } from "../../i18n";
-import type { PromptPreview, ScheduledTask, ModelInfo } from "../../types";
+import type { ModelFallbackPolicy, ModelInfo, PromptPreview, ScheduledTask } from "../../types";
 import { CopilotExecutor } from "../../copilotExecutor";
 import {
   runSanitizerParityCases,
@@ -1085,6 +1085,38 @@ suite("SchedulerWebview Message Queue Tests", () => {
     }
   });
 
+  test("Host catalog replies from a previous webview generation are discarded", async () => {
+    const wv = SchedulerWebview as unknown as {
+      webviewGeneration: number;
+      postMessage(message: unknown): void;
+      handleMessage(message: unknown): Promise<void>;
+    };
+    const originalGeneration = wv.webviewGeneration;
+    const originalPost = wv.postMessage;
+    const originalList = CopilotExecutor.listAvailableAgentHostModels;
+    const posted: unknown[] = [];
+    try {
+      wv.postMessage = (message) => { posted.push(message); };
+      let finishOlder!: () => void;
+      CopilotExecutor.listAvailableAgentHostModels = () => new Promise((resolve) => {
+        finishOlder = () => resolve([{ id: "old", name: "Old" }]);
+      });
+      const older = wv.handleMessage({ type: "refreshAgentHostModels" });
+      wv.webviewGeneration++;
+      CopilotExecutor.listAvailableAgentHostModels = async () => [{ id: "new", name: "New" }];
+      await wv.handleMessage({ type: "refreshAgentHostModels" });
+      finishOlder();
+      await older;
+      assert.deepStrictEqual(posted, [
+        { type: "updateAgentHostModels", models: [{ id: "new", name: "New" }] },
+      ]);
+    } finally {
+      wv.webviewGeneration = originalGeneration;
+      wv.postMessage = originalPost;
+      CopilotExecutor.listAvailableAgentHostModels = originalList;
+    }
+  });
+
   test("updateTasks message includes workspacePaths and schedule summaries", () => {
     const wv = SchedulerWebview as unknown as {
       panel?: WebviewPanelLike;
@@ -1252,6 +1284,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostModelId?: string;
         agentHostWorkspaceMode?: "folder" | "worktree";
         chatSession?: "new" | "continue";
+        modelFallback?: boolean;
+        modelFallbackPolicy?: ModelFallbackPolicy;
         preventAgentHostFallback?: boolean;
         useCopilotCli?: boolean;
         attachments?: Array<{ source: "local" | "global"; path: string }>;
@@ -1260,6 +1294,11 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
     };
 
     const originalCallback = wv.onTestPromptCallback;
+    const fallbackPolicy: ModelFallbackPolicy = {
+      strategy: "similar",
+      chatModel: { id: "fallback", vendor: "chat-vendor" },
+      agentHostModelId: "vendor/group/fallback",
+    };
     let received:
       | {
           prompt: string;
@@ -1268,6 +1307,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agentHostModelId?: string;
           agentHostWorkspaceMode?: "folder" | "worktree";
           chatSession?: "new" | "continue";
+          modelFallback?: boolean;
+          modelFallbackPolicy?: ModelFallbackPolicy;
           preventAgentHostFallback?: boolean;
           useCopilotCli?: boolean;
           attachments?: Array<{ source: "local" | "global"; path: string }>;
@@ -1283,6 +1324,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
           agentHostModelId: request.agentHostModelId,
           agentHostWorkspaceMode: request.agentHostWorkspaceMode,
           chatSession: request.chatSession,
+          modelFallback: request.modelFallback,
+          modelFallbackPolicy: request.modelFallbackPolicy,
           preventAgentHostFallback: request.preventAgentHostFallback,
           useCopilotCli: request.useCopilotCli,
           attachments: request.attachments,
@@ -1302,6 +1345,8 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostModelId: "vendor/group/model",
         agentHostWorkspaceMode: "folder",
         chatSession: "continue",
+        modelFallback: true,
+        modelFallbackPolicy: fallbackPolicy,
         preventAgentHostFallback: true,
         useCopilotCli: true,
         attachments: [{ source: "local", path: "AGENTS.md" }],
@@ -1314,10 +1359,20 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
         agentHostModelId: "vendor/group/model",
         agentHostWorkspaceMode: "folder",
         chatSession: "continue",
+        modelFallback: true,
+        modelFallbackPolicy: fallbackPolicy,
         preventAgentHostFallback: true,
         useCopilotCli: true,
         attachments: [{ source: "local", path: "AGENTS.md" }],
       });
+      await wv.handleMessage?.({
+        type: "testPrompt",
+        prompt: "disabled",
+        modelFallback: false,
+        modelFallbackPolicy: fallbackPolicy,
+      });
+      assert.strictEqual(received?.modelFallback, undefined);
+      assert.strictEqual(received?.modelFallbackPolicy, undefined);
     } finally {
       wv.onTestPromptCallback = originalCallback;
     }
@@ -1925,8 +1980,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
       "modelFallback: source.modelFallback === true,",
       "modelFallback: modelFallbackInput",
       'getSavedTaskField("modelFallback", false) === true',
-      "if (modelFallbackInput) modelFallbackInput.checked = false;",
-      "modelFallbackInput.checked = task.modelFallback === true;",
+      "setModelFallbackSelection(null);",
+      "setModelFallbackSelection(task);",
+      "modelFallbackPolicy: getModelFallbackPolicyForSubmit()",
       'var useCopilotCliInput = document.getElementById("use-copilot-cli");',
       "useCopilotCli: source.useCopilotCli === true,",
       "useCopilotCli: getUseCopilotCliForSubmit(),",
@@ -1938,7 +1994,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         `Expected token not found in schedulerWebview.js: ${token}`,
       );
     }
-    assert.ok(html.includes('<input type="checkbox" id="model-fallback">'));
+    assert.match(html, /<input type="checkbox" id="model-fallback"[^>]* checked>/);
     assert.ok(html.includes("strings.webviewModelFallbackNote"));
     assert.ok(html.includes('id="use-copilot-cli"'));
     assert.ok(html.includes("strings.webviewUseCopilotCliNote"));
@@ -2197,6 +2253,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
       'id="attachments-label"',
       'id="agent-select"',
       'id="model-select"',
+      'id="agent-host-model"',
+      'id="model-fallback-strategy"',
+      'id="chat-fallback-model"',
+      'id="host-fallback-model"',
       'id="advanced-settings"',
       'id="allow-overlapping-runs"',
     ].map((token) => form.indexOf(token));
@@ -2241,21 +2301,28 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.ok(!Object.hasOwn(updates ?? {}, "useCopilotCli"));
   });
 
-  test("Host model picker retains a saved pin offline and clears it when the source changes", () => {
+  test("Model fallback form retains saved choices and diffs by identity across catalog refreshes", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
       "utf8",
     );
-    const options: Array<{ value: string; textContent: string }> = [
-      { value: "", textContent: "Not selected" },
-    ];
-    const select = {
-      options,
-      value: "",
-      appendChild: (option: { value: string; textContent: string }) =>
-        options.push(option),
-      remove: (index: number) => options.splice(index, 1),
+    const makeSelect = () => {
+      const options = [{ value: "", textContent: "Not selected" }];
+      return {
+        options,
+        value: "",
+        disabled: false,
+        appendChild: (option: { value: string; textContent: string }) =>
+          options.push(option),
+        remove: (index: number) => options.splice(index, 1),
+      };
     };
+    const select = makeSelect();
+    const hostFallback = makeSelect();
+    const chatFallback = makeSelect();
+    const checkbox = { checked: false };
+    const strategy = { value: "", disabled: false };
+    const requests: unknown[] = [];
     const status = { textContent: "" };
     const models = [
       { id: "vendor/group/model", name: "<unsafe label>" },
@@ -2266,49 +2333,131 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const context = {
       document: { createElement: () => ({ value: "", textContent: "" }) },
       agentHostModelSelect: select,
+      hostFallbackModelSelect: hostFallback,
+      chatFallbackModelSelect: chatFallback,
+      modelFallbackInput: checkbox,
+      modelFallbackStrategy: strategy,
       agentHostModelStatus: status,
       strings: {
         agentHostModelSavedUnverified: "saved-unverified",
         agentHostModelsDuplicate: "duplicates",
         agentHostModelsEmpty: "empty",
+        agentHostModelsLoading: "loading",
+        labelModelUnavailableSuffix: "unavailable",
       },
-      agentHostModels: models,
-      agentHostModelsLoaded: true,
+      chatFallbackModels: [
+        { id: "same", vendor: "vendor-a", name: "Same" },
+        { id: "same", vendor: "vendor-b", name: "Same" },
+        { id: "ambiguous", vendor: "vendor-b", name: "Duplicate A" },
+        { id: "ambiguous", vendor: "vendor-b", name: "Duplicate B" },
+      ],
+      vscode: { postMessage: (message: unknown) => requests.push(message) },
       getCurrentModelSelection: () => selection,
-      selectHasOptionValue: (
-        element: typeof select,
-        value: string,
-      ) => element.options.some((option) => option.value === value),
+      defaultJitterSeconds: 0,
+      serializeAttachments: () => "[]",
     };
     const factory = new Function(
       ...Object.keys(context),
-      `var agentHostBindingKey = "";
+      `var agentHostBindingKey = "", agentHostModelsError = "";
+       var agentHostModels = [], agentHostModelsLoaded = false, agentHostModelsLoading = false;
        var pendingModelValue = "", pendingModelVendor = "", pendingModelFamily = "", pendingModelVersion = "";
-       ${extractFunctionSource(source, "getAgentHostBindingSelection")}
-       ${extractFunctionSource(source, "getAgentHostBindingKey")}
-       ${extractFunctionSource(source, "setAgentHostModelSelection")}
-       ${extractFunctionSource(source, "updateAgentHostModelOptions")}
-       ${extractFunctionSource(source, "clearChangedAgentHostBinding")}
-       return { setAgentHostModelSelection, updateAgentHostModelOptions, clearChangedAgentHostBinding };`,
-    )(...Object.values(context)) as {
-      setAgentHostModelSelection(id: string, value: typeof selection): void;
-      updateAgentHostModelOptions(value: typeof models, error?: string): void;
-      clearChangedAgentHostBinding(): void;
+       var editingTaskSnapshot, editingTaskNormalizedSnapshot;
+       ${[
+         "getAgentHostBindingSelection", "getAgentHostBindingKey",
+         "setAgentHostModelSelection", "selectHasOptionValue", "renderModelChoiceOptions",
+         "updateAgentHostModelOptions", "clearChangedAgentHostBinding",
+         "refreshAgentHostModels", "applyAgentHostModelCatalog",
+         "normalizeModelFallbackPolicy", "updateChatFallbackModelOptions",
+         "setModelFallbackSelection", "updateModelFallbackControls", "getModelFallbackPolicyForSubmit",
+         "normalizeTaskForEditDiff", "serializeModelConfigurationForDiff",
+         "normalizeSkillRefClient", "boundedNumber", "buildTaskUpdateData",
+       ].map((name) => extractFunctionSource(source, name)).join("\n")}
+       return {
+         setAgentHostModelSelection, clearChangedAgentHostBinding, refreshAgentHostModels,
+         applyAgentHostModelCatalog, setModelFallbackSelection, getModelFallbackPolicyForSubmit,
+         updateModelFallbackControls, updateChatFallbackModelOptions,
+         beginEdit(task) {
+           editingTaskSnapshot = task;
+           editingTaskNormalizedSnapshot = normalizeTaskForEditDiff(task);
+         },
+         diff: buildTaskUpdateData,
+       };`,
+    )(...Object.values(context));
+    factory.setModelFallbackSelection(null);
+    assert.strictEqual(checkbox.checked, true);
+    assert.strictEqual(strategy.value, "diverse");
+    assert.strictEqual(select.value, "");
+    factory.refreshAgentHostModels();
+    factory.refreshAgentHostModels();
+    assert.deepStrictEqual(requests, [{ type: "refreshAgentHostModels" }]);
+    assert.strictEqual(status.textContent, "loading");
+
+    // A response requested by the create form must not replace the edit form's picks.
+    const saved = {
+      modelFallback: true,
+      modelFallbackPolicy: {
+        agentHostModelId: "saved/fallback/id",
+        chatModel: { vendor: "saved-vendor", id: "saved-chat" },
+        strategy: "similar",
+      },
     };
+    factory.beginEdit(saved);
+    factory.setModelFallbackSelection(saved);
     factory.setAgentHostModelSelection("saved/opaque/id", selection);
-    factory.updateAgentHostModelOptions([], "offline");
+    factory.applyAgentHostModelCatalog(models);
     assert.strictEqual(select.value, "saved/opaque/id");
+    assert.strictEqual(hostFallback.value, "saved/fallback/id");
+    assert.strictEqual(status.textContent, "saved-unverified duplicates");
+    assert.strictEqual(select.options.some((option) => option.value === "vendor/duplicate"), false);
+    assert.ok(select.options.some((option) => option.textContent === "<unsafe label> — vendor/group/model"));
+    assert.ok(chatFallback.options.some((option) => option.textContent === "saved-vendor / saved-chat unavailable"));
+    assert.ok(chatFallback.options.some((option) => option.value === '["same","vendor-a"]'));
+    assert.ok(!chatFallback.options.some((option) => option.value === '["ambiguous","vendor-b"]'));
+    assert.deepStrictEqual(factory.diff({ ...saved, modelFallbackPolicy: factory.getModelFallbackPolicyForSubmit() }), {});
+
+    // A failed manual refresh keeps the last good choices and any in-progress edits.
+    factory.refreshAgentHostModels();
+    hostFallback.value = "vendor/group/model";
+    chatFallback.value = JSON.stringify(["same", "vendor-b"]);
+    factory.updateChatFallbackModelOptions();
+    factory.applyAgentHostModelCatalog([], "offline");
     assert.strictEqual(status.textContent, "offline");
-    factory.updateAgentHostModelOptions(models);
-    assert.strictEqual(select.value, "saved/opaque/id");
-    assert.strictEqual(status.textContent, "saved-unverified");
-    assert.strictEqual(options.some((option) => option.value === "vendor/duplicate"), false);
-    assert.ok(
-      options.some((option) => option.textContent === "<unsafe label> — vendor/group/model"),
-    );
+    assert.ok(select.options.some((option) => option.value === "vendor/group/model"));
+    const policy = factory.getModelFallbackPolicyForSubmit();
+    assert.deepStrictEqual(policy, {
+      strategy: "similar",
+      chatModel: { id: "same", vendor: "vendor-b" },
+      agentHostModelId: "vendor/group/model",
+    });
+    assert.deepStrictEqual(factory.diff({ ...saved, modelFallbackPolicy: policy }), { modelFallbackPolicy: policy });
     selection = { model: "different", modelVendor: "vendor" };
     factory.clearChangedAgentHostBinding();
     assert.strictEqual(select.value, "");
+    assert.strictEqual(hostFallback.value, "vendor/group/model");
+    assert.strictEqual(status.textContent, "offline");
+    factory.applyAgentHostModelCatalog([]);
+    assert.strictEqual(status.textContent, "offline", "Unsolicited replies must be ignored");
+    factory.refreshAgentHostModels();
+    factory.applyAgentHostModelCatalog([]);
+    assert.strictEqual(status.textContent, "saved-unverified empty");
+    assert.strictEqual(hostFallback.value, "vendor/group/model");
+
+    checkbox.checked = false;
+    factory.updateModelFallbackControls();
+    assert.strictEqual(hostFallback.disabled, true);
+    assert.strictEqual(hostFallback.value, "vendor/group/model");
+    assert.deepStrictEqual(factory.diff({ modelFallback: false }), { modelFallback: false });
+    const legacy = { modelFallback: true };
+    factory.beginEdit(legacy);
+    factory.setModelFallbackSelection(legacy);
+    assert.strictEqual(checkbox.checked, true);
+    assert.deepStrictEqual(factory.getModelFallbackPolicyForSubmit(), { strategy: "diverse" });
+    assert.deepStrictEqual(factory.diff({ ...legacy, modelFallbackPolicy: { strategy: "diverse" } }), {});
+    for (const disabled of [{}, { modelFallback: false }]) {
+      factory.setModelFallbackSelection(disabled);
+      assert.strictEqual(checkbox.checked, false);
+      assert.strictEqual(strategy.disabled, true);
+    }
   });
 
   test("updateDefaults applies new defaults immediately only in create mode", () => {
@@ -2700,6 +2849,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           extractFunctionSource(source, "copyModelConfigurationForForm"),
           extractFunctionSource(source, "serializeModelConfigurationForDiff"),
           extractFunctionSource(source, "normalizeSkillRefClient"),
+          extractFunctionSource(source, "normalizeModelFallbackPolicy"),
           extractFunctionSource(source, "normalizeTaskForEditDiff"),
           extractFunctionSource(source, "buildTaskUpdateData"),
           `return (${callback});`,
@@ -3491,9 +3641,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
       },
     };
 
+    let catalogRefreshes = 0;
     const factory = new Function(
       "document",
       "scheduleLayoutRefresh",
+      "refreshAgentHostModels",
       [
         extractFunctionSource(source, "switchTab"),
         extractFunctionSource(source, "resolveTabButton"),
@@ -3503,13 +3655,15 @@ suite("SchedulerWebview Script Contract Tests", () => {
     ) as (
       doc: typeof documentStub,
       refresh: () => void,
+      refreshCatalog: () => void,
     ) => {
-      switchTab: (tabName: string) => void;
+      switchTab: (tabName: string, formOpened?: boolean) => void;
       handleTabKeydown: (event: Record<string, unknown>) => void;
     };
     const { switchTab, handleTabKeydown } = factory(
       documentStub,
       () => undefined,
+      () => { catalogRefreshes++; },
     );
     assert.ok(
       sourceContainsToken(
@@ -3551,6 +3705,11 @@ suite("SchedulerWebview Script Contract Tests", () => {
     assert.strictEqual(state.activeElement, listBtn);
     switchTab("create");
     assert.strictEqual(state.activeElement, createBtn);
+    assert.strictEqual(catalogRefreshes, 2);
+    switchTab("create");
+    assert.strictEqual(catalogRefreshes, 2, "Sitting on the current tab is not a form open");
+    switchTab("create", true);
+    assert.strictEqual(catalogRefreshes, 3, "Opening another form on the current tab refreshes its catalog");
     for (const invalidTab of ["missing", "", '\"']) {
       switchTab(invalidTab);
       assert.strictEqual(state.activeElement, createBtn);

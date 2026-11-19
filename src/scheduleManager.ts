@@ -65,6 +65,7 @@ import {
   isPromptBlockedError,
 } from "./promptExecutionErrors";
 import { normalizeSkillRef } from "./skillResolver";
+import { DEFAULT_MODEL_FALLBACK_POLICY, normalizeModelFallbackPolicy } from "./modelFallback";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -449,6 +450,12 @@ export class ScheduleManager {
       return 0;
     }
     return 60 * 1000 - elapsedMsInMinute;
+  }
+
+  private migratedModelFallback = false;
+
+  get hasMigratedModelFallback(): boolean {
+    return this.migratedModelFallback;
   }
 
   constructor(context: vscode.ExtensionContext) {
@@ -1424,6 +1431,14 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      // An invalid or future policy stays as stored and is refused at run time;
+      // only an explicit edit repairs it (P39).
+      if (task.modelFallback === true && task.modelFallbackPolicy === undefined) {
+        task.modelFallbackPolicy = { ...DEFAULT_MODEL_FALLBACK_POLICY };
+        this.migratedModelFallback = true;
+        needsSave = true;
+      }
+
       if (
         task.preventAgentHostFallback !== undefined &&
         typeof task.preventAgentHostFallback !== "boolean"
@@ -2077,6 +2092,10 @@ export class ScheduleManager {
     if (input.promptPath?.includes("\0")) {
       throw new Error(messages.templateLoadError());
     }
+    const fallbackPolicy = normalizeModelFallbackPolicy(input.modelFallbackPolicy);
+    if (input.modelFallbackPolicy !== undefined && !fallbackPolicy) {
+      throw new Error(messages.modelFallbackPolicyInvalid());
+    }
     if (
       input.preventAgentHostFallback !== undefined &&
       typeof input.preventAgentHostFallback !== "boolean"
@@ -2185,6 +2204,9 @@ export class ScheduleManager {
           ? Boolean(input.autoMode)
           : defaultAutoMode,
       modelFallback: input.modelFallback === true ? true : undefined,
+      modelFallbackPolicy: input.modelFallback === true
+        ? fallbackPolicy ?? { ...DEFAULT_MODEL_FALLBACK_POLICY }
+        : undefined,
       preventAgentHostFallback:
         input.preventAgentHostFallback === true ? true : undefined,
       useCopilotCli: input.useCopilotCli === true ? true : undefined,
@@ -2500,6 +2522,10 @@ export class ScheduleManager {
               },
         )
       : undefined;
+    const fallbackPolicy = normalizeModelFallbackPolicy(updates.modelFallbackPolicy);
+    if (updates.modelFallbackPolicy !== undefined && !fallbackPolicy) {
+      throw new Error(messages.modelFallbackPolicyInvalid());
+    }
     if (
       updates.preventAgentHostFallback !== undefined &&
       typeof updates.preventAgentHostFallback !== "boolean"
@@ -2579,6 +2605,11 @@ export class ScheduleManager {
     }
     if (updates.modelFallback !== undefined) {
       task.modelFallback = updates.modelFallback === true ? true : undefined;
+    }
+    if (updates.modelFallback !== undefined || fallbackPolicy) {
+      task.modelFallbackPolicy = task.modelFallback === true
+        ? fallbackPolicy ?? task.modelFallbackPolicy ?? { ...DEFAULT_MODEL_FALLBACK_POLICY }
+        : undefined;
     }
     if (updates.preventAgentHostFallback !== undefined) {
       task.preventAgentHostFallback =
@@ -2794,6 +2825,7 @@ export class ScheduleManager {
       attachments: original.attachments,
       autoMode: original.autoMode,
       modelFallback: original.modelFallback,
+      modelFallbackPolicy: original.modelFallbackPolicy,
       preventAgentHostFallback: original.preventAgentHostFallback,
       useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,

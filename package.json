@@ -673,7 +673,7 @@
             },
             "modelFallback": {
               "type": "boolean",
-              "description": "Opt in to the copilotScheduler.modelFallbackChain when the selected model is unavailable. Default false: an unavailable model stops the run. Detailed model options are not carried over."
+              "description": "Enable task-level model fallback before dispatch when the selected model is absent. Defaults to false when omitted by this tool. Without an explicit policy, Chat prefers a replacement from a different provider and family; Agent Host needs an explicit replacement ID, which can be set in the task editor."
             },
             "preventAgentHostFallback": {
               "type": "boolean",
@@ -875,7 +875,7 @@
                 },
                 "modelFallback": {
                   "type": "boolean",
-                  "description": "Opt in to the copilotScheduler.modelFallbackChain when the selected model is unavailable."
+                  "description": "Enable or disable task-level model fallback before dispatch. Enabling without an existing policy uses the default: Chat prefers a replacement from a different provider and family. Omission preserves the current setting."
                 },
                 "preventAgentHostFallback": {
                   "type": "boolean",

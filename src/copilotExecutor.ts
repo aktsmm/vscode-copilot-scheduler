@@ -9,12 +9,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { notifyInfo } from "./extension";
+import { chooseChatFallbackModel, normalizeModelFallbackPolicy } from "./modelFallback";
 import type {
   AgentInfo,
   ModelInfo,
   ExecuteOptions,
   ExecutePromptResult,
   ModelFallbackInfo,
+  ModelFallbackPolicy,
   ChatSessionBehavior,
 } from "./types";
 import { messages, isJapanese } from "./i18n";
@@ -121,6 +123,7 @@ type BuiltInChatMode = "agent" | "ask" | "edit";
 type AvailableModelsResult = {
   models: ModelInfo[];
   source: "api" | "fallback";
+  liveFallbackModels?: ModelInfo[];
 };
 
 type PromptRouting = {
@@ -839,6 +842,7 @@ export class CopilotExecutor {
     let resolved = await CopilotExecutor.resolveRequestedModelSelection(
       requestedModel,
       options?.modelFallback === true,
+      options?.modelFallbackPolicy,
     );
     if (resolved.fallback) {
       logDebug(
@@ -1148,6 +1152,22 @@ export class CopilotExecutor {
     }
 
     const configuration = options?.modelConfiguration ?? {};
+    // A replacement Host ID only applies to a pinned Host ID: a Chat-catalog ID
+    // that is merely missing from the Host catalog does not prove the model is gone.
+    const modelFallback = options?.modelFallback === true && hostModelIdExplicit
+      ? normalizeModelFallbackPolicy(options.modelFallbackPolicy)
+      : undefined;
+    const hostFallbackFields = (fromId?: string, toId?: string) =>
+      fromId && toId ? {
+        modelFallback: {
+          from: fromId,
+          to: toId,
+          fromId,
+          toId,
+          route: "agentHost" as const,
+          reason: "modelAbsent" as const,
+        },
+      } : {};
     const timeoutMinutes = Math.min(
       Math.max(
         Math.floor(config.get<number>("agentHostTimeoutMinutes", 60)) || 60,
@@ -1221,6 +1241,7 @@ export class CopilotExecutor {
         ...(ambiguousWorkspaceMode ? { allowNewSession: false } : {}),
         ...(modelId ? { modelId } : {}),
         ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
+        ...(modelFallback ? { modelFallback } : {}),
         modelOptions: {
           ...configuration,
           reasoningEffort:
@@ -1384,6 +1405,7 @@ export class CopilotExecutor {
               ...(hasExplicitTarget && requestedCwd ? { expectedWorkspacePath: requestedCwd } : {}),
               ...(modelId ? { modelId } : {}),
               ...(hostModelIdExplicit ? { hostModelIdExplicit: true } : {}),
+              ...(modelFallback ? { modelFallback } : {}),
               modelOptions: {
                 ...configuration,
                 reasoningEffort:
@@ -1506,6 +1528,7 @@ export class CopilotExecutor {
           const queued = queueResult.queued;
           return {
             result: {
+              ...hostFallbackFields(queued.fallbackFromModel, queued.requestedModel),
               agentHostRun: {
                 ...(queued.requestedModel ? { requestedModel: queued.requestedModel } : {}),
                 turnOutcome: "queued",
@@ -1540,6 +1563,7 @@ export class CopilotExecutor {
       }
       return {
         result: {
+          ...hostFallbackFields(turn.fallbackFromModel, requested),
           agentHostRun: {
             ...(requested ? { requestedModel: requested } : {}),
             ...(applied ? { appliedModel: applied } : {}),
@@ -2131,18 +2155,52 @@ export class CopilotExecutor {
   private static async resolveRequestedModelSelection(
     selection: NormalizedModelSelection,
     allowFallback = false,
+    requestedPolicy?: ModelFallbackPolicy,
   ): Promise<ResolvedModelSelectionResult> {
     if (!hasModelSelection(selection)) {
       return { selection };
     }
 
-    const { models, source } =
+    const { models, source, liveFallbackModels } =
       await CopilotExecutor.getAvailableModelsWithSource();
+    const taskPolicy = allowFallback && requestedPolicy !== undefined;
+    // Resolution keeps its existing tolerance for renamed IDs; the policy only
+    // applies when nothing resolves and the live catalog proves the model is gone.
     const matched = findBestMatchingModel(selection, models);
     if (!matched) {
+      if (taskPolicy && selection.model && liveFallbackModels?.length) {
+        const isSaved = (model: ModelInfo) => model.id === selection.model &&
+          (!selection.modelVendor || model.vendor === selection.modelVendor);
+        if (!liveFallbackModels.some(isSaved)) {
+          const policy = normalizeModelFallbackPolicy(requestedPolicy);
+          const replacement = policy
+            ? chooseChatFallbackModel(policy, selection, liveFallbackModels)
+            : undefined;
+          if (!replacement) {
+            throw createPromptBlockedError(
+              messages.chatFallbackModelUnavailable(),
+              "providerModelUnavailable",
+            );
+          }
+          return {
+            selection: modelInfoToSelection(replacement),
+            matched: replacement,
+            fallback: {
+              from: selection.modelName || selection.model || "",
+              to: replacement.name || replacement.id,
+              fromId: selection.model,
+              toId: replacement.id,
+              fromProvider: selection.modelVendor,
+              toProvider: replacement.vendor,
+              route: "chat",
+              reason: "modelAbsent",
+            },
+          };
+        }
+      }
       // Only a live catalog can prove the model is gone; the static list
       // contains no models and would make every task look unavailable.
-      if (allowFallback && source === "api") {
+      if (allowFallback && !taskPolicy && source === "api") {
         const fallbackModel = findFallbackModel(
           normalizeModelFallbackChain(
             vscode.workspace
@@ -2678,6 +2736,7 @@ export class CopilotExecutor {
   static async getAvailableModelsWithSource(): Promise<AvailableModelsResult> {
     try {
       let models: vscode.LanguageModelChat[] = [];
+      let fullCatalog: vscode.LanguageModelChat[] | undefined;
       try {
         models = await vscode.lm.selectChatModels({ vendor: "copilot" });
       } catch (error) {
@@ -2687,10 +2746,10 @@ export class CopilotExecutor {
         );
       }
       if (!models || models.length === 0) {
-        models = await vscode.lm.selectChatModels({});
+        fullCatalog = models = await vscode.lm.selectChatModels({});
       } else {
         try {
-          const discoveredModels = await vscode.lm.selectChatModels({});
+          const discoveredModels = fullCatalog = await vscode.lm.selectChatModels({});
           if (discoveredModels && discoveredModels.length > 0) {
             models = mergeChatModelLists(models, discoveredModels);
           }
@@ -2732,6 +2791,16 @@ export class CopilotExecutor {
             normalizeModelCatalog(modelInfos),
           ),
           source: "api",
+          ...(fullCatalog?.length && fullCatalog.every((model) => model.id?.trim() && model.vendor?.trim())
+            ? { liveFallbackModels: fullCatalog.map((model) => ({
+                id: model.id,
+                name: model.name || model.id,
+                vendor: model.vendor,
+                family: model.family,
+                version: model.version,
+                description: model.family || "",
+              })) }
+            : {}),
         };
       }
     } catch (error) {

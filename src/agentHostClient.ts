@@ -480,6 +480,7 @@ export interface AgentHostTurnRequest {
   modelId?: string;
   /** The model ID was explicitly chosen from the Agent Host catalog. */
   hostModelIdExplicit?: boolean;
+  modelFallback?: { agentHostModelId?: string };
   modelOptions?: Record<string, string | number | undefined>;
   agentUri?: string;
   attachments?: AgentHostAttachment[];
@@ -498,6 +499,7 @@ export interface AgentHostTurnRequest {
 
 export interface AgentHostTurnResult extends AgentHostSessionRef {
   requestedModel?: string;
+  fallbackFromModel?: string;
   appliedModel?: string;
   responseText: AgentHostResponseTextObservation;
   workspaceMode?: AgentHostWorkspaceMode;
@@ -530,6 +532,7 @@ export interface AgentHostQueuedMessageRequest {
   modelId?: string;
   /** The model ID was explicitly chosen from the Agent Host catalog. */
   hostModelIdExplicit?: boolean;
+  modelFallback?: { agentHostModelId?: string };
   modelOptions?: Record<string, string | number | undefined>;
   agentUri?: string;
   attachments?: AgentHostAttachment[];
@@ -546,6 +549,7 @@ export interface AgentHostQueuedMessageRequest {
 export interface AgentHostQueuedMessageResult extends AgentHostSessionRef {
   messageId: string;
   requestedModel?: string;
+  fallbackFromModel?: string;
 }
 
 interface SnapshotResult {
@@ -637,6 +641,7 @@ function selectAgentHostModel(
   agents: readonly Record<string, unknown>[],
   modelId: string,
   explicit: boolean,
+  fallback?: { agentHostModelId?: string },
 ): AgentHostModelInfo {
   const catalog = getAgentHostModels(agents);
   if (catalog.length === 0) {
@@ -649,7 +654,16 @@ function selectAgentHostModel(
   if (matches.length > 1) {
     throw new AgentHostError("modelIdentity", "The Agent Host model ID is ambiguous.");
   }
-  const rawModel = matches[0];
+  // Nothing has been sent yet, so a missing or unusable replacement is reported
+  // like any other unavailable model and the existing route fallback applies.
+  const replacement = !matches.length && explicit && fallback?.agentHostModelId
+    ? catalog.filter(
+        (model) =>
+          model.id === fallback.agentHostModelId &&
+          model.policyState !== "disabled",
+      )
+    : [];
+  const rawModel = matches[0] ?? (replacement.length === 1 ? replacement[0] : undefined);
   if (!rawModel) {
     throw new AgentHostError(
       "unsupported",
@@ -665,7 +679,7 @@ function selectAgentHostModel(
   if (byokId !== undefined && typeof byokId !== "string") {
     throw new AgentHostError("modelIdentity", "The Agent Host model metadata is invalid.");
   }
-  if (!explicit && (byokId !== undefined || modelId.includes("/"))) {
+  if (!explicit && rawModel.id === modelId && (byokId !== undefined || modelId.includes("/"))) {
     throw new AgentHostError(
       "modelIdentity",
       "The Agent Host model must be selected explicitly.",
@@ -1228,8 +1242,9 @@ export async function queueAgentHostMessage(
         agents,
         request.modelId,
         request.hostModelIdExplicit === true,
+        request.modelFallback,
       );
-      const config = mapModelConfiguration(info, request.modelOptions ?? {});
+      const config = mapModelConfiguration(info, info.id === request.modelId ? request.modelOptions ?? {} : {});
       model = {
         id: info.id,
         ...(Object.keys(config).length > 0 ? { config } : {}),
@@ -1303,6 +1318,7 @@ export async function queueAgentHostMessage(
       chatUri: chat.chatUri,
       messageId,
       ...(model ? { requestedModel: model.id } : {}),
+      ...(model && request.modelId && model.id !== request.modelId ? { fallbackFromModel: request.modelId } : {}),
     };
   } finally {
     if (!keepConnection) {
@@ -1366,8 +1382,9 @@ async function prepareTurn(
       agents,
       request.modelId,
       request.hostModelIdExplicit === true,
+      request.modelFallback,
     );
-    const config = mapModelConfiguration(info, request.modelOptions ?? {});
+    const config = mapModelConfiguration(info, info.id === request.modelId ? request.modelOptions ?? {} : {});
     model = {
       id: info.id,
       ...(Object.keys(config).length > 0 ? { config } : {}),
@@ -1705,6 +1722,7 @@ async function runTurn(
           resolve({
             ...ref,
             ...(model ? { requestedModel: model.id } : {}),
+            ...(model && request.modelId && model.id !== request.modelId ? { fallbackFromModel: request.modelId } : {}),
             ...(appliedModel ? { appliedModel } : {}),
             responseText: responseTextObserved
               ? "observed"

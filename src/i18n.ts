@@ -511,6 +511,22 @@ export const messages = {
       `Model fallback: ${from} -> ${to}`,
       `モデルのフォールバック: ${from} -> ${to}`,
     ),
+  labelSharedModel: () => t("Model (shared)", "モデル（共通）"),
+  labelModelFallbackStrategy: () => t("Automatic selection priority", "自動選択の優先方針"),
+  modelFallbackDiverse: () => t("Prefer a different provider, then family", "違う系統を優先（提供元 → ファミリー）"),
+  modelFallbackSimilar: () => t("Prefer the same provider, then family", "近い系統を優先（提供元 → ファミリー）"),
+  labelChatFallbackModel: () => t("Chat fallback model", "Chat の代替モデル"),
+  labelHostFallbackModel: () => t("Agent Host fallback model ID", "Agent Host の代替モデル ID"),
+  modelFallbackAutomatic: () => t("Not specified", "指定なし"),
+  modelFallbackPolicyInvalid: () => t("The model fallback settings are invalid.", "代替モデルの設定が無効です。"),
+  chatFallbackModelUnavailable: () =>
+    t("No verified Chat fallback model is available. Check the model list or select a replacement.", "Chat で利用できる代替モデルを確認できません。一覧を確認するか、代替モデルを選択してください。"),
+  agentHostFallbackModelUnavailable: () =>
+    t("No verified Agent Host fallback model is available. Select an exact replacement ID from the Host list.", "Agent Host で利用できる代替モデルを確認できません。Host の一覧から正確な代替 ID を選択してください。"),
+  modelFallbackMigrated: () =>
+    t("Tasks with model fallback enabled now use task-level fallback settings instead of the shared chain. You can change the priority, select a replacement, or turn fallback off when editing each task.", "モデルの代替がオンの既存タスクに、共通チェーンではなくタスクごとの代替設定を適用しました。タスク編集画面で優先方針や代替モデルを変更したり、代替をオフにしたりできます。"),
+  executionHistoryModelReplacement: (from: string, to: string, host: boolean) =>
+    t(`${host ? "Agent Host" : "Chat"} fallback (model absent): ${from} → ${to}`, `${host ? "Agent Host" : "Chat"} の代替（元モデルが一覧にない）: ${from} → ${to}`),
   labelModelFallback: () =>
     t(
       "Fall back to another model if the selected model is unavailable",
@@ -650,13 +666,13 @@ export const messages = {
     ),
   webviewModelFallbackNote: () =>
     t(
-      "If the selected model is absent from the live catalog, use the configured fallback chain. Detailed model options are not carried over. The switch is recorded; application depends on the route.",
-      "選択したモデルが現在の一覧にない場合、設定した代替モデルの順序を使います。詳細オプションは引き継ぎません。切り替えは履歴に記録され、適用は実行経路によります。",
+      "Only used if the selected model is missing from a live catalog before sending. Explicit choices take priority. Chat can rank verified providers and families automatically; Agent Host needs an explicit fallback ID. Detailed options are not carried over.",
+      "送信前に元モデルが一覧にない場合だけ代替します。指定した候補を優先します。Chat は判別できる提供元・ファミリーから自動選択でき、Agent Host には代替 ID の指定が必要です。詳細設定は引き継ぎません。",
     ),
   webviewModelHarnessNote: () =>
     t(
-      "Agent Host receives the selected model and supported options; its reported ID does not verify the backend. Model application on the Chat route is unverified.",
-      "Agent Host に選択したモデルと対応オプションを送ります。Host の報告 ID は実バックエンドの確認ではありません。Chat 経路での適用は未確認です。",
+      "The shared model is used by Chat and the Copilot CLI and supplies options for Agent Host. The Copilot harness uses Agent Host. VS Code plans to remove its legacy Local harness in February 2027, not the Chat view.",
+      "共通モデルは Chat・Copilot CLI で参照し、Agent Host の詳細設定にも使います。Copilot ハーネスは Agent Host で動作します。VS Code の旧 Local ハーネスは2027年2月に削除予定です。Chat 画面は廃止対象ではありません。",
     ),
   labelUseCopilotCli: () =>
     t(

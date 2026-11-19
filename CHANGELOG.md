@@ -5,6 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The task editor shows the shared model and the Agent Host model ID side by side, with a note that the Local harness is planned for removal in February 2027 (the Chat view is not affected). The Host model list loads when the form opens; Refresh stays available and nothing is selected automatically.
+- Model fallback is now set per task. New tasks have it on. Choose an explicit Chat replacement, an explicit Agent Host replacement ID, and whether automatic selection prefers a different provider and family (default) or the same. Fallback happens only before dispatch, when the current catalog shows the saved model is gone; a model that still resolves keeps resolving as before. Existing tasks with fallback on move to this policy (a one-time notice is shown); tasks with it off stay off. Model options and thinking effort are not carried over. `copilotScheduler.modelFallbackChain` is kept for older versions and is not used by migrated tasks.
+
 ## [1.17.1] - 2026-11-20
 
 ### Fixed

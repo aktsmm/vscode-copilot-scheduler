@@ -2695,6 +2695,43 @@ suite("ScheduleManager Auto Mode Tests", () => {
     }
   });
 
+  test("migrates only opted-in legacy model fallback tasks and persists the policy", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    try {
+      const base = {
+        name: "legacy-model-fallback",
+        prompt: "hello",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        promptSource: "inline",
+        enabled: false,
+      };
+      const manager = new ScheduleManager(createMockContextWithGlobalTasks(tmp, [
+        { ...base, id: "on", modelFallback: true },
+        { ...base, id: "off", modelFallback: false },
+        { ...base, id: "absent" },
+        { ...base, id: "invalid", modelFallback: true, modelFallbackPolicy: { strategy: "future" } },
+      ]));
+      await waitForStartupSave(manager);
+      assert.strictEqual(manager.hasMigratedModelFallback, true);
+      const restored = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(restored);
+      assert.strictEqual(restored.hasMigratedModelFallback, false);
+      assert.deepStrictEqual(restored.getTask("on")?.modelFallbackPolicy, { strategy: "diverse" });
+      assert.strictEqual(restored.getTask("off")?.modelFallback, false);
+      assert.strictEqual(restored.getTask("absent")?.modelFallback, undefined);
+      assert.strictEqual(restored.getTask("invalid")?.modelFallback, true);
+      assert.deepStrictEqual(restored.getTask("invalid")?.modelFallbackPolicy, { strategy: "future" });
+      await restored.updateTask("invalid", { name: "renamed" });
+      assert.deepStrictEqual(restored.getTask("invalid")?.modelFallbackPolicy, { strategy: "future" });
+      const reloaded = new ScheduleManager(createMockContext(tmp));
+      await waitForStartupSave(reloaded);
+      assert.deepStrictEqual(reloaded.getTask("invalid")?.modelFallbackPolicy, { strategy: "future" });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   test("model fallback opt-in persists through create, update and duplicate", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
     try {
@@ -2717,16 +2754,21 @@ suite("ScheduleManager Auto Mode Tests", () => {
         promptSource: "inline",
         enabled: true,
         modelFallback: true,
+        modelFallbackPolicy: { strategy: "similar", chatModel: { id: "fallback", vendor: "byok" } },
       });
       assert.strictEqual(created.modelFallback, true);
+      const restored = new ScheduleManager(createMockContext(tmp)).getTask(created.id);
+      assert.deepStrictEqual(restored?.modelFallbackPolicy, created.modelFallbackPolicy);
 
       const copy = await manager.duplicateTask(created.id);
       assert.strictEqual(copy?.modelFallback, true);
+      assert.deepStrictEqual(copy?.modelFallbackPolicy, created.modelFallbackPolicy);
 
       const cleared = await manager.updateTask(created.id, {
         modelFallback: false,
       });
       assert.strictEqual(cleared?.modelFallback, undefined);
+      assert.strictEqual(cleared?.modelFallbackPolicy, undefined);
       const enabled = await manager.updateTask(plain.id, {
         modelFallback: true,
       });

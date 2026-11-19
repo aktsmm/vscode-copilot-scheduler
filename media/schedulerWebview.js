@@ -579,7 +579,9 @@
 
   var tasks = Array.isArray(initialData.tasks) ? initialData.tasks : [];
   var agents = Array.isArray(initialData.agents) ? initialData.agents : [];
-  var models = Array.isArray(initialData.models) ? initialData.models : [];
+  var chatFallbackModels = Array.isArray(initialData.chatFallbackModels)
+    ? initialData.chatFallbackModels
+    : [];
   var modelPickerDefault = Array.isArray(initialData.modelPickerDefault)
     ? initialData.modelPickerDefault
     : [];
@@ -606,6 +608,8 @@
   var pendingModelReasoningEffort = "";
   var agentHostModels = [];
   var agentHostModelsLoaded = false;
+  var agentHostModelsLoading = false;
+  var agentHostModelsError = "";
   var agentHostBindingKey = "";
   var modelConfigurationState = {};
   var modelConfigurationExecutionEnabled =
@@ -931,6 +935,9 @@
   var autoModeInput = document.getElementById("auto-mode");
   var allowOverlappingRunsInput = document.getElementById("allow-overlapping-runs");
   var modelFallbackInput = document.getElementById("model-fallback");
+  var modelFallbackStrategy = document.getElementById("model-fallback-strategy");
+  var chatFallbackModelSelect = document.getElementById("chat-fallback-model");
+  var hostFallbackModelSelect = document.getElementById("host-fallback-model");
   var preventAgentHostFallbackInput = document.getElementById(
     "prevent-agent-host-fallback",
   );
@@ -1206,52 +1213,62 @@
     agentHostBindingKey = value ? getAgentHostBindingKey(selection) : "";
   }
 
-  function updateAgentHostModelOptions(models, error) {
-    if (!agentHostModelSelect) return;
-    var selectedId = agentHostModelSelect.value;
-    var matches = (Array.isArray(models) ? models : []).filter(function (model) {
-      return model && typeof model.id === "string" && model.id.length > 0;
-    });
-    var counts = Object.create(null);
-    matches.forEach(function (model) {
-      counts[model.id] = (counts[model.id] || 0) + 1;
-    });
-    while (agentHostModelSelect.options.length > 1) {
-      agentHostModelSelect.remove(1);
-    }
-    matches.forEach(function (model) {
-      if (counts[model.id] !== 1) return;
+  function renderModelChoiceOptions(select, choices, selected, unavailableLabel) {
+    if (!select) return;
+    while (select.options.length > 1) select.remove(1);
+    choices.forEach(function (label, value) {
       var option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = model.name
-        ? String(model.name) + " — " + model.id
-        : model.id;
-      agentHostModelSelect.appendChild(option);
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
     });
-    var selectedAvailable =
-      selectedId && selectHasOptionValue(agentHostModelSelect, selectedId);
-    if (selectedId && !selectedAvailable) {
+    if (selected && !choices.has(selected)) {
       var saved = document.createElement("option");
-      saved.value = selectedId;
-      saved.textContent = selectedId;
-      agentHostModelSelect.appendChild(saved);
+      saved.value = selected;
+      saved.textContent = unavailableLabel || selected;
+      select.appendChild(saved);
     }
-    agentHostModelSelect.value = selectedId;
-    if (agentHostModelStatus) {
-      agentHostModelStatus.textContent = String(
-        error ||
-          (selectedId && !selectedAvailable
-            ? strings.agentHostModelSavedUnverified
-            : matches.some(function (model) {
-                  return counts[model.id] > 1;
-                })
-              ? strings.agentHostModelsDuplicate
-            : agentHostModelsLoaded && !matches.length
-              ? strings.agentHostModelsEmpty
-              : "") ||
-          "",
+    select.value = selected;
+  }
+
+  function updateAgentHostModelOptions(fallbackId) {
+    var choices = new Map();
+    var duplicateIds = new Set();
+    agentHostModels.forEach(function (model) {
+      if (!model || typeof model.id !== "string" || !model.id.trim()) return;
+      if (choices.has(model.id)) duplicateIds.add(model.id);
+      choices.set(
+        model.id,
+        model.name ? String(model.name) + " — " + model.id : model.id,
       );
+    });
+    duplicateIds.forEach(function (id) {
+      choices.delete(id);
+    });
+    var primaryId = agentHostModelSelect ? agentHostModelSelect.value : "";
+    var selectedFallbackId = fallbackId;
+    if (selectedFallbackId === undefined) {
+      selectedFallbackId = hostFallbackModelSelect ? hostFallbackModelSelect.value : "";
     }
+    renderModelChoiceOptions(agentHostModelSelect, choices, primaryId);
+    renderModelChoiceOptions(hostFallbackModelSelect, choices, selectedFallbackId);
+    if (!agentHostModelStatus) return;
+    if (agentHostModelsLoading || agentHostModelsError) {
+      agentHostModelStatus.textContent = agentHostModelsLoading
+        ? strings.agentHostModelsLoading || ""
+        : agentHostModelsError;
+      return;
+    }
+    var enabledFallbackId = hostFallbackModelSelect && !hostFallbackModelSelect.disabled
+      ? selectedFallbackId : "";
+    var unverified = [primaryId, enabledFallbackId].some(function (id) {
+      return id && !choices.has(id);
+    });
+    agentHostModelStatus.textContent = [
+      unverified && strings.agentHostModelSavedUnverified,
+      duplicateIds.size && strings.agentHostModelsDuplicate,
+      agentHostModelsLoaded && !choices.size && !duplicateIds.size && strings.agentHostModelsEmpty,
+    ].filter(Boolean).join(" ");
   }
 
   function clearChangedAgentHostBinding() {
@@ -1265,16 +1282,94 @@
       agentHostModelSelect.value = "";
       agentHostBindingKey = "";
     }
-    updateAgentHostModelOptions(agentHostModels);
+    updateAgentHostModelOptions();
   }
 
   function refreshAgentHostModels() {
+    // The list is shared by the whole webview; only one reply can be outstanding.
+    if (!agentHostModelSelect || agentHostModelsLoading) return;
+    agentHostModelsLoading = true;
     if (agentHostModelStatus) {
-      agentHostModelStatus.textContent = String(
-        strings.agentHostModelsLoading || "",
-      );
+      agentHostModelStatus.textContent = strings.agentHostModelsLoading || "";
     }
     vscode.postMessage({ type: "refreshAgentHostModels" });
+  }
+
+  function applyAgentHostModelCatalog(models, error) {
+    if (!agentHostModelsLoading) return;
+    agentHostModelsLoading = false;
+    agentHostModelsError = error || "";
+    if (!error) {
+      agentHostModels = Array.isArray(models) ? models : [];
+      agentHostModelsLoaded = true;
+    }
+    // Restore the current form selections, not the selections at request time.
+    updateAgentHostModelOptions();
+  }
+
+  function normalizeModelFallbackPolicy(value) {
+    var policy = value || {};
+    var chat = policy.chatModel;
+    return {
+      strategy: policy.strategy === "similar" ? "similar" : "diverse",
+      ...(chat && typeof chat.id === "string" && chat.id.trim() &&
+        typeof chat.vendor === "string" && chat.vendor.trim()
+        ? { chatModel: { id: chat.id, vendor: chat.vendor } }
+        : {}),
+      ...(typeof policy.agentHostModelId === "string" && policy.agentHostModelId.trim()
+        ? { agentHostModelId: policy.agentHostModelId }
+        : {}),
+    };
+  }
+
+  function updateChatFallbackModelOptions(savedChoice) {
+    if (!chatFallbackModelSelect) return;
+    var choices = new Map();
+    var duplicateKeys = new Set();
+    chatFallbackModels.forEach(function (model) {
+      if (!model || typeof model.id !== "string" || !model.id.trim() ||
+        typeof model.vendor !== "string" || !model.vendor.trim()) return;
+      var key = JSON.stringify([model.id, model.vendor]);
+      if (choices.has(key)) duplicateKeys.add(key);
+      choices.set(key, (model.name || model.id) + " — " + model.vendor + " / " + model.id);
+    });
+    duplicateKeys.forEach(function (key) { choices.delete(key); });
+    var selected = savedChoice === undefined
+      ? chatFallbackModelSelect.value
+      : savedChoice ? JSON.stringify([savedChoice.id, savedChoice.vendor]) : "";
+    var identity = selected ? JSON.parse(selected) : null;
+    renderModelChoiceOptions(
+      chatFallbackModelSelect,
+      choices,
+      selected,
+      identity && identity[1] + " / " + identity[0] + " " + (strings.labelModelUnavailableSuffix || ""),
+    );
+  }
+
+  function updateModelFallbackControls(fallbackId) {
+    [modelFallbackStrategy, chatFallbackModelSelect, hostFallbackModelSelect].forEach(function (select) {
+      if (select) select.disabled = !modelFallbackInput.checked;
+    });
+    updateAgentHostModelOptions(fallbackId);
+  }
+
+  function setModelFallbackSelection(task) {
+    if (!modelFallbackInput) return;
+    var policy = normalizeModelFallbackPolicy(task && task.modelFallbackPolicy);
+    modelFallbackInput.checked = !task || task.modelFallback === true;
+    if (modelFallbackStrategy) modelFallbackStrategy.value = policy.strategy;
+    updateChatFallbackModelOptions(policy.chatModel || null);
+    updateModelFallbackControls(policy.agentHostModelId || "");
+  }
+
+  function getModelFallbackPolicyForSubmit() {
+    var chat = chatFallbackModelSelect && chatFallbackModelSelect.value
+      ? JSON.parse(chatFallbackModelSelect.value) : null;
+    return normalizeModelFallbackPolicy({
+      strategy: modelFallbackStrategy && modelFallbackStrategy.value,
+      chatModel: chat ? { id: chat[0], vendor: chat[1] } : undefined,
+      agentHostModelId: hostFallbackModelSelect && hostFallbackModelSelect.value,
+    });
   }
 
   function copyModelConfigurationForForm(value) {
@@ -1335,6 +1430,9 @@
       autoMode: source.autoMode === true,
       allowOverlappingRuns: source.allowOverlappingRuns === true,
       modelFallback: source.modelFallback === true,
+      modelFallbackPolicy: source.modelFallback === true
+        ? JSON.stringify(normalizeModelFallbackPolicy(source.modelFallbackPolicy))
+        : undefined,
       preventAgentHostFallback: source.preventAgentHostFallback === true,
       useCopilotCli: source.useCopilotCli === true,
       skillRef: (function () {
@@ -1383,6 +1481,7 @@
     var diff = {};
 
     Object.keys(normalizedCurrent).forEach(function (key) {
+      if (key === "modelFallbackPolicy" && normalizedCurrent[key] === undefined) return;
       if (normalizedCurrent[key] !== normalizedOriginal[key]) {
         diff[key] =
           key === "agentHostWorkspaceMode" && taskData[key] === undefined
@@ -2105,13 +2204,14 @@
   }
 
   // Tab switching function
-  function switchTab(tabName) {
+  function switchTab(tabName, formOpened) {
     if (tabName !== "create" && tabName !== "list") return;
     var targetBtn = document.querySelector(
       '.tab-button[data-tab="' + tabName + '"]',
     );
     var targetContent = document.getElementById(tabName + "-tab");
     if (!targetBtn || !targetContent) return;
+    var isNewlyVisible = targetBtn.getAttribute("aria-selected") !== "true";
     var active = document.activeElement;
     var focusWasInHiddenPanel = false;
     var focusWasOnPreviousTab = false;
@@ -2138,13 +2238,16 @@
     if (focusWasInHiddenPanel || focusWasOnPreviousTab) {
       targetBtn.focus();
     }
+    if (tabName === "create" && (isNewlyVisible || formOpened)) {
+      refreshAgentHostModels();
+    }
     scheduleLayoutRefresh();
   }
 
   function openCreateTaskForm() {
     clearPendingSubmitState();
     resetForm();
-    switchTab("create");
+    switchTab("create", true);
     try {
       var taskNameEl = document.getElementById("task-name");
       if (taskNameEl && typeof taskNameEl.focus === "function") {
@@ -2192,7 +2295,6 @@
           : undefined;
       updateModelVariantOptions(group, null);
       clearChangedAgentHostBinding();
-      if (!agentHostModelsLoaded && group) refreshAgentHostModels();
       updateModelSelectionStatus();
       scheduleLayoutRefresh();
     });
@@ -2671,6 +2773,9 @@
         modelFallback: modelFallbackInput
           ? modelFallbackInput.checked
           : getSavedTaskField("modelFallback", false) === true,
+        ...(modelFallbackInput && modelFallbackInput.checked
+          ? { modelFallbackPolicy: getModelFallbackPolicyForSubmit() }
+          : {}),
         preventAgentHostFallback: preventAgentHostFallbackInput
           ? preventAgentHostFallbackInput.checked
           : getSavedTaskField("preventAgentHostFallback", false) === true,
@@ -2908,6 +3013,9 @@
         modelFallback: modelFallbackInput
           ? modelFallbackInput.checked
           : getSavedTaskField("modelFallback", false) === true,
+        ...(modelFallbackInput && modelFallbackInput.checked
+          ? { modelFallbackPolicy: getModelFallbackPolicyForSubmit() }
+          : {}),
         preventAgentHostFallback: preventAgentHostFallbackInput
           ? preventAgentHostFallbackInput.checked
           : getSavedTaskField("preventAgentHostFallback", false) === true,
@@ -2948,6 +3056,17 @@
       agentHostBindingKey = agentHostModelSelect.value
         ? getAgentHostBindingKey(getAgentHostBindingSelection())
         : "";
+      updateAgentHostModelOptions();
+    });
+  }
+  if (modelFallbackInput) {
+    modelFallbackInput.addEventListener("change", function () {
+      updateModelFallbackControls();
+    });
+  }
+  if (hostFallbackModelSelect) {
+    hostFallbackModelSelect.addEventListener("change", function () {
+      updateAgentHostModelOptions();
     });
   }
   if (agentHostModelRefresh) {
@@ -3933,11 +4052,10 @@
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
     if (allowOverlappingRunsInput) allowOverlappingRunsInput.checked = false;
-    if (modelFallbackInput) modelFallbackInput.checked = false;
     if (preventAgentHostFallbackInput)
       preventAgentHostFallbackInput.checked = false;
     setAgentHostModelSelection("", null);
-    updateAgentHostModelOptions(agentHostModels);
+    setModelFallbackSelection(null);
     if (useCopilotCliInput) useCopilotCliInput.checked = false;
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
@@ -4466,10 +4584,7 @@
       modelFamily: task.modelFamily,
       modelVersion: task.modelVersion,
     });
-    updateAgentHostModelOptions(agentHostModels);
-    if (task.agentHostModelId && !agentHostModelsLoaded) {
-      refreshAgentHostModels();
-    }
+    setModelFallbackSelection(task);
     editingTaskEnabled = task.enabled !== false;
     var scopeValue = task.scope || "workspace";
     var scopeRadio = document.querySelector(
@@ -4549,9 +4664,6 @@
     if (allowOverlappingRunsInput) {
       allowOverlappingRunsInput.checked = task.allowOverlappingRuns === true;
     }
-    if (modelFallbackInput) {
-      modelFallbackInput.checked = task.modelFallback === true;
-    }
     if (preventAgentHostFallbackInput) {
       preventAgentHostFallbackInput.checked =
         task.preventAgentHostFallback === true;
@@ -4568,7 +4680,7 @@
     updateChatSessionDefaultNote();
 
     // Switch to edit tab (same form)
-    switchTab("create");
+    switchTab("create", true);
     vscode.postMessage({ type: "requestPromptPreview", taskId: id });
     updatePromptFileNotice();
   };
@@ -4710,9 +4822,7 @@
           updateTargetChatOptions(message.chats, message.error);
           break;
         case "updateAgentHostModels":
-          agentHostModels = Array.isArray(message.models) ? message.models : [];
-          agentHostModelsLoaded = !message.error;
-          updateAgentHostModelOptions(agentHostModels, message.error);
+          applyAgentHostModelCatalog(message.models, message.error);
           break;
         case "updateModels":
           {
@@ -4725,7 +4835,9 @@
               modelReasoningEffort: pendingModelReasoningEffort,
               modelConfiguration: modelConfigurationState,
             };
-            models = Array.isArray(message.models) ? message.models : [];
+            chatFallbackModels = Array.isArray(message.chatFallbackModels)
+              ? message.chatFallbackModels
+              : [];
             modelPickerDefault = Array.isArray(message.modelPickerDefault)
               ? message.modelPickerDefault
               : [];
@@ -4769,6 +4881,7 @@
               updateModelOptions(null);
             }
             updateModelSelectionStatus();
+            updateChatFallbackModelOptions();
           }
           break;
         case "updatePromptTemplates":
@@ -4942,6 +5055,8 @@
 
   // Initial render
   renderTaskList(tasks);
+  setModelFallbackSelection(null);
+  refreshAgentHostModels();
   scheduleLayoutRefresh();
 
   // Notify extension that webview is ready
