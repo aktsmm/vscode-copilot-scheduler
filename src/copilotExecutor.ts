@@ -653,10 +653,18 @@ export class CopilotExecutor {
   }
 
   private static agentHostDispatchStorage(): string {
-    if (!this.extensionGlobalStorageUri || this.extensionGlobalStorageUri.scheme !== "file") {
-      throw new AgentHostError("failed", "The Agent Host dispatch safety store is unavailable.");
+    // VS Code 1.147 reports a local global storage folder as `vscode-userdata:`, so the
+    // scheme says nothing about locality; the extension host's own fsPath is what is used.
+    const storagePath = this.extensionGlobalStorageUri?.fsPath;
+    if (!storagePath || !path.isAbsolute(storagePath)) {
+      // Nothing was dispatched yet, so the outcome is known and the run is safe to retry.
+      throw new AgentHostError(
+        "failed",
+        "The Agent Host dispatch safety store is unavailable.",
+        "failed",
+      );
     }
-    return this.extensionGlobalStorageUri.fsPath;
+    return storagePath;
   }
 
   private static async updateAgentHostDispatch(

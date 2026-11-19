@@ -24,6 +24,30 @@ function useAgentHostTestStorage(): () => void {
 }
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("dispatch storage follows the global storage path whatever scheme VS Code reports", () => {
+    const previous = Object.getOwnPropertyDescriptor(CopilotExecutor, "extensionGlobalStorageUri")!;
+    const directory = path.join(os.tmpdir(), "scheduler-userdata-scheme");
+    const storage = (): string => Reflect.get(CopilotExecutor, "agentHostDispatchStorage").call(CopilotExecutor);
+    try {
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", {
+        configurable: true,
+        value: vscode.Uri.file(directory).with({ scheme: "vscode-userdata" }),
+      });
+      assert.strictEqual(storage().toLowerCase(), directory.toLowerCase());
+
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", {
+        configurable: true, value: undefined,
+      });
+      assert.throws(
+        storage,
+        (error: unknown) =>
+          error instanceof agentHostClient.AgentHostError && error.turnOutcome === "failed",
+      );
+    } finally {
+      Object.defineProperty(CopilotExecutor, "extensionGlobalStorageUri", previous);
+    }
+  });
+
   test("workspace preferences reject invalid input and non-Host routes but preserve an explicit CLI model", async () => {
     const getConfig = vscode.workspace.getConfiguration;
     const warning = vscode.window.showWarningMessage;
