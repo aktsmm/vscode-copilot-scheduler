@@ -1496,13 +1496,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Initialize components
   scheduleManager = new ScheduleManager(context);
-  if (scheduleManager.hasMigratedModelFallback && path.isAbsolute(context.globalStorageUri.fsPath)) {
+  if (path.isAbsolute(context.globalStorageUri.fsPath)) {
     const marker = path.join(context.globalStorageUri.fsPath, "model-fallback-v2-notified");
-    void withTaskStoreLock(`${marker}.lock`, async () => {
-      if (fs.existsSync(marker)) return;
-      await writeFileAtomically(marker, "1");
-      void vscode.window.showInformationMessage(messages.modelFallbackMigrated());
-    }).catch(() => logDebug("[CopilotScheduler] Could not record model fallback migration notice."));
+    // Announce only once the migrated tasks are saved; a failed save migrates
+    // again on the next load and announces then.
+    void scheduleManager
+      .whenModelFallbackMigrationSaved()
+      .then((saved) =>
+        saved
+          ? withTaskStoreLock(`${marker}.lock`, async () => {
+              if (fs.existsSync(marker)) return;
+              await writeFileAtomically(marker, "1");
+              void vscode.window.showInformationMessage(messages.modelFallbackMigrated());
+            })
+          : undefined,
+      )
+      .catch(() => logDebug("[CopilotScheduler] Could not record model fallback migration notice."));
   }
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
