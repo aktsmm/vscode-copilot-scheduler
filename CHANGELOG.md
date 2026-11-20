@@ -5,6 +5,17 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-11-20
+
+### Added
+
+- A per-task `Timeout` for Agent Host and Copilot CLI runs, in the task editor and as `timeout` in `scheduler_create_task` / `scheduler_update_task`: follow the settings (default), off (never stop this task), or on with its own minutes (1–720; empty uses the configured minutes). When a task's own timeout stops a run, the message says so instead of naming a setting.
+
+### Changed
+
+- The task editor's model list no longer stays on "Default" only when Copilot Chat had not registered its models yet (for example right after startup). While the editor is open and the list could not be loaded, it asks again every 30 seconds, up to five times; the reload button still starts over.
+- Overlapping automatic runs of a recurring task are now allowed by default. A run that is still going no longer makes later occurrences skip, which matters now that timeouts are off by default. Recurring tasks saved without a setting are switched to allowed once (a notice appears after they are saved); there is no record of who had chosen "not allowed" before, so check tasks that must not overlap and turn the option off when editing. Manual runs, one-time tasks and runs in the same chat (which queue) keep their guards.
+
 ## [1.21.0] - 2026-11-20
 
 ### Changed
