@@ -1008,6 +1008,122 @@ suite("SchedulerWebview Friendly Cron Builder Tests", () => {
   });
 });
 
+suite("SchedulerWebview model list retry", () => {
+  type RetryInternals = {
+    panel?: unknown;
+    cachedModels: unknown[];
+    modelRetryIntervalMs: number;
+    modelRetryTimer?: unknown;
+    modelRetryCount: number;
+    webviewReady: boolean;
+    refreshAgentsAndModels(force?: boolean): Promise<void>;
+    refreshCachesAndNotifyPanel(force?: boolean): Promise<void>;
+    refreshPromptTemplates(force?: boolean): Promise<void>;
+  };
+  const wv = SchedulerWebview as unknown as RetryInternals;
+  const apiModels = [
+    { id: "", name: "Default", description: "", vendor: "" },
+    { id: "m1", name: "Model 1", description: "x", vendor: "copilot" },
+  ] as ModelInfo[];
+
+  async function withCatalog(
+    sources: Array<"api" | "fallback">,
+    run: (calls: () => number) => Promise<void>,
+  ): Promise<void> {
+    const descriptor = Object.getOwnPropertyDescriptor(CopilotExecutor, "getAvailableModelsWithSource")!;
+    const templates = wv.refreshPromptTemplates;
+    const original = {
+      panel: wv.panel,
+      interval: wv.modelRetryIntervalMs,
+      ready: wv.webviewReady,
+      models: wv.cachedModels,
+    };
+    let count = 0;
+    Object.defineProperty(CopilotExecutor, "getAvailableModelsWithSource", {
+      configurable: true,
+      value: async () => {
+        const source = sources[Math.min(count, sources.length - 1)];
+        count++;
+        return source === "api"
+          ? { models: apiModels, source }
+          : { models: CopilotExecutor.getFallbackModels(), source };
+      },
+    });
+    wv.refreshPromptTemplates = async () => undefined;
+    wv.panel = {
+      webview: { postMessage: () => Promise.resolve(true) },
+      dispose: () => undefined,
+    };
+    wv.webviewReady = true;
+    wv.modelRetryIntervalMs = 10;
+    wv.modelRetryCount = 0;
+    wv.cachedModels = [];
+    try {
+      await run(() => count);
+    } finally {
+      SchedulerWebview.dispose();
+      Object.defineProperty(CopilotExecutor, "getAvailableModelsWithSource", descriptor);
+      wv.refreshPromptTemplates = templates;
+      wv.panel = original.panel;
+      wv.modelRetryIntervalMs = original.interval;
+      wv.webviewReady = original.ready;
+      wv.cachedModels = original.models;
+      wv.modelRetryCount = 0;
+    }
+  }
+
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  test("keeps asking while the list is the fallback and stops once it is available", async () => {
+    await withCatalog(["fallback", "fallback", "api"], async (calls) => {
+      await wv.refreshAgentsAndModels(true);
+      await wait(300);
+      assert.strictEqual(calls(), 3);
+      assert.strictEqual(wv.modelRetryTimer, undefined);
+      assert.strictEqual(wv.modelRetryCount, 0);
+      assert.ok((wv.cachedModels as ModelInfo[]).some((model) => model.id === "m1"));
+    });
+  });
+
+  test("gives up after five retries and a manual reload starts over", async () => {
+    await withCatalog(["fallback"], async (calls) => {
+      await wv.refreshAgentsAndModels(true);
+      await wait(400);
+      assert.strictEqual(calls(), 6, "one request plus five retries");
+      assert.strictEqual(wv.modelRetryTimer, undefined);
+      await wv.refreshAgentsAndModels(true);
+      await wait(400);
+      assert.strictEqual(calls(), 12, "reloading restarts the five retries");
+    });
+  });
+
+  test("closing the panel stops the retries", async () => {
+    await withCatalog(["fallback"], async (calls) => {
+      await wv.refreshAgentsAndModels(true);
+      wv.panel = undefined;
+      await wait(150);
+      assert.strictEqual(calls(), 1);
+    });
+    await withCatalog(["fallback"], async (calls) => {
+      await wv.refreshAgentsAndModels(true);
+      SchedulerWebview.dispose();
+      await wait(150);
+      assert.strictEqual(calls(), 1);
+      assert.strictEqual(wv.modelRetryTimer, undefined);
+    });
+  });
+
+  test("a closed panel is not scheduled to retry at all", async () => {
+    await withCatalog(["fallback"], async (calls) => {
+      wv.panel = undefined;
+      await wv.refreshAgentsAndModels(true);
+      await wait(100);
+      assert.strictEqual(calls(), 1);
+      assert.strictEqual(wv.modelRetryTimer, undefined);
+    });
+  });
+});
+
 suite("SchedulerWebview Message Queue Tests", () => {
   test("Queues messages until ready and flushes (dedup by type)", () => {
     const wv = SchedulerWebview as unknown as {

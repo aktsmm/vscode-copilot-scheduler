@@ -90,6 +90,12 @@ export class SchedulerWebview {
   private static cachedModels: ModelInfo[] = [];
   private static chatFallbackModels: Pick<ModelInfo, "id" | "vendor" | "name">[] = [];
   private static modelRefreshGeneration = 0;
+  /** While the model list is the fallback, retry at this interval, up to MODEL_RETRY_MAX times. */
+  private static modelRetryIntervalMs = 30_000;
+  private static readonly MODEL_RETRY_MAX = 5;
+  private static modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private static modelRetryCount = 0;
+  private static modelRetryAttempt = false;
   private static webviewGeneration = 0;
   private static cachedPromptTemplates: PromptTemplate[] = [];
   private static cachedSkills: SkillTemplate[] = [];
@@ -319,11 +325,50 @@ export class SchedulerWebview {
    * Dispose the webview panel (e.g., on extension deactivation)
    */
   static dispose(): void {
+    this.cancelModelRetry();
     if (this.panel) {
       this.panel.dispose();
       // onDidDispose handler will reset panel & readyState
     }
     this.promptPreviews.clear();
+  }
+
+  private static cancelModelRetry(): void {
+    if (this.modelRetryTimer) {
+      clearTimeout(this.modelRetryTimer);
+      this.modelRetryTimer = undefined;
+    }
+  }
+
+  /**
+   * The model list can be empty right after startup, before Copilot Chat has
+   * registered its models. While the panel is open and the list is still the
+   * fallback, ask again a few times instead of waiting for a manual reload.
+   */
+  private static updateModelRetry(source: "api" | "fallback"): void {
+    if (source === "api") {
+      this.cancelModelRetry();
+      this.modelRetryCount = 0;
+      return;
+    }
+    if (
+      !this.panel ||
+      this.modelRetryTimer ||
+      this.modelRetryCount >= this.MODEL_RETRY_MAX
+    ) {
+      return;
+    }
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = undefined;
+      if (!this.panel) return;
+      this.modelRetryCount++;
+      this.modelRetryAttempt = true;
+      void this.refreshCachesAndNotifyPanel(true)
+        .catch(() => undefined)
+        .finally(() => {
+          this.modelRetryAttempt = false;
+        });
+    }, this.modelRetryIntervalMs);
   }
 
   private static prunePromptPreviews(tasks: readonly ScheduledTask[]): void {
@@ -526,6 +571,7 @@ export class SchedulerWebview {
       // Handle panel disposal
       this.panel.onDidDispose(() => {
         displaySettingsWatcher.dispose();
+        this.cancelModelRetry();
         this.panel = undefined;
         this.resetWebviewReadyState();
       });
@@ -1062,6 +1108,9 @@ export class SchedulerWebview {
     ) {
       return;
     }
+    if (force && !this.modelRetryAttempt) {
+      this.modelRetryCount = 0;
+    }
 
     try {
       // When the user (or a file watcher) forces a refresh, bypass the
@@ -1092,6 +1141,7 @@ export class SchedulerWebview {
       } else {
         this.cachedModels = this.localizeCachedModels(result.models);
       }
+      this.updateModelRetry(result.source);
     } catch {
       if (generation !== this.modelRefreshGeneration) return;
       this.chatFallbackModels = [];
@@ -1102,6 +1152,7 @@ export class SchedulerWebview {
             configurationOptions: [],
           }))
         : CopilotExecutor.getFallbackModels();
+      this.updateModelRetry("fallback");
     }
 
     // Ensure we always have at least fallback data
