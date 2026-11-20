@@ -5,6 +5,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { CopilotExecutor, __testOnly } from "../../copilotExecutor";
 import * as agentHostClient from "../../agentHostClient";
+import * as copilotCliRunner from "../../copilotCliRunner";
 import { withAgentHostDispatchJournal } from "../../agentHostDispatchJournal";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
@@ -2704,6 +2705,91 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
         Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
         releaseStorage();
+      }
+    });
+
+    test("the Copilot CLI timeout is off by default and follows the settings", async () => {
+      const getConfig = vscode.workspace.getConfiguration;
+      const runProcess = Object.getOwnPropertyDescriptor(copilotCliRunner, "runCopilotCliProcess")!;
+      let values: Record<string, unknown> = {};
+      let honored: string[] = [];
+      let timedOut = false;
+      const requests: copilotCliRunner.CopilotCliProcessOptions[] = [];
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: ((section?: string) => {
+          const config = getConfig.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "cliPath") return process.execPath as T;
+              if (Object.hasOwn(values, key)) return values[key] as T;
+              return config.get<T>(key, defaultValue as T);
+            },
+            inspect: (key: string) =>
+              honored.includes(key) ? { key, globalValue: values[key] } : { key },
+          } as unknown as vscode.WorkspaceConfiguration;
+        }) as typeof vscode.workspace.getConfiguration,
+      });
+      Object.defineProperty(copilotCliRunner, "runCopilotCliProcess", {
+        configurable: true,
+        value: async (options: copilotCliRunner.CopilotCliProcessOptions) => {
+          requests.push(options);
+          return {
+            exitCode: timedOut ? null : 0,
+            timedOut,
+            cancelled: false,
+            stderrTail: "",
+            summary: {},
+          };
+        },
+      });
+      try {
+        const internals = new CopilotExecutor() as unknown as {
+          runCopilotCli(prompt: string, options: ExecuteOptions): Promise<unknown>;
+        };
+        const timeoutFor = async (
+          nextValues: Record<string, unknown>,
+          nextHonored: string[],
+        ): Promise<number | undefined> => {
+          values = nextValues;
+          honored = nextHonored;
+          requests.length = 0;
+          await internals.runCopilotCli("synthetic", { useCopilotCli: true, model: "test" });
+          assert.strictEqual(requests.length, 1);
+          return requests[0].timeoutMs;
+        };
+        // No settings: the CLI is left to finish on its own.
+        assert.strictEqual(await timeoutFor({}, []), undefined);
+        assert.strictEqual(
+          await timeoutFor({ cliTimeoutEnabled: true }, ["cliTimeoutEnabled"]),
+          180 * 60 * 1000,
+        );
+        assert.strictEqual(
+          await timeoutFor({ cliTimeoutMinutes: 45 }, ["cliTimeoutMinutes"]),
+          45 * 60 * 1000,
+        );
+        // The Agent Host switch does not turn the CLI timeout on.
+        assert.strictEqual(
+          await timeoutFor({ agentHostTimeoutEnabled: true }, ["agentHostTimeoutEnabled"]),
+          undefined,
+        );
+        // The stop message names the configured minutes.
+        timedOut = true;
+        values = { cliTimeoutEnabled: true, cliTimeoutMinutes: 30 };
+        honored = ["cliTimeoutEnabled", "cliTimeoutMinutes"];
+        await assert.rejects(
+          internals.runCopilotCli("synthetic", { useCopilotCli: true, model: "test" }),
+          (error: unknown) =>
+            error instanceof Error && error.message === messages.copilotCliTimedOut(30),
+        );
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          configurable: true,
+          value: getConfig,
+        });
+        Object.defineProperty(copilotCliRunner, "runCopilotCliProcess", runProcess);
       }
     });
 
