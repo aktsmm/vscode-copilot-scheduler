@@ -684,6 +684,16 @@ export const messages = {
       "Run with the Copilot CLI (applies the selected model)",
       "Copilot CLI で実行する（選択したモデルを反映）",
     ),
+  labelTaskTimeout: () => t("Timeout", "タイムアウト"),
+  taskTimeoutInherit: () => t("Follow the settings", "設定に従う"),
+  taskTimeoutOff: () => t("Off (never stop)", "オフ（停止しない）"),
+  taskTimeoutOn: () => t("On (set minutes)", "オン（分数を指定）"),
+  labelTaskTimeoutMinutes: () => t("Minutes (1-720)", "分数（1〜720）"),
+  webviewTaskTimeoutNote: () =>
+    t(
+      "Applies to Agent Host and Copilot CLI runs of this task. \"Follow the settings\" uses copilotScheduler.agentHostTimeoutEnabled / cliTimeoutEnabled (off by default). Leave the minutes empty to use the configured minutes (default 180).",
+      "このタスクの Agent Host と Copilot CLI の実行に適用します。「設定に従う」は copilotScheduler.agentHostTimeoutEnabled / cliTimeoutEnabled（既定はオフ）に従います。分数を空にすると設定の分数（既定 180）を使います。",
+    ),
   webviewUseCopilotCliNote: () =>
     t(
       "Runs selected Copilot models in a background process; without a model the normal route is used. No chat output, attachments, custom agent, or detailed model options. Scheduler expands skills; tools require copilotScheduler.cliAllowAllTools. One-time tasks require Agent Host.",
@@ -750,13 +760,19 @@ export const messages = {
   agentHostTimedOut: (
     stage: "beforeDispatch" | "run",
     minutes: number | undefined,
+    viaTask = false,
   ) =>
     stage === "beforeDispatch"
       ? t(
           "The message was not sent to the Agent Host in time, so the run was abandoned.",
           "メッセージが時間内に Agent Host へ送られなかったため、実行を中止しました。",
         )
-      : t(
+      : viaTask
+        ? t(
+            `The run was cancelled after ${minutes ?? "?"} minutes (the task's timeout). Edit the task and set its timeout to Off to never cancel it.`,
+            `実行は ${minutes ?? "?"} 分でキャンセルしました（タスクのタイムアウト）。キャンセルしない場合は、タスクを編集してタイムアウトをオフにしてください。`,
+          )
+        : t(
           `The run was cancelled after ${minutes ?? "?"} minutes (copilotScheduler.agentHostTimeoutMinutes). Turn off copilotScheduler.agentHostTimeoutEnabled to never cancel a run.`,
           `実行は ${minutes ?? "?"} 分でキャンセルしました（copilotScheduler.agentHostTimeoutMinutes）。キャンセルしない場合は copilotScheduler.agentHostTimeoutEnabled をオフにしてください。`,
         ),
@@ -863,10 +879,20 @@ export const messages = {
       "The Copilot CLI run was stopped because VS Code was closing or the extension was unloaded.",
       "VS Code の終了または拡張の停止により、Copilot CLI の実行を中断しました。",
     ),
-  copilotCliTimedOut: (minutes: number) =>
+  copilotCliTimedOut: (minutes: number, viaTask = false) =>
+    viaTask
+      ? t(
+          `The Copilot CLI run was stopped after ${minutes} minutes (the task's timeout). Edit the task and set its timeout to Off to never stop it.`,
+          `Copilot CLI の実行は ${minutes} 分で停止しました（タスクのタイムアウト）。停止しない場合は、タスクを編集してタイムアウトをオフにしてください。`,
+        )
+      : t(
+          `The Copilot CLI run was stopped after ${minutes} minutes (copilotScheduler.cliTimeoutMinutes).`,
+          `Copilot CLI の実行は ${minutes} 分で停止しました（copilotScheduler.cliTimeoutMinutes）。`,
+        ),
+  taskTimeoutInvalid: () =>
     t(
-      `The Copilot CLI run was stopped after ${minutes} minutes (copilotScheduler.cliTimeoutMinutes).`,
-      `Copilot CLI の実行は ${minutes} 分で停止しました（copilotScheduler.cliTimeoutMinutes）。`,
+      "The task timeout must be inherit, off, or on with whole minutes from 1 to 720.",
+      "タスクのタイムアウトは、継承・オフ・1〜720 の整数分のオンのいずれかで指定してください。",
     ),
   skillUnavailable: (name: string, reason: "notTrusted" | "missing" | "ambiguous") =>
     reason === "notTrusted"

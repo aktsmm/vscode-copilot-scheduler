@@ -47,6 +47,7 @@ import {
 } from "./promptResolver";
 import { getPreferredWorkspaceRootPath } from "./workspaceRoots";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
+import { effectiveTaskTimeout } from "./agentHostTimeout";
 import { isExperimentalModelQualityEnabled } from "./modelQualityExperiment";
 import { migrateLegacyModelConfiguration } from "./model-configuration";
 import {
@@ -810,6 +811,9 @@ export class SchedulerWebview {
               ? { preventAgentHostFallback: true }
               : {}),
             ...(message.useCopilotCli === true ? { useCopilotCli: true } : {}),
+            ...(effectiveTaskTimeout(message.timeout)
+              ? { timeout: effectiveTaskTimeout(message.timeout) }
+              : {}),
           });
         }
         break;
@@ -1914,6 +1918,12 @@ export class SchedulerWebview {
       webviewPreventAgentHostFallbackNote:
         messages.webviewPreventAgentHostFallbackNote(),
       labelUseCopilotCli: messages.labelUseCopilotCli(),
+      labelTaskTimeout: messages.labelTaskTimeout(),
+      taskTimeoutInherit: messages.taskTimeoutInherit(),
+      taskTimeoutOff: messages.taskTimeoutOff(),
+      taskTimeoutOn: messages.taskTimeoutOn(),
+      labelTaskTimeoutMinutes: messages.labelTaskTimeoutMinutes(),
+      webviewTaskTimeoutNote: messages.webviewTaskTimeoutNote(),
       webviewUseCopilotCliNote: messages.webviewUseCopilotCliNote(),
       webviewCopilotCliConfigured: messages.webviewCopilotCliConfigured(),
       labelChatSession: messages.labelChatSession(),
@@ -3256,6 +3266,22 @@ export class SchedulerWebview {
                 <label for="use-copilot-cli">${escapeHtml(strings.labelUseCopilotCli)}</label>
               </div>
               <p class="note" id="use-copilot-cli-note">${escapeHtml(strings.webviewUseCopilotCliNote)}</p>
+            </div>
+
+            <div class="form-group col-6">
+              <label for="task-timeout-mode">${escapeHtml(strings.labelTaskTimeout)}</label>
+              <select id="task-timeout-mode" aria-describedby="task-timeout-note">
+                <option value="inherit">${escapeHtml(strings.taskTimeoutInherit)}</option>
+                <option value="off">${escapeHtml(strings.taskTimeoutOff)}</option>
+                <option value="on">${escapeHtml(strings.taskTimeoutOn)}</option>
+              </select>
+            </div>
+            <div class="form-group col-6" id="task-timeout-minutes-group" hidden>
+              <label for="task-timeout-minutes">${escapeHtml(strings.labelTaskTimeoutMinutes)}</label>
+              <input type="number" id="task-timeout-minutes" min="1" max="720" step="1" placeholder="180" aria-describedby="task-timeout-note">
+            </div>
+            <div class="form-group col-12">
+              <p class="note" id="task-timeout-note">${escapeHtml(strings.webviewTaskTimeoutNote)}</p>
             </div>
 
             <div class="form-group col-6">

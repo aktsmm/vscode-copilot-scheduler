@@ -1169,7 +1169,7 @@ export class CopilotExecutor {
           reason: "modelAbsent" as const,
         },
       } : {};
-    const agentHostTimeout = resolveAgentHostTimeout(config);
+    const agentHostTimeout = resolveAgentHostTimeout(config, options?.timeout);
     const autoApprove =
       config.get<boolean>("agentHostAutoApprove", true) !== false;
     // The approval policy is fixed when a session is created, so sessions with a
@@ -1625,6 +1625,7 @@ export class CopilotExecutor {
               agentHostTimeout.runMs === undefined
                 ? undefined
                 : Math.round(agentHostTimeout.runMs / 60000),
+              agentHostTimeout.viaTask,
             )
           : error instanceof Error
             ? error.message
@@ -1898,7 +1899,7 @@ export class CopilotExecutor {
       }
     }
 
-    const cliTimeout = resolveCliTimeout(config);
+    const cliTimeout = resolveCliTimeout(config, options.timeout);
     logDebug(
       `[CopilotScheduler] Running with the Copilot CLI: model=${model}, reasoningEffort=${options.modelReasoningEffort || "default"}, trustFolder=${trustFolder}, prompt length: ${cliPrompt.length}`,
     );
@@ -1924,7 +1925,7 @@ export class CopilotExecutor {
     }
     if (result.timedOut) {
       throw createPromptBlockedError(
-        messages.copilotCliTimedOut(cliTimeout.minutes),
+        messages.copilotCliTimedOut(cliTimeout.minutes, cliTimeout.viaTask),
         "copilotCliFailed",
       );
     }

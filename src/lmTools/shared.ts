@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { messages } from "../i18n";
+import { parseTaskTimeout } from "../agentHostTimeout";
 
 import type {
   MutationDeleteResult,
@@ -113,6 +114,34 @@ export function describeOverlappingRunsForConfirmation(value: unknown): string {
         ? messages.allowOverlappingRunsConfirmationDisabled()
         : messages.allowOverlappingRunsConfirmationInvalid();
   return `- ${escapeConfirmationText(description)}`;
+}
+
+export function describeTaskTimeoutForConfirmation(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseTaskTimeout(value);
+  if (!parsed.ok) return `- timeout: ${escapeConfirmationText("(invalid)")}`;
+  const timeout = parsed.value;
+  const text = !timeout
+    ? "inherit the settings"
+    : timeout.mode === "off"
+      ? "off (never stop)"
+      : timeout.minutes !== undefined
+        ? `on, ${timeout.minutes} minutes`
+        : "on, configured minutes";
+  return `- timeout: ${escapeConfirmationText(text)}`;
+}
+
+export function validateTaskTimeoutField(
+  value: unknown,
+): vscode.LanguageModelToolResult | undefined {
+  if (value !== undefined && !parseTaskTimeout(value).ok) {
+    return buildJsonTextResult({
+      ok: false,
+      reason: "validation",
+      message: messages.taskTimeoutInvalid(),
+    });
+  }
+  return undefined;
 }
 
 export function validateOverlappingRuns(

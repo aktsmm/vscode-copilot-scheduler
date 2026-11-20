@@ -12,6 +12,7 @@ import {
   describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
   describeOverlappingRunsForConfirmation,
+  describeTaskTimeoutForConfirmation,
   escapeConfirmationText,
   formatConfirmationCode,
   formatMutationFailure,
@@ -19,6 +20,7 @@ import {
   toTaskSummary,
   validateAgentHostToolFields,
   validateOverlappingRuns,
+  validateTaskTimeoutField,
 } from "../shared";
 
 interface CreateTaskToolInput {
@@ -43,6 +45,7 @@ interface CreateTaskToolInput {
   autoMode?: boolean;
   modelFallback?: boolean;
   preventAgentHostFallback?: boolean;
+  timeout?: CreateTaskInput["timeout"];
   jitterSeconds?: number;
   maxExecutionsPerDay?: number;
   allowOverlappingRuns?: boolean;
@@ -79,6 +82,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
     autoMode: input.autoMode,
     modelFallback: input.modelFallback,
     preventAgentHostFallback: input.preventAgentHostFallback,
+    timeout: input.timeout,
     jitterSeconds: input.jitterSeconds,
     maxExecutionsPerDay: input.maxExecutionsPerDay,
     allowOverlappingRuns: input.allowOverlappingRuns,
@@ -118,6 +122,7 @@ export function createSchedulerCreateTaskTool(
         ...describeAgentHostFieldsForConfirmation(input, true),
         describeAttachmentsForConfirmation(input.attachments),
         describeOverlappingRunsForConfirmation(input.allowOverlappingRuns),
+        describeTaskTimeoutForConfirmation(input.timeout),
         input.targetChatId
           ? `- existing chat: ${formatConfirmationCode(String(input.targetChatId).slice(0, 12))}… (prompts are queued into that chat)`
           : undefined,
@@ -169,6 +174,10 @@ export function createSchedulerCreateTaskTool(
       const overlapError = validateOverlappingRuns(input.allowOverlappingRuns);
       if (overlapError) {
         return overlapError;
+      }
+      const timeoutError = validateTaskTimeoutField(input.timeout);
+      if (timeoutError) {
+        return timeoutError;
       }
       const result = await client.createTask(toCreateInput(input));
       if (!result.ok) {

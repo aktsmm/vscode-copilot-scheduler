@@ -355,6 +355,62 @@ suite("lmTools write wrappers", () => {
     }
   });
 
+  test("task timeouts pass through create and update, show in confirmation, and invalid values never reach mutations", async () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
+    );
+    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
+      const tool = manifest.contributes.languageModelTools.find(
+        (item: { name: string }) => item.name === name,
+      );
+      const properties =
+        name === "scheduler_update_task"
+          ? tool.inputSchema.properties.updates.properties
+          : tool.inputSchema.properties;
+      assert.strictEqual(properties.timeout.type, "object");
+      assert.deepStrictEqual(properties.timeout.properties.mode.enum, ["inherit", "off", "on"]);
+      assert.deepStrictEqual(properties.timeout.required, ["mode"]);
+    }
+    const client = new FakeClient();
+    const timeout = { mode: "on", minutes: 45 } as const;
+    const createInput = {
+      name: "Timeout",
+      cronExpression: "0 9 * * *",
+      prompt: "Review",
+      scope: "global",
+      timeout,
+    };
+    const updateInput = { id: "task-1", updates: { timeout } };
+    for (const prepared of [
+      await withConfirmationMode("always", () =>
+        prepare(createSchedulerCreateTaskTool(client), createInput),
+      ),
+      await withConfirmationMode("always", () =>
+        prepare(createSchedulerUpdateTaskTool(client), updateInput),
+      ),
+    ]) {
+      assert.ok(confirmationMessageText(prepared).includes(escapeConfirmationText("on, 45 minutes")));
+    }
+    assert.strictEqual(parseJson(await invoke(createSchedulerCreateTaskTool(client), createInput)).ok, true);
+    assert.deepStrictEqual(client.createInput?.timeout, timeout);
+    assert.strictEqual(parseJson(await invoke(createSchedulerUpdateTaskTool(client), updateInput)).ok, true);
+    assert.deepStrictEqual(client.updateArgs?.updates.timeout, timeout);
+
+    const rejected = new FakeClient();
+    for (const bad of [{ mode: "on", minutes: 0 }, { mode: "later" }, "off"]) {
+      const created = parseJson(
+        await invoke(createSchedulerCreateTaskTool(rejected), { ...createInput, timeout: bad as never }),
+      );
+      const updated = parseJson(
+        await invoke(createSchedulerUpdateTaskTool(rejected), { id: "task-1", updates: { timeout: bad as never } }),
+      );
+      assert.strictEqual(created.reason, "validation");
+      assert.strictEqual(updated.reason, "validation");
+    }
+    assert.strictEqual(rejected.createInput, undefined);
+    assert.strictEqual(rejected.updateArgs, undefined);
+  });
+
   test("invalid overlapping-run values cannot reach task mutations", async () => {
     const client = new FakeClient();
     const created = parseJson(
