@@ -310,9 +310,15 @@
           "scope": "machine",
           "markdownDescription": "%config.cliAllowAllTools%"
         },
+        "copilotScheduler.cliTimeoutEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "%config.cliTimeoutEnabled%"
+        },
         "copilotScheduler.cliTimeoutMinutes": {
           "type": "number",
-          "default": 60,
+          "default": 180,
           "minimum": 1,
           "maximum": 720,
           "scope": "machine",

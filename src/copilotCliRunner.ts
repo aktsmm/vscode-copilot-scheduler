@@ -200,7 +200,8 @@ export interface CopilotCliProcessOptions {
   args: string[];
   cwd?: string;
   prompt: string;
-  timeoutMs: number;
+  /** Stop the run after this long; omit to wait until the process exits. */
+  timeoutMs?: number;
 }
 
 export interface CopilotCliProcessResult {
@@ -264,11 +265,12 @@ export function runCopilotCliProcess(
     let stderrTail = "";
     let timedOut = false;
     let settled = false;
+    let timer: NodeJS.Timeout | undefined;
 
     const finish = (exitCode: number | null, spawnError?: string): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       activeChildren.delete(child);
       resolve({
         exitCode,
@@ -301,10 +303,13 @@ export function runCopilotCliProcess(
     }
     activeChildren.add(child);
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killProcessTree(child);
-    }, options.timeoutMs);
+    // setTimeout(fn, undefined) fires almost at once, so no timer without a limit.
+    if (options.timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        killProcessTree(child);
+      }, options.timeoutMs);
+    }
 
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => parser.push(chunk));

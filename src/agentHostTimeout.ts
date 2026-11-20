@@ -3,7 +3,8 @@
  *
  * The timeout cancels a running turn, so it is off by default: agent tasks can
  * legitimately run for hours. A user who set the minutes before the on/off
- * option existed keeps the timeout they chose.
+ * option existed keeps the timeout they chose. The Copilot CLI timeout follows
+ * the same rule.
  */
 import type * as vscode from "vscode";
 
@@ -28,14 +29,18 @@ function hasHonoredValue(config: TimeoutConfig, key: string): boolean {
   return config.inspect<unknown>(key)?.globalValue !== undefined;
 }
 
-export function resolveAgentHostTimeout(config: TimeoutConfig): AgentHostTimeout {
+interface OptInTimeout {
+  enabled: boolean;
+  minutes: number;
+}
+
+function resolveOptInTimeout(
+  config: TimeoutConfig,
+  enabledKey: string,
+  minutesKey: string,
+): OptInTimeout {
   const configured = Math.floor(
-    Number(
-      config.get<number>(
-        "agentHostTimeoutMinutes",
-        DEFAULT_AGENT_HOST_TIMEOUT_MINUTES,
-      ),
-    ),
+    Number(config.get<number>(minutesKey, DEFAULT_AGENT_HOST_TIMEOUT_MINUTES)),
   );
   const minutes = Math.min(
     Math.max(
@@ -46,10 +51,36 @@ export function resolveAgentHostTimeout(config: TimeoutConfig): AgentHostTimeout
     ),
     MAX_AGENT_HOST_TIMEOUT_MINUTES,
   );
-  const enabled = hasHonoredValue(config, "agentHostTimeoutEnabled")
-    ? config.get<boolean>("agentHostTimeoutEnabled", false) === true
-    : hasHonoredValue(config, "agentHostTimeoutMinutes");
+  const enabled = hasHonoredValue(config, enabledKey)
+    ? config.get<boolean>(enabledKey, false) === true
+    : hasHonoredValue(config, minutesKey);
+  return { enabled, minutes };
+}
+
+export function resolveAgentHostTimeout(config: TimeoutConfig): AgentHostTimeout {
+  const { enabled, minutes } = resolveOptInTimeout(
+    config,
+    "agentHostTimeoutEnabled",
+    "agentHostTimeoutMinutes",
+  );
   return enabled
     ? { runMs: minutes * 60 * 1000, observationMs: minutes * 60 * 1000 }
     : { runMs: undefined, observationMs: AGENT_HOST_OBSERVATION_CAP_MS };
+}
+
+export interface CliTimeout {
+  /** Stop the CLI run after this long; undefined lets it run until it exits. */
+  runMs: number | undefined;
+  /** The configured minutes, for the "stopped after N minutes" message. */
+  minutes: number;
+}
+
+/** Same opt-in rule as the Agent Host timeout, for `cliTimeoutEnabled` / `cliTimeoutMinutes`. */
+export function resolveCliTimeout(config: TimeoutConfig): CliTimeout {
+  const { enabled, minutes } = resolveOptInTimeout(
+    config,
+    "cliTimeoutEnabled",
+    "cliTimeoutMinutes",
+  );
+  return { runMs: enabled ? minutes * 60 * 1000 : undefined, minutes };
 }

@@ -216,8 +216,8 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - 実行はタスクのワークスペースフォルダーで行います（グローバルのタスクは最初のローカルワークスペースフォルダー）。応答はチャットに表示せず、保存もしません。実行履歴には、指定したモデル、CLI が応答で報告したモデル、使ったプレミアムリクエストを記録します。
 - 未対応（メッセージを出して停止）: 添付ファイル、モデルの詳細オプション、カスタムエージェント。モデルが reasoning effort を受け付けないときは、CLI 自身のエラーで失敗します。
 - **ツール**: バックグラウンド実行は承認を求められないため、`copilotScheduler.cliAllowAllTools` がオンでない限りツールは拒否されます。無人のタスクがタスクのフォルダーでコマンドを実行しファイルを変更できることを許容する場合だけオンにしてください。Chat（`scheduler_create_task`）からこのオプションは設定できません。
-- **長時間の実行**: スケジュール実行の CLI は、ほかのタスクを止めません。終了までは日次実行枠を予約し、日次上限は引き続き適用されます。手動実行（実行ボタンや `scheduler_run_task`）は、`cliTimeoutMinutes` を上限に CLI の終了を待ちます。VS Code を閉じると、実行中の CLI も停止します。
-- 設定は `copilotScheduler.cliPath`（既定: PATH 上の `copilot`。Windows は `copilot.exe` が必要）と `copilotScheduler.cliTimeoutMinutes`（既定 60）です。3 つともユーザー／リモートの設定だけが有効で、ワークスペースからは変更できません。
+- **長時間の実行**: スケジュール実行の CLI は、ほかのタスクを止めません。終了までは日次実行枠を予約し、日次上限は引き続き適用されます。手動実行（実行ボタンや `scheduler_run_task`）は CLI の終了まで待ち、`copilotScheduler.cliTimeoutEnabled` がオンのときだけ `cliTimeoutMinutes` で打ち切ります。VS Code を閉じると、実行中の CLI も停止します。
+- 設定は `copilotScheduler.cliPath`（既定: PATH 上の `copilot`。Windows は `copilot.exe` が必要）、`copilotScheduler.cliTimeoutEnabled`（既定オフ）、`copilotScheduler.cliTimeoutMinutes`（既定 180。タイムアウトがオンのときだけ使用）です。いずれもユーザー／リモートの設定だけが有効で、ワークスペースからは変更できません。
 
 #### モデル指定とセッションの種類
 
@@ -307,7 +307,8 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.showCopilotCliControls`     | `false`           | タスクフォームに Copilot CLI の操作欄を表示します。保存済みのタスク設定は変えません。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |
-| `copilotScheduler.cliTimeoutMinutes`          | `60`              | CLI 実行のタスクを停止するまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.cliTimeoutEnabled`          | `false`           | 次の分数を超えた CLI 実行のタスクを停止します。既定はオフで、長い実行は停止されません。この設定ができる前に分数を設定していて、この設定を指定していない場合は、タイムアウトが有効のままです。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.cliTimeoutMinutes`          | `180`             | 上の設定がオンのとき、CLI 実行のタスクを停止するまでの分数（1〜720）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.commandDelayFactor`         | `0.8`             | Copilotコマンド実行時の待機時間倍率 (0.1〜2.0)。小さいほど高速ですが、環境によっては安定性が低下する場合があります。                                                                                                                                                     |
 | `copilotScheduler.showNotifications`          | `true`            | タスク実行時に通知を表示                                                                                                                                                                                                                                                 |
 | `copilotScheduler.notificationMode`           | `sound`           | 通知モード (sound/silentToast/silentStatus)                                                                                                                                                                                                                              |
