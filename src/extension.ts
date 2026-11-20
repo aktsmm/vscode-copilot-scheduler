@@ -66,6 +66,7 @@ import {
 import { registerLmTools } from "./lmTools/registry";
 import { registerConfiguredModelProvider } from "./configured-model-provider";
 import { DEFAULT_MODEL_FALLBACK_POLICY, normalizeModelFallbackPolicy } from "./modelFallback";
+import { isOverlapAllowed } from "./overlapPolicy";
 import { withTaskStoreLock } from "./task-store-lock";
 import { writeFileAtomically } from "./atomic-file-write";
 import {
@@ -1512,6 +1513,19 @@ export function activate(context: vscode.ExtensionContext): void {
           : undefined,
       )
       .catch(() => logDebug("[CopilotScheduler] Could not record model fallback migration notice."));
+    const overlapMarker = path.join(context.globalStorageUri.fsPath, "overlap-default-v1-notified");
+    void scheduleManager
+      .whenOverlapMigrationSaved()
+      .then((saved) =>
+        saved
+          ? withTaskStoreLock(`${overlapMarker}.lock`, async () => {
+              if (fs.existsSync(overlapMarker)) return;
+              await writeFileAtomically(overlapMarker, "1");
+              void vscode.window.showInformationMessage(messages.overlapDefaultMigrated());
+            })
+          : undefined,
+      )
+      .catch(() => logDebug("[CopilotScheduler] Could not record overlap default notice."));
   }
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
@@ -1855,8 +1869,7 @@ async function executeTask(
           onAgentHostInputNeeded: createAgentHostInputHandler(),
           onAgentHostQueueBlocked: createAgentHostQueueBlockedHandler(),
           ...(trigger === "auto" &&
-          !task.runAt &&
-          task.allowOverlappingRuns === true &&
+          isOverlapAllowed(task) &&
           dueAt
             ? { queueOccurrenceId: dueAt }
             : {}),

@@ -66,6 +66,7 @@ import {
 } from "./promptExecutionErrors";
 import { normalizeSkillRef } from "./skillResolver";
 import { DEFAULT_MODEL_FALLBACK_POLICY, normalizeModelFallbackPolicy } from "./modelFallback";
+import { isOverlapAllowed } from "./overlapPolicy";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -388,7 +389,7 @@ interface TaskRunSkip {
   expectedAllowedTimeStart: string | undefined;
   expectedAllowedTimeEnd: string | undefined;
   expectedMaxExecutionsPerDay: number | undefined;
-  expectedAllowOverlappingRuns: boolean | undefined;
+  expectedAllowOverlappingRuns: boolean;
   expectedScope: TaskScope;
   expectedWorkspacePath: string | undefined;
   evaluatedAt: Date;
@@ -454,10 +455,17 @@ export class ScheduleManager {
 
   private migratedModelFallback = false;
   private modelFallbackMigrationSaved: Promise<boolean> | undefined;
+  private migratedOverlap = false;
+  private overlapMigrationSaved: Promise<boolean> | undefined;
 
   /** Resolves true only after the tasks migrated to model fallback policies were saved. */
   whenModelFallbackMigrationSaved(): Promise<boolean> {
     return this.modelFallbackMigrationSaved ?? Promise.resolve(false);
+  }
+
+  /** Resolves true only after recurring tasks that had no overlap setting were saved as allowed. */
+  whenOverlapMigrationSaved(): Promise<boolean> {
+    return this.overlapMigrationSaved ?? Promise.resolve(false);
   }
 
   constructor(context: vscode.ExtensionContext) {
@@ -1471,6 +1479,14 @@ export class ScheduleManager {
         needsSave = true;
       }
 
+      // Tasks saved before overlapping runs became the default carry no value.
+      // Store the new default explicitly so a later "off" stays distinguishable.
+      if (!task.runAt && task.allowOverlappingRuns === undefined) {
+        task.allowOverlappingRuns = true;
+        this.migratedOverlap = true;
+        needsSave = true;
+      }
+
       if (task.skillRef !== undefined) {
         const cleanSkillRef = normalizeSkillRef(task.skillRef);
         if (JSON.stringify(cleanSkillRef) !== JSON.stringify(task.skillRef)) {
@@ -1604,6 +1620,9 @@ export class ScheduleManager {
       );
       if (this.migratedModelFallback) {
         this.modelFallbackMigrationSaved = saved;
+      }
+      if (this.migratedOverlap) {
+        this.overlapMigrationSaved = saved;
       }
     } else {
       // Heal the other store if needed (best effort, do not bump revision)
@@ -2243,8 +2262,9 @@ export class ScheduleManager {
           ? this.clampJitterSeconds(input.jitterSeconds)
           : defaultJitter,
       maxExecutionsPerDay,
-      allowOverlappingRuns:
-        input.allowOverlappingRuns === true && !input.runAt ? true : undefined,
+      allowOverlappingRuns: input.runAt
+        ? undefined
+        : input.allowOverlappingRuns !== false,
       allowedTimeStart,
       allowedTimeEnd,
       nextRun,
@@ -2666,8 +2686,7 @@ export class ScheduleManager {
       );
     }
     if (updates.allowOverlappingRuns !== undefined) {
-      task.allowOverlappingRuns =
-        updates.allowOverlappingRuns === true ? true : undefined;
+      task.allowOverlappingRuns = updates.allowOverlappingRuns;
     }
     // The option only applies to recurring tasks; a one-time task must not
     // carry it back into a later recurring schedule.
@@ -3062,7 +3081,7 @@ export class ScheduleManager {
         expectedAllowedTimeStart: task.allowedTimeStart,
         expectedAllowedTimeEnd: task.allowedTimeEnd,
         expectedMaxExecutionsPerDay: task.maxExecutionsPerDay,
-        expectedAllowOverlappingRuns: task.allowOverlappingRuns,
+        expectedAllowOverlappingRuns: isOverlapAllowed(task),
         expectedScope: task.scope,
         expectedWorkspacePath: task.workspacePath,
         evaluatedAt: now,
@@ -3194,8 +3213,7 @@ export class ScheduleManager {
           continue;
         }
 
-        const allowOverlap =
-          !task.runAt && task.allowOverlappingRuns === true;
+        const allowOverlap = isOverlapAllowed(task);
         if (!this.tryStartTaskRun(task.id, allowOverlap)) {
           logDebug(
             `[CopilotScheduler] Task already running, skipping overlapping execution: ${task.name}`,
@@ -3450,7 +3468,7 @@ export class ScheduleManager {
     }
     if (claim.executionFingerprint !== undefined) {
       return (
-        task.allowOverlappingRuns === true &&
+        isOverlapAllowed(task) &&
         task.lastFiredDueAt instanceof Date &&
         task.lastFiredDueAt.getTime() >= claim.dueAt.getTime() &&
         taskExecutionFingerprint(task) === claim.executionFingerprint
@@ -3472,7 +3490,7 @@ export class ScheduleManager {
       task.allowedTimeStart === skip.expectedAllowedTimeStart &&
       task.allowedTimeEnd === skip.expectedAllowedTimeEnd &&
       task.maxExecutionsPerDay === skip.expectedMaxExecutionsPerDay &&
-      task.allowOverlappingRuns === skip.expectedAllowOverlappingRuns &&
+      isOverlapAllowed(task) === skip.expectedAllowOverlappingRuns &&
       task.scope === skip.expectedScope &&
       task.workspacePath === skip.expectedWorkspacePath
     );

@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Overlapping automatic runs of a recurring task are now allowed by default. A run that is still going no longer makes later occurrences skip, which matters now that timeouts are off by default. Recurring tasks saved without a setting are switched to allowed once (a notice appears after they are saved); there is no record of who had chosen "not allowed" before, so check tasks that must not overlap and turn the option off when editing. Manual runs, one-time tasks and runs in the same chat (which queue) keep their guards.
+
 ## [1.20.0] - 2026-11-20
 
 ### Changed

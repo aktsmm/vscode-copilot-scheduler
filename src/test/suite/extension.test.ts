@@ -2088,7 +2088,10 @@ suite("Per-occurrence execution isolation", () => {
       await __testOnly.executeTask(oneTime, "auto", undefined, deps),
       { retainOneTimeTask: true },
     );
-    for (const item of options) {
+    // An unset overlap setting means allowed, so only an explicit false and a
+    // one-time task must run without an occurrence ID.
+    assert.ok(Object.hasOwn(options[0], "queueOccurrenceId"));
+    for (const item of options.slice(1)) {
       assert.ok(!Object.hasOwn(item, "queueOccurrenceId"));
     }
     assert.strictEqual(history.at(-1)?.runAt, oneTime.runAt);
