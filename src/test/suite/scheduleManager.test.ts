@@ -3772,7 +3772,7 @@ suite("ScheduleManager RunNow Tests", () => {
 
   suite("Automatic executions", () => {
     suite("Overlapping occurrences", () => {
-      test("overlapping-run opt-in survives updates, duplication, and reload", async () => {
+      test("overlapping runs are allowed by default and an explicit off survives updates, duplication, and reload", async () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
         try {
           const manager = new ScheduleManager(createMockContext(tmp));
@@ -3782,19 +3782,20 @@ suite("ScheduleManager RunNow Tests", () => {
             cronExpression: "* * * * *",
             scope: "global",
           });
-          assert.strictEqual(task.allowOverlappingRuns, undefined);
-          await manager.updateTask(task.id, { allowOverlappingRuns: true });
+          assert.strictEqual(task.allowOverlappingRuns, true);
+          await manager.updateTask(task.id, { allowOverlappingRuns: false });
           await manager.updateTask(task.id, { name: "renamed-overlap-settings" });
           const copy = await manager.duplicateTask(task.id);
           assert.ok(copy);
-          assert.strictEqual(copy.allowOverlappingRuns, true);
+          assert.strictEqual(copy.allowOverlappingRuns, false);
 
           const reloaded = new ScheduleManager(createMockContext(tmp));
           await waitForStartupSave(reloaded);
+          assert.strictEqual(reloaded.getTask(task.id)?.allowOverlappingRuns, false);
+          assert.strictEqual(reloaded.getTask(copy.id)?.allowOverlappingRuns, false);
+          assert.strictEqual(await reloaded.whenOverlapMigrationSaved(), false);
+          await reloaded.updateTask(task.id, { allowOverlappingRuns: true });
           assert.strictEqual(reloaded.getTask(task.id)?.allowOverlappingRuns, true);
-          assert.strictEqual(reloaded.getTask(copy.id)?.allowOverlappingRuns, true);
-          await reloaded.updateTask(task.id, { allowOverlappingRuns: false });
-          assert.notStrictEqual(reloaded.getTask(task.id)?.allowOverlappingRuns, true);
           await assert.rejects(() =>
             reloaded.updateTask(task.id, {
               allowOverlappingRuns: "yes" as unknown as boolean,
@@ -3802,6 +3803,43 @@ suite("ScheduleManager RunNow Tests", () => {
           );
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      });
+
+      test("recurring tasks saved without an overlap setting migrate to allowed once and one-time tasks stay unset", async () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+        try {
+          const base = {
+            name: "legacy-overlap",
+            prompt: "hello",
+            cronExpression: "0 * * * *",
+            scope: "global",
+            promptSource: "inline",
+            enabled: false,
+          };
+          const manager = new ScheduleManager(createMockContextWithGlobalTasks(tmp, [
+            { ...base, id: "unset" },
+            { ...base, id: "on", allowOverlappingRuns: true },
+            { ...base, id: "off", allowOverlappingRuns: false },
+            { ...base, id: "once", cronExpression: "", runAt: new Date(Date.now() + 3_600_000).toISOString() },
+          ]));
+          await waitForStartupSave(manager);
+          assert.strictEqual(await manager.whenOverlapMigrationSaved(), true);
+          assert.strictEqual(manager.getTask("unset")?.allowOverlappingRuns, true);
+          assert.strictEqual(manager.getTask("on")?.allowOverlappingRuns, true);
+          assert.strictEqual(manager.getTask("off")?.allowOverlappingRuns, false);
+          assert.strictEqual(manager.getTask("once")?.allowOverlappingRuns, undefined);
+          const persisted = JSON.parse(fs.readFileSync(path.join(tmp, "scheduledTasks.json"), "utf8")) as
+            Array<{ id: string; allowOverlappingRuns?: boolean }>;
+          assert.strictEqual(persisted.find((item) => item.id === "unset")?.allowOverlappingRuns, true);
+          assert.strictEqual(persisted.find((item) => item.id === "off")?.allowOverlappingRuns, false);
+
+          const restored = new ScheduleManager(createMockContext(tmp));
+          await waitForStartupSave(restored);
+          assert.strictEqual(await restored.whenOverlapMigrationSaved(), false);
+          assert.strictEqual(restored.getTask("off")?.allowOverlappingRuns, false);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
         }
       });
 
@@ -3856,6 +3894,62 @@ suite("ScheduleManager RunNow Tests", () => {
           fs.rmSync(tmp, { recursive: true, force: true });
         }
       });
+
+      for (const allowOverlappingRuns of [undefined, false]) {
+        test(`a still-running automatic run ${allowOverlappingRuns === false ? "makes the next occurrence skip when overlap is off" : "does not stop the next occurrence by default"}`, async () => {
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+          const restore = overrideSchedulerConfig({
+            executionRoute: "agentHost",
+            maxDailyExecutions: 0,
+          });
+          let release!: () => void;
+          const hold = new Promise<void>((resolve) => { release = resolve; });
+          let manager: ScheduleManager | undefined;
+          try {
+            manager = new ScheduleManager(createMockContext(tmp));
+            const task = await manager.createTask({
+              name: "overlap-default",
+              prompt: "hello",
+              cronExpression: "* * * * *",
+              scope: "global",
+              ...(allowOverlappingRuns === false ? { allowOverlappingRuns } : {}),
+              jitterSeconds: 0,
+            });
+            assert.strictEqual(task.allowOverlappingRuns, allowOverlappingRuns === false ? false : true);
+            const internals = manager as unknown as {
+              saveTasks(): Promise<void>;
+              checkAndExecuteTasks(): Promise<void>;
+              onExecuteCallback(
+                task: ScheduledTask,
+                trigger: string,
+                guard?: (dispatch: () => void) => Promise<void>,
+              ): Promise<void>;
+            };
+            await internals.saveTasks();
+            let markStarted!: () => void;
+            const started = new Promise<void>((resolve) => { markStarted = resolve; });
+            let executions = 0;
+            internals.onExecuteCallback = async (_task, _trigger, guard) => {
+              executions++;
+              await guard?.(() => {});
+              markStarted();
+              await hold;
+            };
+            task.nextRun = truncateToMinute(new Date(Date.now() - 120_000));
+            await internals.checkAndExecuteTasks();
+            await waitForSignal(started);
+            task.nextRun = truncateToMinute(new Date(Date.now() - 60_000));
+            await internals.checkAndExecuteTasks();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            assert.strictEqual(executions, allowOverlappingRuns === false ? 1 : 2);
+          } finally {
+            release();
+            if (manager) await manager.waitForDetachedRuns();
+            restore();
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+        });
+      }
 
       test("overlap opt-in does not bypass an in-flight manual run", async () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));

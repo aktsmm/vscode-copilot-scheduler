@@ -704,8 +704,8 @@
             },
             "allowOverlappingRuns": {
               "type": "boolean",
-              "default": false,
-              "description": "Allow overlapping automatic occurrences of this recurring task. Default false. Manual runs and one-time tasks keep their existing guards; runs using the same chat may queue."
+              "default": true,
+              "description": "Allow overlapping automatic occurrences of this recurring task. Default true. Manual runs and one-time tasks keep their existing guards; runs using the same chat queue."
             },
             "allowedTimeStart": {
               "type": "string",
@@ -906,7 +906,7 @@
                 },
                 "allowOverlappingRuns": {
                   "type": "boolean",
-                  "description": "Allow overlapping automatic occurrences of this recurring task. Default false; omission preserves the saved value. Manual runs and one-time tasks keep their existing guards; runs using the same chat may queue."
+                  "description": "Allow overlapping automatic occurrences of this recurring task. Default true; omission preserves the saved value (a new task is created with true). Manual runs and one-time tasks keep their existing guards; runs using the same chat queue."
                 },
                 "allowedTimeStart": {
                   "type": "string",

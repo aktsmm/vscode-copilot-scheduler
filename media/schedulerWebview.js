@@ -1428,7 +1428,7 @@
       enabled: source.enabled !== false,
       runFirstInOneMinute: !!source.runFirstInOneMinute,
       autoMode: source.autoMode === true,
-      allowOverlappingRuns: source.allowOverlappingRuns === true,
+      allowOverlappingRuns: source.allowOverlappingRuns !== false,
       modelFallback: source.modelFallback === true,
       modelFallbackPolicy: source.modelFallback === true
         ? JSON.stringify(normalizeModelFallbackPolicy(source.modelFallbackPolicy))
@@ -2769,7 +2769,7 @@
           : getSavedTaskField("autoMode", editingTaskSnapshot ? false : defaultAutoMode) === true,
         allowOverlappingRuns: allowOverlappingRunsInput
           ? allowOverlappingRunsInput.checked
-          : getSavedTaskField("allowOverlappingRuns", false) === true,
+          : getSavedTaskField("allowOverlappingRuns", true) !== false,
         modelFallback: modelFallbackInput
           ? modelFallbackInput.checked
           : getSavedTaskField("modelFallback", false) === true,
@@ -4051,7 +4051,7 @@
     }
     setAllowedTimeWindowEnabled(false, false);
     if (autoModeInput) autoModeInput.checked = defaultAutoMode;
-    if (allowOverlappingRunsInput) allowOverlappingRunsInput.checked = false;
+    if (allowOverlappingRunsInput) allowOverlappingRunsInput.checked = true;
     if (preventAgentHostFallbackInput)
       preventAgentHostFallbackInput.checked = false;
     setAgentHostModelSelection("", null);
@@ -4662,7 +4662,7 @@
       autoModeInput.checked = task.autoMode === true;
     }
     if (allowOverlappingRunsInput) {
-      allowOverlappingRunsInput.checked = task.allowOverlappingRuns === true;
+      allowOverlappingRunsInput.checked = task.allowOverlappingRuns !== false;
     }
     if (preventAgentHostFallbackInput) {
       preventAgentHostFallbackInput.checked =

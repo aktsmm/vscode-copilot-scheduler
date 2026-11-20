@@ -235,7 +235,7 @@ export interface ScheduledTask {
   /** Per-task max executions per day (0 = unlimited). */
   maxExecutionsPerDay?: number;
 
-  /** Allow overlapping scheduled occurrences of this recurring task. */
+  /** Overlapping scheduled occurrences of this recurring task: unset = allowed, false = off. */
   allowOverlappingRuns?: boolean;
 
   /** Allowed execution start time in local clock (HH:mm). */
@@ -366,7 +366,7 @@ export interface CreateTaskInput {
   /** Per-task max executions per day (0 = unlimited). */
   maxExecutionsPerDay?: number;
 
-  /** Allow overlapping scheduled occurrences of this recurring task. */
+  /** Overlapping scheduled occurrences of this recurring task: omitted = allowed, false = off. */
   allowOverlappingRuns?: boolean;
 
   /** Allowed execution start time in local clock (HH:mm). */

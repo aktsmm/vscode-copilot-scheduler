@@ -2293,7 +2293,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       (tool) => tool.name === "scheduler_update_task",
     );
     assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.type, "boolean");
-    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.default, false);
+    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.default, true);
     const updates = update?.inputSchema.properties.updates.properties;
     assert.strictEqual(updates?.allowOverlappingRuns.type, "boolean");
     assert.ok(!Object.hasOwn(updates?.allowOverlappingRuns ?? {}, "default"));
@@ -2879,7 +2879,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         }
       } else {
         assert.strictEqual(posted[0].data.useCopilotCli, false);
-        assert.strictEqual(posted[0].data.allowOverlappingRuns, false);
+        assert.strictEqual(posted[0].data.allowOverlappingRuns, true);
       }
       assert.strictEqual(
         posted[0].data.agentHostWorkspaceMode,

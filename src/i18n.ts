@@ -549,13 +549,18 @@ export const messages = {
     ),
   allowOverlappingRunsConfirmationEnabled: () =>
     t(
-      "Overlapping automatic runs of this recurring task: allowed. Manual and one-time runs retain their guards.",
-      "この定期タスクの自動実行の重複: 許可。手動実行と 1 回限りの実行は従来のガードを維持します。",
+      "Overlapping automatic runs of this recurring task: allowed (default). Manual and one-time runs retain their guards.",
+      "この定期タスクの自動実行の重複: 許可（既定）。手動実行と 1 回限りの実行は従来のガードを維持します。",
     ),
   allowOverlappingRunsConfirmationDisabled: () =>
     t(
-      "Overlapping automatic runs of this recurring task: not allowed (default). Manual and one-time runs retain their guards.",
-      "この定期タスクの自動実行の重複: 禁止（既定）。手動実行と 1 回限りの実行は従来のガードを維持します。",
+      "Overlapping automatic runs of this recurring task: not allowed. Manual and one-time runs retain their guards.",
+      "この定期タスクの自動実行の重複: 禁止。手動実行と 1 回限りの実行は従来のガードを維持します。",
+    ),
+  overlapDefaultMigrated: () =>
+    t(
+      "Overlapping automatic runs are now allowed by default. Recurring tasks that had no setting now allow overlap, so a run that is still going no longer makes later occurrences skip. Turn it off per task when editing if two runs must not overlap.",
+      "自動実行の重複が既定で許可になりました。設定のなかった定期タスクも重複を許可するため、前回の実行が終わっていなくても次の回は実行されます。重複させたくないタスクは、編集画面でオフにしてください。",
     ),
   allowOverlappingRunsConfirmationInvalid: () =>
     t(
@@ -1156,8 +1161,8 @@ export const messages = {
     ),
   webviewAllowOverlappingRunsNote: () =>
     t(
-      "Recurring automatic runs may overlap and edit the same files. Manual and one-time guards remain. Runs in the same chat may queue.",
-      "定期自動実行が重複し、同じファイルを編集する場合があります。手動実行と 1 回限りの実行のガードは維持します。同じチャットの実行はキュー待ちになる場合があります。",
+      "Recurring automatic runs may overlap and edit the same files; turn this off if two runs must not run together. Manual and one-time guards remain. Runs in the same chat queue.",
+      "定期自動実行が重複し、同じファイルを編集する場合があります。同時に動かしたくない場合はオフにしてください。手動実行と 1 回限りの実行のガードは維持します。同じチャットの実行はキュー待ちになります。",
     ),
   labelAllowedTimeWindow: () => t("Allowed Time Window", "実行許可時間帯"),
   labelAllowedTimeWindowEnabled: () =>

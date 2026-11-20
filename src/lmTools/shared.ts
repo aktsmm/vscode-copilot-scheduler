@@ -107,9 +107,9 @@ export function formatConfirmationCode(value: string): string {
 
 export function describeOverlappingRunsForConfirmation(value: unknown): string {
   const description =
-    value === true
+    value === true || value === undefined
       ? messages.allowOverlappingRunsConfirmationEnabled()
-      : value === false || value === undefined
+      : value === false
         ? messages.allowOverlappingRunsConfirmationDisabled()
         : messages.allowOverlappingRunsConfirmationInvalid();
   return `- ${escapeConfirmationText(description)}`;
