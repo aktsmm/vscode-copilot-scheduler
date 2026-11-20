@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent Host runs and Copilot CLI runs are no longer stopped after a fixed time by default. Each timeout is now a separate setting that is off by default: `copilotScheduler.agentHostTimeoutEnabled` with `copilotScheduler.agentHostTimeoutMinutes`, and `copilotScheduler.cliTimeoutEnabled` with `copilotScheduler.cliTimeoutMinutes` (previously 60). The minutes settings now default to 180 and apply only when the matching option is on. If you had set the minutes yourself and did not set the new option, that timeout stays on with your value.
   - Agent Host: with it off, a run stuck waiting for input or authentication keeps running until you act, and a recurring task skips its later occurrences meanwhile (the input-needed notification still appears). Before a message is sent, a stuck step still stops after 10 minutes, and watching a queued message for input requests ends after 12 hours.
   - Copilot CLI: with it off, a manual run waits until the CLI exits. Closing VS Code still stops the CLI.
+- An Agent Host run that ends by timeout now says which limit applied, in your language: the configured minutes and `copilotScheduler.agentHostTimeoutMinutes` for a cancelled run, or that the message was not sent in time. Before, it showed an English message without a setting name.
 
 ## [1.18.0] - 2026-11-20
 

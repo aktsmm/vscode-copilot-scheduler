@@ -2708,6 +2708,95 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       }
     });
 
+    test("a timed-out Agent Host run is reported with the setting that ended it", async () => {
+      const releaseStorage = useAgentHostTestStorage();
+      const getConfig = vscode.workspace.getConfiguration;
+      const warning = vscode.window.showWarningMessage;
+      const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+      const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+      const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+      let enabled = true;
+      let stage: "beforeDispatch" | "run" = "run";
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: ((section?: string) => {
+          const config = getConfig.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "executionRoute") return "agentHost" as T;
+              if (key === "sessionHarness") return "auto" as T;
+              if (key === "agentHostTimeoutMinutes") return 30 as T;
+              if (key === "agentHostTimeoutEnabled") return enabled as T;
+              return config.get<T>(key, defaultValue as T);
+            },
+            inspect: (key: string) =>
+              key === "agentHostTimeoutEnabled" ? { key, globalValue: enabled } : { key },
+          } as unknown as vscode.WorkspaceConfiguration;
+        }) as typeof vscode.workspace.getConfiguration,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async () => undefined,
+      });
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", { configurable: true, value: "test" });
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true,
+        value: () => ({ socketPath: "test", token: "test", protocolVersion: "1.0.0" }),
+      });
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async () => {
+          throw new agentHostClient.AgentHostError(
+            "failed",
+            "The Agent Host run timed out.",
+            "unknown",
+            undefined,
+            stage,
+          );
+        },
+      });
+      try {
+        const executor = new CopilotExecutor();
+        const messageFor = async (): Promise<string> => {
+          try {
+            await executor.executePrompt("synthetic", { chatSession: "new" });
+          } catch (error) {
+            return (error as Error).message;
+          }
+          return assert.fail("the run must fail");
+        };
+        assert.strictEqual(
+          await messageFor(),
+          messages.agentHostOutcomeUnknown(messages.agentHostTimedOut("run", 30)),
+        );
+        assert.ok((await messageFor()).includes("agentHostTimeoutMinutes"));
+        // Nothing was sent: the message does not blame a timeout setting that is off.
+        enabled = false;
+        stage = "beforeDispatch";
+        const abandoned = await messageFor();
+        assert.strictEqual(
+          abandoned,
+          messages.agentHostOutcomeUnknown(messages.agentHostTimedOut("beforeDispatch", undefined)),
+        );
+        assert.ok(!abandoned.includes("agentHostTimeout"));
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          configurable: true,
+          value: getConfig,
+        });
+        Object.defineProperty(vscode.window, "showWarningMessage", {
+          configurable: true,
+          value: warning,
+        });
+        Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+        Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+        Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+        releaseStorage();
+      }
+    });
+
     test("the Copilot CLI timeout is off by default and follows the settings", async () => {
       const getConfig = vscode.workspace.getConfiguration;
       const runProcess = Object.getOwnPropertyDescriptor(copilotCliRunner, "runCopilotCliProcess")!;

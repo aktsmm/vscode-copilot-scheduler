@@ -1124,6 +1124,7 @@ suite("Agent Host client", () => {
         (error: unknown) =>
           error instanceof AgentHostError &&
           error.message === "The Agent Host run timed out before dispatch." &&
+          error.timeout === "beforeDispatch" &&
           error.turnOutcome === "unknown",
       );
       release();
@@ -2135,6 +2136,7 @@ suite("Agent Host client", () => {
         (error: unknown) =>
           error instanceof AgentHostError &&
           error.message === "The Agent Host run timed out." &&
+          error.timeout === "run" &&
           error.turnOutcome === "unknown",
       );
 
