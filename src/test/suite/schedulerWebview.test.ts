@@ -1016,7 +1016,7 @@ suite("SchedulerWebview model list retry", () => {
     modelRetryTimer?: unknown;
     modelRetryCount: number;
     webviewReady: boolean;
-    refreshAgentsAndModels(force?: boolean): Promise<void>;
+    refreshAgentsAndModels(force?: boolean, isModelRetry?: boolean): Promise<void>;
     refreshCachesAndNotifyPanel(force?: boolean): Promise<void>;
     refreshPromptTemplates(force?: boolean): Promise<void>;
   };
@@ -1110,6 +1110,17 @@ suite("SchedulerWebview model list retry", () => {
       await wait(150);
       assert.strictEqual(calls(), 1);
       assert.strictEqual(wv.modelRetryTimer, undefined);
+    });
+  });
+
+  test("only the retry timer's own refresh keeps the retry count; any other forced refresh resets it", async () => {
+    await withCatalog(["fallback"], async () => {
+      wv.modelRetryIntervalMs = 60_000;
+      wv.modelRetryCount = 3;
+      await wv.refreshAgentsAndModels(true, true);
+      assert.strictEqual(wv.modelRetryCount, 3);
+      await wv.refreshAgentsAndModels(true);
+      assert.strictEqual(wv.modelRetryCount, 0);
     });
   });
 

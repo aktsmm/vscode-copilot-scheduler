@@ -3904,6 +3904,14 @@ suite("ScheduleManager RunNow Tests", () => {
           assert.strictEqual(recurring.allowOverlappingRuns, true);
           await manager.updateTask(recurring.id, { cronExpression: "", runAt });
           assert.strictEqual(manager.getTask(recurring.id)?.allowOverlappingRuns, undefined);
+          // Turned recurring again, it gets the stored default like a new task, so a
+          // later load has nothing to migrate.
+          await manager.updateTask(recurring.id, { cronExpression: "* * * * *", runAt: "" });
+          assert.strictEqual(manager.getTask(recurring.id)?.runAt, undefined);
+          assert.strictEqual(manager.getTask(recurring.id)?.allowOverlappingRuns, true);
+          const reloaded = new ScheduleManager(createMockContext(tmp));
+          await waitForStartupSave(reloaded);
+          assert.strictEqual(await reloaded.whenOverlapMigrationSaved(), false);
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }
