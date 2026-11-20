@@ -2705,6 +2705,9 @@ export class ScheduleManager {
     // carry it back into a later recurring schedule.
     if (task.runAt) {
       task.allowOverlappingRuns = undefined;
+    } else if (task.allowOverlappingRuns === undefined) {
+      // A one-time task turned recurring gets the default stored, as a new task does.
+      task.allowOverlappingRuns = true;
     }
     if (updates.allowedTimeStart !== undefined) {
       task.allowedTimeStart = this.normalizeTimeWindowOrThrow(

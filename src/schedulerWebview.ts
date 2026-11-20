@@ -89,7 +89,6 @@ export class SchedulerWebview {
   private static readonly MODEL_RETRY_MAX = 5;
   private static modelRetryTimer: ReturnType<typeof setTimeout> | undefined;
   private static modelRetryCount = 0;
-  private static modelRetryAttempt = false;
   private static webviewGeneration = 0;
   private static cachedPromptTemplates: PromptTemplate[] = [];
   private static cachedSkills: SkillTemplate[] = [];
@@ -313,12 +312,7 @@ export class SchedulerWebview {
       this.modelRetryTimer = undefined;
       if (!this.panel) return;
       this.modelRetryCount++;
-      this.modelRetryAttempt = true;
-      void this.refreshCachesAndNotifyPanel(true)
-        .catch(() => undefined)
-        .finally(() => {
-          this.modelRetryAttempt = false;
-        });
+      void this.refreshCachesAndNotifyPanel(true, true).catch(() => undefined);
     }, this.modelRetryIntervalMs);
   }
 
@@ -663,9 +657,12 @@ export class SchedulerWebview {
    * Refresh cached agents/models/templates and notify the webview without rebuilding HTML.
    * Use this for settings changes (e.g., global paths) to avoid resetting form state.
    */
-  static async refreshCachesAndNotifyPanel(force = true): Promise<void> {
+  static async refreshCachesAndNotifyPanel(
+    force = true,
+    isModelRetry = false,
+  ): Promise<void> {
     try {
-      await this.refreshAgentsAndModels(force);
+      await this.refreshAgentsAndModels(force, isModelRetry);
     } catch {
       this.cachedAgents = CopilotExecutor.getBuiltInAgents();
       this.cachedModels = this.hasResolvedModelCatalog(this.cachedModels)
@@ -1034,7 +1031,10 @@ export class SchedulerWebview {
   /**
    * Refresh agents and models cache
    */
-  private static async refreshAgentsAndModels(force = false): Promise<void> {
+  private static async refreshAgentsAndModels(
+    force = false,
+    isModelRetry = false,
+  ): Promise<void> {
     if (
       !force &&
       this.cachedAgents.length > 0 &&
@@ -1042,7 +1042,7 @@ export class SchedulerWebview {
     ) {
       return;
     }
-    if (force && !this.modelRetryAttempt) {
+    if (force && !isModelRetry) {
       this.modelRetryCount = 0;
     }
 
