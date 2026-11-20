@@ -683,6 +683,23 @@
               "type": "boolean",
               "description": "When true, block fallback from Agent Host to Chat. Default false; existing fallback policy still applies. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models."
             },
+            "timeout": {
+              "type": "object",
+              "description": "Timeout of this task for Agent Host and Copilot CLI runs. mode 'inherit' (default) follows the copilotScheduler.*TimeoutEnabled settings (off by default), 'off' never stops the run, 'on' stops it after minutes (1-720; the configured minutes when omitted). A stopped Agent Host run may leave its outcome unknown.",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["inherit", "off", "on"]
+                },
+                "minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 720
+                }
+              },
+              "required": ["mode"],
+              "additionalProperties": false
+            },
             "jitterSeconds": {
               "type": "number",
               "description": "Max random delay in seconds before execution (0 = off). Spreads out runs to reduce rate-limit risk. Defaults to the copilotScheduler.jitterSeconds setting.",
@@ -884,6 +901,23 @@
                 "preventAgentHostFallback": {
                   "type": "boolean",
                   "description": "When true, block fallback from Agent Host to Chat. False leaves existing fallback policy in effect. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models. Omission preserves the current setting."
+                },
+                "timeout": {
+                  "type": "object",
+                  "description": "Timeout of this task for Agent Host and Copilot CLI runs. mode 'inherit' clears the task value so the copilotScheduler.*TimeoutEnabled settings apply (off by default), 'off' never stops the run, 'on' stops it after minutes (1-720; the configured minutes when omitted). Omission preserves the current setting.",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": ["inherit", "off", "on"]
+                    },
+                    "minutes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 720
+                    }
+                  },
+                  "required": ["mode"],
+                  "additionalProperties": false
                 },
                 "jitterSeconds": {
                   "type": "number",

@@ -939,6 +939,9 @@
   var agentHostModelRefresh = document.getElementById("agent-host-model-refresh");
   var agentHostModelStatus = document.getElementById("agent-host-model-status");
   var useCopilotCliInput = document.getElementById("use-copilot-cli");
+  var taskTimeoutModeSelect = document.getElementById("task-timeout-mode");
+  var taskTimeoutMinutesGroup = document.getElementById("task-timeout-minutes-group");
+  var taskTimeoutMinutesInput = document.getElementById("task-timeout-minutes");
   var copilotCliControls = document.getElementById("copilot-cli-controls");
   var copilotCliConfigured = document.getElementById("copilot-cli-configured");
   var advancedSettings = document.getElementById("advanced-settings");
@@ -991,6 +994,39 @@
     return useCopilotCliInput
       ? useCopilotCliInput.checked === true
       : getSavedTaskField("useCopilotCli", false) === true;
+  }
+
+  function updateTaskTimeoutControls() {
+    if (taskTimeoutMinutesGroup && taskTimeoutModeSelect) {
+      taskTimeoutMinutesGroup.hidden = taskTimeoutModeSelect.value !== "on";
+    }
+  }
+
+  function setTaskTimeoutSelection(timeout) {
+    var mode = timeout && timeout.mode === "off" ? "off" : timeout && timeout.mode === "on" ? "on" : "inherit";
+    if (taskTimeoutModeSelect) taskTimeoutModeSelect.value = mode;
+    if (taskTimeoutMinutesInput) {
+      taskTimeoutMinutesInput.value =
+        mode === "on" && timeout.minutes != null ? String(timeout.minutes) : "";
+    }
+    updateTaskTimeoutControls();
+  }
+
+  // An empty minutes field means "use the configured minutes".
+  function getTimeoutForSubmit() {
+    if (!taskTimeoutModeSelect) {
+      return getSavedTaskField("timeout", { mode: "inherit" });
+    }
+    var mode = taskTimeoutModeSelect.value;
+    if (mode === "off") return { mode: "off" };
+    if (mode !== "on") return { mode: "inherit" };
+    var raw = taskTimeoutMinutesInput ? String(taskTimeoutMinutesInput.value || "").trim() : "";
+    if (!raw) return { mode: "on" };
+    return { mode: "on", minutes: boundedNumber(raw, 1, 720, 180) };
+  }
+
+  if (taskTimeoutModeSelect) {
+    taskTimeoutModeSelect.addEventListener("change", updateTaskTimeoutControls);
   }
 
   function updateCliControlVisibility() {
@@ -1400,6 +1436,15 @@
   function normalizeTaskForEditDiff(task) {
     var source = task || {};
     return {
+      timeout: (function () {
+        var value = source.timeout;
+        if (!value || typeof value !== "object") return "inherit";
+        if (value.mode === "off") return "off";
+        if (value.mode === "on") {
+          return "on:" + (value.minutes != null ? String(value.minutes) : "");
+        }
+        return "inherit";
+      })(),
       name: String(source.name || ""),
       prompt: typeof source.prompt === "string" ? source.prompt : "",
       cronExpression: String(source.cronExpression || ""),
@@ -2756,6 +2801,7 @@
           ? preventAgentHostFallbackInput.checked
           : getSavedTaskField("preventAgentHostFallback", false) === true,
         useCopilotCli: getUseCopilotCliForSubmit(),
+        timeout: getTimeoutForSubmit(),
         skillRef: getSelectedSkillRefForSubmit(promptSourceValue),
         chatSession: chatSessionSelect
           ? chatSessionSelect.value
@@ -2996,6 +3042,7 @@
           ? preventAgentHostFallbackInput.checked
           : getSavedTaskField("preventAgentHostFallback", false) === true,
         useCopilotCli: getUseCopilotCliForSubmit(),
+        timeout: getTimeoutForSubmit(),
         attachments: attachmentsState.map(function (item) {
           return { source: item.source, path: item.path };
         }),
@@ -4033,6 +4080,7 @@
     setAgentHostModelSelection("", null);
     setModelFallbackSelection(null);
     if (useCopilotCliInput) useCopilotCliInput.checked = false;
+    setTaskTimeoutSelection(undefined);
     if (chatSessionSelect) {
       chatSessionSelect.value = "default";
     }
@@ -4647,6 +4695,7 @@
     if (useCopilotCliInput) {
       useCopilotCliInput.checked = task.useCopilotCli === true;
     }
+    setTaskTimeoutSelection(task.timeout);
     updateCliControlVisibility();
     if (chatSessionSelect) {
       chatSessionSelect.value = task.chatSession || "default";

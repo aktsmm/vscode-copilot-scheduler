@@ -1,6 +1,7 @@
 import * as assert from "assert";
 import {
   AGENT_HOST_OBSERVATION_CAP_MS,
+  parseTaskTimeout,
   resolveAgentHostTimeout,
   resolveCliTimeout,
 } from "../../agentHostTimeout";
@@ -80,11 +81,57 @@ suite("Agent Host timeout settings", () => {
   });
 });
 
+suite("Task timeout override", () => {
+  test("parseTaskTimeout accepts the three modes and rejects everything else", () => {
+    assert.deepStrictEqual(parseTaskTimeout(undefined), { ok: true, value: undefined });
+    assert.deepStrictEqual(parseTaskTimeout({ mode: "inherit", minutes: 5 }), { ok: true, value: undefined });
+    assert.deepStrictEqual(parseTaskTimeout({ mode: "off", minutes: 5 }), { ok: true, value: { mode: "off" } });
+    assert.deepStrictEqual(parseTaskTimeout({ mode: "on" }), { ok: true, value: { mode: "on" } });
+    assert.deepStrictEqual(parseTaskTimeout({ mode: "on", minutes: 45 }), { ok: true, value: { mode: "on", minutes: 45 } });
+    for (const invalid of [
+      null, "on", 5, [], {}, { mode: "later" },
+      { mode: "on", minutes: 0 }, { mode: "on", minutes: 721 }, { mode: "on", minutes: 1.5 },
+      { mode: "on", minutes: "30" }, { mode: "on", minutes: null },
+    ]) {
+      assert.deepStrictEqual(parseTaskTimeout(invalid), { ok: false }, JSON.stringify(invalid));
+    }
+  });
+
+  test("a task override beats the settings for both routes", () => {
+    const enabled = { agentHostTimeoutEnabled: { globalValue: true }, cliTimeoutEnabled: { globalValue: true } };
+    const on = configWith({ agentHostTimeoutEnabled: true, cliTimeoutEnabled: true, agentHostTimeoutMinutes: 90, cliTimeoutMinutes: 90 }, enabled);
+    const off = configWith({});
+    // Off for the task wins over an enabled setting.
+    assert.strictEqual(resolveAgentHostTimeout(on, { mode: "off" }).runMs, undefined);
+    assert.strictEqual(resolveAgentHostTimeout(on, { mode: "off" }).observationMs, AGENT_HOST_OBSERVATION_CAP_MS);
+    assert.strictEqual(resolveCliTimeout(on, { mode: "off" }).runMs, undefined);
+    // On for the task wins over a disabled setting; minutes default to the configured ones.
+    assert.strictEqual(resolveAgentHostTimeout(off, { mode: "on", minutes: 20 }).runMs, 20 * MINUTE);
+    assert.strictEqual(resolveCliTimeout(off, { mode: "on", minutes: 20 }).runMs, 20 * MINUTE);
+    assert.strictEqual(resolveCliTimeout(off, { mode: "on" }).runMs, 180 * MINUTE);
+    assert.strictEqual(resolveAgentHostTimeout(on, { mode: "on" }).runMs, 90 * MINUTE);
+    // The same override applies to both routes and reports where it came from.
+    assert.strictEqual(resolveAgentHostTimeout(off, { mode: "on", minutes: 20 }).viaTask, true);
+    assert.strictEqual(resolveCliTimeout(off, undefined).viaTask, false);
+  });
+
+  test("an invalid stored value is ignored so the settings apply", () => {
+    const on = configWith({ cliTimeoutEnabled: true }, { cliTimeoutEnabled: { globalValue: true } });
+    for (const stored of [{ mode: "on", minutes: 9999 }, { mode: "bogus" }, "off", null]) {
+      const resolved = resolveCliTimeout(on, stored as never);
+      assert.strictEqual(resolved.runMs, 180 * MINUTE);
+      assert.strictEqual(resolved.viaTask, false);
+      assert.strictEqual(resolveAgentHostTimeout(configWith({}), stored as never).runMs, undefined);
+    }
+  });
+});
+
 suite("Copilot CLI timeout settings", () => {
   test("is off by default and reports 180 minutes for the message", () => {
     assert.deepStrictEqual(resolveCliTimeout(configWith({})), {
       runMs: undefined,
       minutes: 180,
+      viaTask: false,
     });
   });
 

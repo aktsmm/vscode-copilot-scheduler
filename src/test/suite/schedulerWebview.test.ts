@@ -2148,6 +2148,61 @@ suite("SchedulerWebview Script Contract Tests", () => {
     }
   });
 
+  test("the timeout selector submits inherit, off or on and restores a saved value", () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const mode = { value: "inherit" };
+    const minutes = { value: "" };
+    const group = { hidden: true };
+    const factory = new Function(
+      "taskTimeoutModeSelect",
+      "taskTimeoutMinutesInput",
+      "taskTimeoutMinutesGroup",
+      "editingTaskSnapshot",
+      [
+        extractFunctionSource(source, "boundedNumber"),
+        extractFunctionSource(source, "getSavedTaskField"),
+        extractFunctionSource(source, "updateTaskTimeoutControls"),
+        extractFunctionSource(source, "setTaskTimeoutSelection"),
+        extractFunctionSource(source, "getTimeoutForSubmit"),
+        "return { submit: getTimeoutForSubmit, restore: setTaskTimeoutSelection, update: updateTaskTimeoutControls };",
+      ].join("\n"),
+    );
+    const form = factory(mode, minutes, group, null) as {
+      submit: () => unknown;
+      restore: (value: unknown) => void;
+      update: () => void;
+    };
+    assert.deepStrictEqual(form.submit(), { mode: "inherit" });
+    mode.value = "off";
+    assert.deepStrictEqual(form.submit(), { mode: "off" });
+    mode.value = "on";
+    form.update();
+    assert.strictEqual(group.hidden, false);
+    assert.deepStrictEqual(form.submit(), { mode: "on" }, "empty minutes use the configured ones");
+    minutes.value = "45";
+    assert.deepStrictEqual(form.submit(), { mode: "on", minutes: 45 });
+    minutes.value = "99999";
+    assert.deepStrictEqual(form.submit(), { mode: "on", minutes: 720 });
+    form.restore({ mode: "off" });
+    assert.strictEqual(mode.value, "off");
+    assert.strictEqual(group.hidden, true);
+    form.restore({ mode: "on", minutes: 30 });
+    assert.strictEqual(mode.value, "on");
+    assert.strictEqual(minutes.value, "30");
+    assert.strictEqual(group.hidden, false);
+    form.restore(undefined);
+    assert.strictEqual(mode.value, "inherit");
+    assert.strictEqual(minutes.value, "");
+
+    // Without the controls the saved value is carried through unchanged.
+    const missing = factory(null, null, null, { timeout: { mode: "on", minutes: 5 } }) as typeof form;
+    assert.deepStrictEqual(missing.submit(), { mode: "on", minutes: 5 });
+    assert.deepStrictEqual((factory(null, null, null, null) as typeof form).submit(), { mode: "inherit" });
+  });
+
   test("one-time mode disables overlap without clearing the saved choice", () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, "../../../media/schedulerWebview.js"),
@@ -2818,6 +2873,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
         preventAgentHostFallbackInput: { checked: guard },
         useCopilotCliInput:
           cliChecked === undefined ? null : { checked: cliChecked },
+        taskTimeoutModeSelect: null,
+        taskTimeoutMinutesInput: null,
         getSelectedSkillRefForSubmit: () => null,
         getEffectivePromptSource: () => "inline",
         getAgentHostWorkspaceModeForSubmit: () => workspaceMode,
@@ -2846,6 +2903,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
           extractFunctionSource(source, "boundedNumber"),
           extractFunctionSource(source, "getSavedTaskField"),
           extractFunctionSource(source, "getUseCopilotCliForSubmit"),
+          extractFunctionSource(source, "getTimeoutForSubmit"),
           extractFunctionSource(source, "copyModelConfigurationForForm"),
           extractFunctionSource(source, "serializeModelConfigurationForDiff"),
           extractFunctionSource(source, "normalizeSkillRefClient"),
@@ -2967,6 +3025,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
           agentHostModelSelect: null,
           preventAgentHostFallbackInput: null,
           useCopilotCliInput: null,
+        taskTimeoutModeSelect: null,
+        taskTimeoutMinutesInput: null,
           getSelectedSkillRefForSubmit: () => null,
           getEffectivePromptSource: () => promptSource,
           getAgentHostWorkspaceModeForSubmit: () => undefined,
@@ -3007,6 +3067,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
             extractFunctionSource(source, "boundedNumber"),
             extractFunctionSource(source, "getSavedTaskField"),
             extractFunctionSource(source, "getUseCopilotCliForSubmit"),
+            extractFunctionSource(source, "getTimeoutForSubmit"),
             extractFunctionSource(source, "copyModelConfigurationForForm"),
             extractFunctionSource(source, "serializeModelConfigurationForDiff"),
             extractFunctionSource(source, "normalizeSkillRefClient"),
@@ -5410,6 +5471,8 @@ suite("SchedulerWebview Script Contract Tests", () => {
       agentHostWorkspaceModeStatus: status,
       savedAgentHostWorkspaceMode: undefined,
       useCopilotCliInput: cli,
+      taskTimeoutModeSelect: null,
+      taskTimeoutMinutesInput: null,
       targetChatSelect: target,
       pendingModelValue: "",
       getCurrentModelSelection: () => ({ model }),
@@ -5441,6 +5504,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
         "updateAgentHostWorkspaceModeAvailability",
         "getSavedTaskField",
         "getUseCopilotCliForSubmit",
+        "getTimeoutForSubmit",
         "normalizeTaskForEditDiff",
         "serializeModelConfigurationForDiff",
         "normalizeSkillRefClient",

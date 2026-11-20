@@ -3843,6 +3843,43 @@ suite("ScheduleManager RunNow Tests", () => {
         }
       });
 
+      test("a task timeout is validated, stored, cleared by inherit, duplicated and reloaded", async () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+        try {
+          const manager = new ScheduleManager(createMockContext(tmp));
+          const base = {
+            name: "task-timeout",
+            prompt: "hello",
+            cronExpression: "* * * * *",
+            scope: "global" as const,
+          };
+          const plain = await manager.createTask(base);
+          assert.strictEqual(plain.timeout, undefined);
+          await assert.rejects(() => manager.createTask({ ...base, timeout: { mode: "on", minutes: 0 } }));
+          await assert.rejects(() => manager.createTask({ ...base, timeout: "off" as never }));
+          const task = await manager.createTask({ ...base, timeout: { mode: "on", minutes: 45 } });
+          assert.deepStrictEqual(task.timeout, { mode: "on", minutes: 45 });
+          const copy = await manager.duplicateTask(task.id);
+          assert.deepStrictEqual(copy?.timeout, { mode: "on", minutes: 45 });
+
+          await manager.updateTask(task.id, { name: "renamed-timeout" });
+          assert.deepStrictEqual(manager.getTask(task.id)?.timeout, { mode: "on", minutes: 45 });
+          await assert.rejects(() => manager.updateTask(task.id, { timeout: { mode: "on", minutes: 721 } }));
+          assert.deepStrictEqual(manager.getTask(task.id)?.timeout, { mode: "on", minutes: 45 });
+          await manager.updateTask(task.id, { timeout: { mode: "off" } });
+          assert.deepStrictEqual(manager.getTask(task.id)?.timeout, { mode: "off" });
+
+          const reloaded = new ScheduleManager(createMockContext(tmp));
+          await waitForStartupSave(reloaded);
+          assert.deepStrictEqual(reloaded.getTask(task.id)?.timeout, { mode: "off" });
+          assert.deepStrictEqual(reloaded.getTask(copy!.id)?.timeout, { mode: "on", minutes: 45 });
+          await reloaded.updateTask(task.id, { timeout: { mode: "inherit" } });
+          assert.strictEqual(reloaded.getTask(task.id)?.timeout, undefined);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+        }
+      });
+
       test("the overlap option is not kept on a one-time task", async () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
         try {

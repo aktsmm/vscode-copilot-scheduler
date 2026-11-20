@@ -67,6 +67,7 @@ import {
 import { normalizeSkillRef } from "./skillResolver";
 import { DEFAULT_MODEL_FALLBACK_POLICY, normalizeModelFallbackPolicy } from "./modelFallback";
 import { isOverlapAllowed } from "./overlapPolicy";
+import { effectiveTaskTimeout, parseTaskTimeout } from "./agentHostTimeout";
 
 // Node.js globals
 declare const setTimeout: (callback: () => void, ms: number) => NodeJS.Timeout;
@@ -2130,6 +2131,10 @@ export class ScheduleManager {
     ) {
       throw new Error(messages.agentHostFallbackGuardInvalid());
     }
+    const timeoutInput = parseTaskTimeout(input.timeout);
+    if (!timeoutInput.ok) {
+      throw new Error(messages.taskTimeoutInvalid());
+    }
     if (
       input.allowOverlappingRuns !== undefined &&
       typeof input.allowOverlappingRuns !== "boolean"
@@ -2237,6 +2242,7 @@ export class ScheduleManager {
         : undefined,
       preventAgentHostFallback:
         input.preventAgentHostFallback === true ? true : undefined,
+      timeout: timeoutInput.value,
       useCopilotCli: input.useCopilotCli === true ? true : undefined,
       skillRef: normalizeSkillRef(input.skillRef),
       chatSession:
@@ -2561,6 +2567,10 @@ export class ScheduleManager {
     ) {
       throw new Error(messages.agentHostFallbackGuardInvalid());
     }
+    const timeoutUpdate = parseTaskTimeout(updates.timeout);
+    if (!timeoutUpdate.ok) {
+      throw new Error(messages.taskTimeoutInvalid());
+    }
     if (
       nextModelSelection &&
       !isAgentHostModelBindingCompatible(nextModelSelection)
@@ -2643,6 +2653,9 @@ export class ScheduleManager {
     if (updates.preventAgentHostFallback !== undefined) {
       task.preventAgentHostFallback =
         updates.preventAgentHostFallback === true ? true : undefined;
+    }
+    if (updates.timeout !== undefined) {
+      task.timeout = timeoutUpdate.ok ? timeoutUpdate.value : undefined;
     }
     if (updates.useCopilotCli !== undefined) {
       task.useCopilotCli = updates.useCopilotCli === true ? true : undefined;
@@ -2855,6 +2868,7 @@ export class ScheduleManager {
       modelFallback: original.modelFallback,
       modelFallbackPolicy: original.modelFallbackPolicy,
       preventAgentHostFallback: original.preventAgentHostFallback,
+      timeout: effectiveTaskTimeout(original.timeout),
       useCopilotCli: original.useCopilotCli,
       skillRef: original.skillRef,
       chatSession: original.chatSession,

@@ -2670,16 +2670,26 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         const timeoutFor = async (
           nextValues: Record<string, unknown>,
           nextHonored: string[],
+          timeout?: ExecuteOptions["timeout"],
         ): Promise<number | undefined> => {
           values = nextValues;
           honored = nextHonored;
           requests.length = 0;
-          await executor.executePrompt("synthetic", { chatSession: "new" });
+          await executor.executePrompt("synthetic", {
+            chatSession: "new",
+            ...(timeout ? { timeout } : {}),
+          });
           assert.strictEqual(requests.length, 1);
           return requests[0].timeoutMs;
         };
         // No settings: the manifest defaults apply and nothing is cancelled.
         assert.strictEqual(await timeoutFor({}, []), undefined);
+        // The task's own timeout decides regardless of the settings.
+        assert.strictEqual(await timeoutFor({}, [], { mode: "on", minutes: 25 }), 25 * 60 * 1000);
+        assert.strictEqual(
+          await timeoutFor({ agentHostTimeoutEnabled: true }, ["agentHostTimeoutEnabled"], { mode: "off" }),
+          undefined,
+        );
         assert.strictEqual(
           await timeoutFor({ agentHostTimeoutEnabled: true }, ["agentHostTimeoutEnabled"]),
           180 * 60 * 1000,
@@ -2759,9 +2769,12 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       });
       try {
         const executor = new CopilotExecutor();
-        const messageFor = async (): Promise<string> => {
+        const messageFor = async (timeout?: ExecuteOptions["timeout"]): Promise<string> => {
           try {
-            await executor.executePrompt("synthetic", { chatSession: "new" });
+            await executor.executePrompt("synthetic", {
+              chatSession: "new",
+              ...(timeout ? { timeout } : {}),
+            });
           } catch (error) {
             return (error as Error).message;
           }
@@ -2772,6 +2785,13 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
           messages.agentHostOutcomeUnknown(messages.agentHostTimedOut("run", 30)),
         );
         assert.ok((await messageFor()).includes("agentHostTimeoutMinutes"));
+        // A task's own timeout is named as the task's, not as a setting.
+        const taskMessage = await messageFor({ mode: "on", minutes: 5 });
+        assert.strictEqual(
+          taskMessage,
+          messages.agentHostOutcomeUnknown(messages.agentHostTimedOut("run", 5, true)),
+        );
+        assert.ok(!taskMessage.includes("agentHostTimeoutMinutes"));
         // Nothing was sent: the message does not blame a timeout setting that is off.
         enabled = false;
         stage = "beforeDispatch";
@@ -2841,11 +2861,16 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         const timeoutFor = async (
           nextValues: Record<string, unknown>,
           nextHonored: string[],
+          timeout?: ExecuteOptions["timeout"],
         ): Promise<number | undefined> => {
           values = nextValues;
           honored = nextHonored;
           requests.length = 0;
-          await internals.runCopilotCli("synthetic", { useCopilotCli: true, model: "test" });
+          await internals.runCopilotCli("synthetic", {
+            useCopilotCli: true,
+            model: "test",
+            ...(timeout ? { timeout } : {}),
+          });
           assert.strictEqual(requests.length, 1);
           return requests[0].timeoutMs;
         };
@@ -2864,6 +2889,12 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
           await timeoutFor({ agentHostTimeoutEnabled: true }, ["agentHostTimeoutEnabled"]),
           undefined,
         );
+        // The task's own timeout decides regardless of the settings.
+        assert.strictEqual(await timeoutFor({}, [], { mode: "on", minutes: 7 }), 7 * 60 * 1000);
+        assert.strictEqual(
+          await timeoutFor({ cliTimeoutEnabled: true }, ["cliTimeoutEnabled"], { mode: "off" }),
+          undefined,
+        );
         // The stop message names the configured minutes.
         timedOut = true;
         values = { cliTimeoutEnabled: true, cliTimeoutMinutes: 30 };
@@ -2872,6 +2903,15 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
           internals.runCopilotCli("synthetic", { useCopilotCli: true, model: "test" }),
           (error: unknown) =>
             error instanceof Error && error.message === messages.copilotCliTimedOut(30),
+        );
+        await assert.rejects(
+          internals.runCopilotCli("synthetic", {
+            useCopilotCli: true,
+            model: "test",
+            timeout: { mode: "on", minutes: 12 },
+          }),
+          (error: unknown) =>
+            error instanceof Error && error.message === messages.copilotCliTimedOut(12, true),
         );
       } finally {
         Object.defineProperty(vscode.workspace, "getConfiguration", {

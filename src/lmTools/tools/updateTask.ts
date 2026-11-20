@@ -8,12 +8,14 @@ import {
   describeAgentHostFieldsForConfirmation,
   describeAttachmentsForConfirmation,
   describeOverlappingRunsForConfirmation,
+  describeTaskTimeoutForConfirmation,
   formatConfirmationCode,
   formatMutationFailure,
   shouldUseCustomConfirmation,
   toTaskSummary,
   validateAgentHostToolFields,
   validateOverlappingRuns,
+  validateTaskTimeoutField,
 } from "../shared";
 
 interface UpdateTaskToolInput {
@@ -46,6 +48,7 @@ export const RECOGNIZED_UPDATE_KEYS: ReadonlySet<string> = new Set([
   "autoMode",
   "modelFallback",
   "preventAgentHostFallback",
+  "timeout",
   "jitterSeconds",
   "maxExecutionsPerDay",
   "allowOverlappingRuns",
@@ -102,6 +105,9 @@ export function createSchedulerUpdateTaskTool(
               updateKeys.includes("allowOverlappingRuns")
                 ? `\n\n${describeOverlappingRunsForConfirmation(input.updates?.allowOverlappingRuns)}`
                 : "",
+              updateKeys.includes("timeout")
+                ? `\n\n${describeTaskTimeoutForConfirmation(input.updates?.timeout)}`
+                : "",
               updateKeys.includes("targetChatId")
                 ? "\n\nThe task's prompts will be queued into the selected existing Copilot chat (an empty value unbinds it)."
                 : "",
@@ -153,6 +159,10 @@ export function createSchedulerUpdateTaskTool(
       const overlapError = validateOverlappingRuns(input.updates.allowOverlappingRuns);
       if (overlapError) {
         return overlapError;
+      }
+      const timeoutError = validateTaskTimeoutField(input.updates.timeout);
+      if (timeoutError) {
+        return timeoutError;
       }
       const result = await client.updateTask(input.id, input.updates);
       if (!result.ok) {

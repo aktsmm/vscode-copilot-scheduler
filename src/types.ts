@@ -100,6 +100,16 @@ export interface ModelConfigurationOption {
   defaultValue?: ModelConfigurationValue;
 }
 
+/**
+ * Timeout of one task for Agent Host and Copilot CLI runs. `off` never stops the
+ * run; `on` stops it after `minutes` (the configured minutes when omitted).
+ * Inheriting the settings is the absence of the field.
+ */
+export interface TaskTimeout {
+  mode: "inherit" | "off" | "on";
+  minutes?: number;
+}
+
 export interface ModelFallbackPolicy {
   strategy: "diverse" | "similar";
   chatModel?: { id: string; vendor: string };
@@ -210,6 +220,9 @@ export interface ScheduledTask {
    * and reasoning effort are applied. Opt-in; the chat route stays the default.
    */
   useCopilotCli?: boolean;
+
+  /** Timeout of this task; omitted = the global settings apply. */
+  timeout?: TaskTimeout;
 
   /**
    * Skill this task's prompt invokes (`/<name> ...`). Advisory: the prompt text is
@@ -345,6 +358,9 @@ export interface CreateTaskInput {
   /** Run through the GitHub Copilot CLI so the saved model is applied. */
   useCopilotCli?: boolean;
 
+  /** Timeout of this task: omitted = inherit the settings; mode "inherit" clears it on update. */
+  timeout?: TaskTimeout;
+
   /** Skill invoked by the prompt; `null` clears it on update. */
   skillRef?: TaskSkillRef | null;
 
@@ -471,6 +487,9 @@ export interface PromptExecutionRequest extends ModelSelectionFields {
 
   /** Run through the GitHub Copilot CLI so the model is applied. */
   useCopilotCli?: boolean;
+
+  /** Timeout of this task; omitted = the global settings apply. */
+  timeout?: TaskTimeout;
 }
 
 /**
@@ -585,6 +604,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
 
   /** Run through the GitHub Copilot CLI so the model is applied. */
   useCopilotCli?: boolean;
+
+  /** Timeout of this task; omitted = the global settings apply. */
+  timeout?: TaskTimeout;
 
   /** Folder the Copilot CLI runs in (CLI runs only). */
   workingDirectory?: string;

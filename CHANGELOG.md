@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A per-task `Timeout` for Agent Host and Copilot CLI runs, in the task editor and as `timeout` in `scheduler_create_task` / `scheduler_update_task`: follow the settings (default), off (never stop this task), or on with its own minutes (1–720; empty uses the configured minutes). When a task's own timeout stops a run, the message says so instead of naming a setting.
+
 ### Changed
 
 - Overlapping automatic runs of a recurring task are now allowed by default. A run that is still going no longer makes later occurrences skip, which matters now that timeouts are off by default. Recurring tasks saved without a setting are switched to allowed once (a notice appears after they are saved); there is no record of who had chosen "not allowed" before, so check tasks that must not overlap and turn the option off when editing. Manual runs, one-time tasks and runs in the same chat (which queue) keep their guards.

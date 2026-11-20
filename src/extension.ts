@@ -298,6 +298,7 @@ function buildPromptExecutionOptions(
       ? { preventAgentHostFallback: true }
       : {}),
     ...(request.useCopilotCli === true ? { useCopilotCli: true } : {}),
+    ...(request.timeout ? { timeout: request.timeout } : {}),
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(request.modelConfiguration !== undefined
       ? { modelConfiguration: request.modelConfiguration }
@@ -2499,6 +2500,7 @@ async function resolvePromptExecution(
       ? { preventAgentHostFallback: true }
       : {}),
     ...(task.useCopilotCli === true ? { useCopilotCli: true } : {}),
+    ...(task.timeout ? { timeout: task.timeout } : {}),
     attachments: task.attachments,
   };
 }
