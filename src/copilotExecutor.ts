@@ -20,6 +20,7 @@ import type {
   ChatSessionBehavior,
 } from "./types";
 import { messages, isJapanese } from "./i18n";
+import { resolveAgentHostTimeout } from "./agentHostTimeout";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
@@ -1168,13 +1169,7 @@ export class CopilotExecutor {
           reason: "modelAbsent" as const,
         },
       } : {};
-    const timeoutMinutes = Math.min(
-      Math.max(
-        Math.floor(config.get<number>("agentHostTimeoutMinutes", 60)) || 60,
-        1,
-      ),
-      720,
-    );
+    const agentHostTimeout = resolveAgentHostTimeout(config);
     const autoApprove =
       config.get<boolean>("agentHostAutoApprove", true) !== false;
     // The approval policy is fixed when a session is created, so sessions with a
@@ -1253,7 +1248,9 @@ export class CopilotExecutor {
           uri: toFileUri(filePath),
         })),
         autoApprove,
-        timeoutMs: timeoutMinutes * 60 * 1000,
+        ...(agentHostTimeout.runMs !== undefined
+          ? { timeoutMs: agentHostTimeout.runMs }
+          : {}),
         ...(options?.onAgentHostInputNeeded
           ? {
               onInputNeeded: options.onAgentHostInputNeeded,
@@ -1426,7 +1423,7 @@ export class CopilotExecutor {
                       : {}),
                     onInputObservationError: () =>
                       logDebug("[CopilotScheduler] Agent Host input status could not be fully observed."),
-                    inputObservationTimeoutMs: timeoutMinutes * 60 * 1000,
+                    inputObservationTimeoutMs: agentHostTimeout.observationMs,
                   }
                 : {}),
               beforeDispatch: async (ref, messageId) => {

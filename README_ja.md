@@ -186,7 +186,7 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - **ツール**: 無人の実行は承認の確認に答えられないため、`copilotScheduler.agentHostAutoApprove`（既定オン）で承認なしにツールを使えるようにしています。ファイル編集やコマンド実行が必要なタスクが拒否されることを受け入れる場合だけオフにしてください。ユーザー／リモート設定のみ有効です。
 - **定期タスクを Agent Host で実行できないとき**: `copilotScheduler.executionFallback` で決まります。`chat`（既定）は従来のチャット経路で実行し、理由を記録します。この経路でのモデル適用は未確認です。`fail` は停止します。タスク単位の **Agent Host から Chat へ自動で切り替えない**（Chat ツールでは `preventAgentHostFallback`）は既定オフで、オンにすると `chat` より優先して切替を禁止します。最初から Chat・Local・リモート・CLI を選ぶ場合は対象外です。既存チャットへの紐付けや Host ID が未解決の旧タスクも代替経路へ送らず停止します。送信済みまたは結果不明の場合は自動再送しません。
 - **経路の選択**: `copilotScheduler.executionRoute` の既定は `agentHost` です。Copilot Chat セッションを開く従来の経路を使うには `chat` にします。定期タスク個別の Copilot CLI 指定は、どちらよりも優先されます。`sessionHarness` が `local` の場合とリモートのウィンドウでは、Agent Host の登録情報がローカルのものなので、定期タスクはチャット経路を使います。
-- 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、通常の定期タスクでは `executionFallback` に従います。既存チャットに紐付けたタスクは代替経路へ送らず停止します。`copilotScheduler.agentHostTimeoutMinutes`（既定 60）を超えるとキャンセルを要求します。確認できなければ結果は不明で、実行が続く可能性があります。
+- 公開されている [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/) で Agent Host と通信し、VS Code のローカルエンドポイント登録情報（VS Code 内部の形式。バージョンを確認します）から見つけます。想定外の状態は「ホストなし」として扱い、通常の定期タスクでは `executionFallback` に従います。既存チャットに紐付けたタスクは代替経路へ送らず停止します。`copilotScheduler.agentHostTimeoutEnabled`（既定オフ）をオンにすると、`copilotScheduler.agentHostTimeoutMinutes`（既定 180）を超えた実行をキャンセルします。オフのときは長い実行がキャンセルされませんが、入力や認証の待ちで止まった実行は、操作するまで動いたままになり、定期タスクはその間の以降の回を飛ばします（入力待ちの通知は出ます）。キャンセルを確認できなければ結果は不明で、実行が続く可能性があります。
 - **入力待ちと保留キュー**: Host のイベントで回答・ツール承認・認証待ちを確認できたときは、操作可能なステータスを表示し、通知設定に従って通知します。自動回答はしません。先行ターンの失敗・キャンセル後もキューに残っていると確認できた場合も警告します。操作先はセッションです。複数チャットが含まれる場合は対象チャットを選んでください。観測はターン完了・接続終了・タイムアウトで終わり、表示がないことは入力待ちやキューがない証拠にはなりません。
 - **送信結果が不明な場合**: Scheduler はプロンプトを含まない送信安全記録を保存し、同じ Host が該当ターンの終了を確認できるまで、再起動後や別ウィンドウからもそのチャットへの後続送信を止めます。別ウィンドウで実行中のターンに対しても、終了確認まで後続送信を停止します。ターン ID を確認する前の中断、Host の変更、安全記録の検証失敗では自動復旧できず、そのチャットを引き続き停止する場合があります。新規セッションや別チャットを明示的に選ぶ前に、元のチャットと履歴で実行中・保留中の作業を確認してください。Scheduler は自動再送しません。
 - **Agent Host のネイティブモード**: 実行ごとの実効モードを確認できないため、interactive・plan・autopilot の選択機能は提供していません。プロンプトのヒントやツール承認設定は、その代用ではありません。
@@ -303,7 +303,8 @@ write 系ツールは既定で有効ですが、信頼済みワークスペー�
 | `copilotScheduler.executionFallback`          | `chat`            | 定期タスクの送信前に Host を使えない場合、`chat` はチャット経路への切替を許可し、`fail` は停止します。タスク単位の経路切替ガードや既存チャット紐付けも切替を禁止します。単発タスクは切替を使わず、送信済み・結果不明の場合は自動再送しません。 |
 | `copilotScheduler.agentHostAutoApprove`       | `true`            | Agent Host の実行が承認なしでツールを使えるようにします（ファイル編集やコマンド実行を行う無人タスクに必要）。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.agentHostOpenSession`       | `true`            | Agent Host の実行を開始したら、そのセッションをエディタのタブとして開きます。頻繁に動く無人タスクではオフにできます。 |
-| `copilotScheduler.agentHostTimeoutMinutes`    | `60`              | Agent Host の実行にキャンセルを要求するまでの分数（1〜720）。確認できなければ結果は不明です。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.agentHostTimeoutEnabled`    | `false`           | 次の分数を超えた Agent Host の実行をキャンセルします。既定はオフで、長い実行はキャンセルされません。この設定ができる前に分数を設定していて、この設定を指定していない場合は、タイムアウトが有効のままです。ユーザー／リモート設定のみ有効。 |
+| `copilotScheduler.agentHostTimeoutMinutes`    | `180`             | 上の設定がオンのとき、Agent Host の実行をキャンセルするまでの分数（1〜720）。確認できなければ結果は不明です。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.showCopilotCliControls`     | `false`           | タスクフォームに Copilot CLI の操作欄を表示します。保存済みのタスク設定は変えません。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliPath`                    | `""`              | Copilot CLI で実行するタスクが使う `copilot` 実行ファイルのフルパス。空なら PATH から探します。ユーザー／リモート設定のみ有効。 |
 | `copilotScheduler.cliAllowAllTools`           | `false`           | CLI 実行のタスクが確認なしで全ツールを使えるようにします（`--allow-all-tools`）。オフではツールが拒否されます。ユーザー／リモート設定のみ有効。 |

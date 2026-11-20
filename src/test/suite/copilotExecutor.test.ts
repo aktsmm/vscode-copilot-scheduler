@@ -309,7 +309,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       const config = {
         get: (key: string, defaultValue: unknown) =>
           key === "agentHostOpenSession" ? false : defaultValue,
-      } as vscode.WorkspaceConfiguration;
+        inspect: (key: string) => ({ key }),
+      } as unknown as vscode.WorkspaceConfiguration;
       const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
       for (const mode of ["worktree", "folder"] as const) {
         const result = await executor.tryExecuteViaAgentHost(
@@ -403,7 +404,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     const config = {
       get: (key: string, defaultValue: unknown) =>
         key === "agentHostOpenSession" ? false : defaultValue,
-    } as vscode.WorkspaceConfiguration;
+      inspect: (key: string) => ({ key }),
+    } as unknown as vscode.WorkspaceConfiguration;
     const routing = __testOnly.buildPromptRouting("synthetic", undefined, undefined);
     const options: ExecuteOptions = { workingDirectory: __dirname };
     const endpoint = { socketPath: "test", token: "test", protocolVersion: "1.1.0" };
@@ -1081,6 +1083,24 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       );
       assert.strictEqual(queueRequest?.onQueueBlocked, onBlocked);
       assert.strictEqual(queueRequest?.onInputNeeded, undefined);
+
+      // The run timeout and the queue observation bound reach each Host call from the settings.
+      assert.strictEqual(runRequest?.timeoutMs, undefined);
+      await executor.tryExecuteViaAgentHost(
+        routing, { ...options, ...handlers, targetChatId: chatId }, config, "new",
+      );
+      assert.strictEqual(queueRequest?.inputObservationTimeoutMs, 12 * 60 * 60 * 1000);
+      const timed = {
+        get: (key: string, defaultValue: unknown) =>
+          key === "agentHostOpenSession" ? false : key === "agentHostTimeoutEnabled" ? true : defaultValue,
+        inspect: (key: string) => (key === "agentHostTimeoutEnabled" ? { key, globalValue: true } : { key }),
+      } as unknown as vscode.WorkspaceConfiguration;
+      await executor.tryExecuteViaAgentHost(routing, { ...options, ...handlers }, timed, "new");
+      assert.strictEqual(runRequest?.timeoutMs, 180 * 60 * 1000);
+      await executor.tryExecuteViaAgentHost(
+        routing, { ...options, ...handlers, targetChatId: chatId }, timed, "new",
+      );
+      assert.strictEqual(queueRequest?.inputObservationTimeoutMs, 180 * 60 * 1000);
     });
 
     test("does not dispatch when the safety journal cannot be written", async () => {
@@ -1185,7 +1205,8 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         ({
           get: (key: string, defaultValue: unknown) =>
             key === "executionFallback" ? fallback : defaultValue,
-        }) as vscode.WorkspaceConfiguration;
+          inspect: (key: string) => ({ key }),
+        }) as unknown as vscode.WorkspaceConfiguration;
       assert.ok(
         (await executor.tryExecuteViaAgentHost(routing, {}, config("chat"), "new"))
           .fallbackReason,
@@ -2596,6 +2617,88 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         Object.defineProperty(vscode.window, "showWarningMessage", {
           configurable: true,
           value: warning,
+        });
+        Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
+        Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
+        Object.defineProperty(agentHostClient, "runAgentHostTurn", runTurn);
+        releaseStorage();
+      }
+    });
+
+    test("the Agent Host run timeout is off by default and follows the settings", async () => {
+      const releaseStorage = useAgentHostTestStorage();
+      const getConfig = vscode.workspace.getConfiguration;
+      const findEndpoint = Object.getOwnPropertyDescriptor(agentHostClient, "findAgentHostEndpoint")!;
+      const runTurn = Object.getOwnPropertyDescriptor(agentHostClient, "runAgentHostTurn")!;
+      const userDataDir = Object.getOwnPropertyDescriptor(CopilotExecutor, "agentHostUserDataDir")!;
+      let values: Record<string, unknown> = {};
+      let honored: string[] = [];
+      const requests: agentHostClient.AgentHostTurnRequest[] = [];
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: ((section?: string) => {
+          const config = getConfig.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get<T>(key: string, defaultValue?: T): T {
+              if (key === "executionRoute") return "agentHost" as T;
+              if (key === "sessionHarness") return "auto" as T;
+              if (Object.hasOwn(values, key)) return values[key] as T;
+              return config.get<T>(key, defaultValue as T);
+            },
+            inspect: (key: string) =>
+              honored.includes(key) ? { key, globalValue: values[key] } : { key },
+          } as unknown as vscode.WorkspaceConfiguration;
+        }) as typeof vscode.workspace.getConfiguration,
+      });
+      Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", { configurable: true, value: "test" });
+      Object.defineProperty(agentHostClient, "findAgentHostEndpoint", {
+        configurable: true,
+        value: () => ({ socketPath: "test", token: "test", protocolVersion: "1.0.0" }),
+      });
+      Object.defineProperty(agentHostClient, "runAgentHostTurn", {
+        configurable: true,
+        value: async (request: agentHostClient.AgentHostTurnRequest) => {
+          requests.push(request);
+          return { responseText: "observed" };
+        },
+      });
+      try {
+        const executor = new CopilotExecutor();
+        const timeoutFor = async (
+          nextValues: Record<string, unknown>,
+          nextHonored: string[],
+        ): Promise<number | undefined> => {
+          values = nextValues;
+          honored = nextHonored;
+          requests.length = 0;
+          await executor.executePrompt("synthetic", { chatSession: "new" });
+          assert.strictEqual(requests.length, 1);
+          return requests[0].timeoutMs;
+        };
+        // No settings: the manifest defaults apply and nothing is cancelled.
+        assert.strictEqual(await timeoutFor({}, []), undefined);
+        assert.strictEqual(
+          await timeoutFor({ agentHostTimeoutEnabled: true }, ["agentHostTimeoutEnabled"]),
+          180 * 60 * 1000,
+        );
+        // Minutes chosen before the on/off option existed keep the timeout on.
+        assert.strictEqual(
+          await timeoutFor({ agentHostTimeoutMinutes: 90 }, ["agentHostTimeoutMinutes"]),
+          90 * 60 * 1000,
+        );
+        assert.strictEqual(
+          await timeoutFor(
+            { agentHostTimeoutEnabled: false, agentHostTimeoutMinutes: 90 },
+            ["agentHostTimeoutEnabled", "agentHostTimeoutMinutes"],
+          ),
+          undefined,
+        );
+      } finally {
+        Object.defineProperty(vscode.workspace, "getConfiguration", {
+          configurable: true,
+          value: getConfig,
         });
         Object.defineProperty(CopilotExecutor, "agentHostUserDataDir", userDataDir);
         Object.defineProperty(agentHostClient, "findAgentHostEndpoint", findEndpoint);
