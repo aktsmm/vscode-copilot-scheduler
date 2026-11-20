@@ -20,7 +20,7 @@ import type {
   ChatSessionBehavior,
 } from "./types";
 import { messages, isJapanese } from "./i18n";
-import { resolveAgentHostTimeout } from "./agentHostTimeout";
+import { resolveAgentHostTimeout, resolveCliTimeout } from "./agentHostTimeout";
 import { logDebug, logError } from "./logger";
 import { sanitizeAbsolutePathDetails } from "./errorSanitizer";
 import {
@@ -1889,10 +1889,7 @@ export class CopilotExecutor {
       }
     }
 
-    const timeoutMinutes = Math.min(
-      Math.max(Math.floor(config.get<number>("cliTimeoutMinutes", 60)) || 60, 1),
-      720,
-    );
+    const cliTimeout = resolveCliTimeout(config);
     logDebug(
       `[CopilotScheduler] Running with the Copilot CLI: model=${model}, reasoningEffort=${options.modelReasoningEffort || "default"}, trustFolder=${trustFolder}, prompt length: ${cliPrompt.length}`,
     );
@@ -1907,7 +1904,7 @@ export class CopilotExecutor {
       }),
       cwd,
       prompt: cliPrompt,
-      timeoutMs: timeoutMinutes * 60 * 1000,
+      ...(cliTimeout.runMs !== undefined ? { timeoutMs: cliTimeout.runMs } : {}),
     });
 
     if (result.cancelled) {
@@ -1918,7 +1915,7 @@ export class CopilotExecutor {
     }
     if (result.timedOut) {
       throw createPromptBlockedError(
-        messages.copilotCliTimedOut(timeoutMinutes),
+        messages.copilotCliTimedOut(cliTimeout.minutes),
         "copilotCliFailed",
       );
     }

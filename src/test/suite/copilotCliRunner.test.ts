@@ -185,6 +185,7 @@ suite("Copilot CLI runner", () => {
       "copilotScheduler.cliPath",
       "copilotScheduler.cliAllowAllTools",
       "copilotScheduler.cliTimeoutMinutes",
+      "copilotScheduler.cliTimeoutEnabled",
     ]) {
       assert.strictEqual(
         properties[key]?.scope,
@@ -193,6 +194,8 @@ suite("Copilot CLI runner", () => {
       );
     }
     assert.strictEqual(properties["copilotScheduler.cliAllowAllTools"].default, false);
+    assert.strictEqual(properties["copilotScheduler.cliTimeoutEnabled"].default, false);
+    assert.strictEqual(properties["copilotScheduler.cliTimeoutMinutes"].default, 180);
     for (const tool of manifest.contributes.languageModelTools ?? []) {
       assert.ok(
         !JSON.stringify(tool.inputSchema ?? {}).includes("useCopilotCli"),
@@ -212,6 +215,19 @@ suite("Copilot CLI runner", () => {
       timeoutMs: 400,
     });
     assert.strictEqual(result.timedOut, true);
+  });
+
+  test("a run without a timeout is left to finish on its own", async () => {
+    const script = path.join(tmp, "slowish-cli.js");
+    fs.writeFileSync(script, "setTimeout(() => process.exit(0), 700);");
+    const result = await runCopilotCliProcess({
+      executable: process.execPath,
+      args: [script],
+      cwd: tmp,
+      prompt: "hi",
+    });
+    assert.strictEqual(result.timedOut, false);
+    assert.strictEqual(result.exitCode, 0);
   });
 
   test("a missing executable is reported instead of thrown", async () => {

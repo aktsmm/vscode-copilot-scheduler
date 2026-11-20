@@ -2,6 +2,7 @@ import * as assert from "assert";
 import {
   AGENT_HOST_OBSERVATION_CAP_MS,
   resolveAgentHostTimeout,
+  resolveCliTimeout,
 } from "../../agentHostTimeout";
 
 type Config = Parameters<typeof resolveAgentHostTimeout>[0];
@@ -76,5 +77,45 @@ suite("Agent Host timeout settings", () => {
     for (const invalid of [0, -3, Number.NaN, "abc", undefined]) {
       assert.strictEqual(minutes(invalid), 180 * MINUTE, String(invalid));
     }
+  });
+});
+
+suite("Copilot CLI timeout settings", () => {
+  test("is off by default and reports 180 minutes for the message", () => {
+    assert.deepStrictEqual(resolveCliTimeout(configWith({})), {
+      runMs: undefined,
+      minutes: 180,
+    });
+  });
+
+  test("follows the CLI option and keeps a timeout the user set before the option existed", () => {
+    const on = resolveCliTimeout(
+      configWith(
+        { cliTimeoutEnabled: true, cliTimeoutMinutes: 30 },
+        { cliTimeoutEnabled: { globalValue: true } },
+      ),
+    );
+    assert.strictEqual(on.runMs, 30 * MINUTE);
+    const legacy = resolveCliTimeout(
+      configWith({ cliTimeoutMinutes: 60 }, { cliTimeoutMinutes: { globalValue: 60 } }),
+    );
+    assert.strictEqual(legacy.runMs, 60 * MINUTE);
+    const off = resolveCliTimeout(
+      configWith(
+        { cliTimeoutEnabled: false, cliTimeoutMinutes: 60 },
+        { cliTimeoutEnabled: { globalValue: false }, cliTimeoutMinutes: { globalValue: 60 } },
+      ),
+    );
+    assert.strictEqual(off.runMs, undefined);
+  });
+
+  test("does not read the Agent Host settings", () => {
+    const result = resolveCliTimeout(
+      configWith(
+        { agentHostTimeoutEnabled: true, agentHostTimeoutMinutes: 5 },
+        { agentHostTimeoutEnabled: { globalValue: true }, agentHostTimeoutMinutes: { globalValue: 5 } },
+      ),
+    );
+    assert.strictEqual(result.runMs, undefined);
   });
 });
