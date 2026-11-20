@@ -1086,6 +1086,59 @@ suite("Agent Host client", () => {
     }
   });
 
+  test("without a run timeout a long turn outlives the pre-dispatch bound and is never cancelled", async () => {
+    const host = await startFakeHost(tmp, {
+      finish: (send) => {
+        setTimeout(() => send({ type: "chat/turnComplete" }), 400);
+      },
+    });
+    try {
+      const result = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        timeoutMs: undefined,
+        preDispatchTimeoutMs: 100,
+      });
+      assert.ok(result.sessionUri);
+      assert.ok(!host.calls.some(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/turnCancelled",
+      ));
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("without a run timeout a step stuck before dispatch is still abandoned", async () => {
+    const host = await startFakeHost(tmp);
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await assert.rejects(
+        runAgentHostTurn({
+          ...baseRequest(host.endpoint),
+          timeoutMs: undefined,
+          preDispatchTimeoutMs: 100,
+          dispatchGuard: async (dispatch) => { await hold; dispatch(); },
+        }),
+        (error: unknown) =>
+          error instanceof AgentHostError &&
+          error.message === "The Agent Host run timed out before dispatch." &&
+          error.turnOutcome === "unknown",
+      );
+      release();
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      assert.ok(!host.calls.some(
+        (call) =>
+          call.method === "dispatchAction" &&
+          (call.params.action as { type: string }).type === "chat/pendingMessageSet",
+      ));
+    } finally {
+      release();
+      await host.close();
+    }
+  });
+
   test("a guard that skips dispatch fails without sending a turn", async () => {
     const host = await startFakeHost(tmp);
     try {

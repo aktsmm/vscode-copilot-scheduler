@@ -62,7 +62,8 @@ const SUPPORTED_MAJOR = 1;
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const CANCEL_TIMEOUT_MS = 3_000;
-
+/** Bounds the time before a turn is dispatched when no run timeout is set. */
+const PRE_DISPATCH_TIMEOUT_MS = 10 * 60 * 1000;
 /** Shown in the run history when an explicit session location has no single local folder to apply to. */
 export const WORKSPACE_FOLDER_REQUIRED_DETAIL =
   "an explicit session location needs exactly one local folder: use a workspace task, or open a single local folder";
@@ -485,7 +486,13 @@ export interface AgentHostTurnRequest {
   agentUri?: string;
   attachments?: AgentHostAttachment[];
   autoApprove: boolean;
-  timeoutMs: number;
+  /**
+   * Cancel a turn that runs longer than this. Omit to wait without cancelling;
+   * only the time before the message is dispatched stays bounded.
+   */
+  timeoutMs?: number;
+  /** Bounds a stuck step before dispatch when there is no run timeout (default 10 minutes). */
+  preDispatchTimeoutMs?: number;
   /** Reuse this session (a "continue" run) when the host still has it. */
   resume?: AgentHostSessionRef;
   /** Called once the host has accepted the turn, so the session can be shown. */
@@ -1592,6 +1599,8 @@ async function runTurn(
         duration: request.timeoutMs,
       }, CANCEL_TIMEOUT_MS).catch(() => undefined);
     };
+    // Without a run timeout only the time before dispatch stays bounded; once the
+    // message is sent the turn is waited for and never cancelled.
     const timer = setTimeout(() => {
       timedOut = true;
       if (!dispatchStarted) {
@@ -1625,7 +1634,7 @@ async function runTurn(
         removalOrigin = removed.origin;
         void removed.response.catch(() => undefined);
       }
-    }, request.timeoutMs);
+    }, request.timeoutMs ?? request.preDispatchTimeoutMs ?? PRE_DISPATCH_TIMEOUT_MS);
 
     const stopListening = connection.onAction((channel, action, envelope) => {
       if (channel !== ref.chatUri) {
@@ -1777,6 +1786,7 @@ async function runTurn(
       request.dispatchGuard,
       () => {
         dispatchStarted = true;
+        if (request.timeoutMs === undefined) clearTimeout(timer);
         if (request.onInputNeeded) {
           stopInputObservation = observeAgentHostInput(
             connection,

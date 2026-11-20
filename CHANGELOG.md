@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Agent Host runs are no longer cancelled after 60 minutes. The timeout is now a separate setting, `copilotScheduler.agentHostTimeoutEnabled`, and is off by default; `copilotScheduler.agentHostTimeoutMinutes` (default now 180) applies only when it is on. If you had set the minutes yourself and did not set the new option, the timeout stays on with your value. With it off, a run stuck waiting for input or authentication keeps running until you act, and a recurring task skips its later occurrences meanwhile (the input-needed notification still appears). Before a message is sent, a stuck step still stops after 10 minutes, and watching a queued message for input requests ends after 12 hours. The Copilot CLI timeout (`copilotScheduler.cliTimeoutMinutes`) is unchanged.
+
 ## [1.18.0] - 2026-11-20
 
 ### Changed

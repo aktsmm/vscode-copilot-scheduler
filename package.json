@@ -284,9 +284,15 @@
           "default": true,
           "markdownDescription": "%config.agentHostOpenSession%"
         },
+        "copilotScheduler.agentHostTimeoutEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "%config.agentHostTimeoutEnabled%"
+        },
         "copilotScheduler.agentHostTimeoutMinutes": {
           "type": "number",
-          "default": 60,
+          "default": 180,
           "minimum": 1,
           "maximum": 720,
           "scope": "machine",
