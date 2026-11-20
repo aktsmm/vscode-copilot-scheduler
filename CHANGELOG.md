@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The task editor's model list no longer stays on "Default" only when Copilot Chat had not registered its models yet (for example right after startup). While the editor is open and the list could not be loaded, it asks again every 30 seconds, up to five times; the reload button still starts over.
 - Overlapping automatic runs of a recurring task are now allowed by default. A run that is still going no longer makes later occurrences skip, which matters now that timeouts are off by default. Recurring tasks saved without a setting are switched to allowed once (a notice appears after they are saved); there is no record of who had chosen "not allowed" before, so check tasks that must not overlap and turn the option off when editing. Manual runs, one-time tasks and runs in the same chat (which queue) keep their guards.
 
 ## [1.20.0] - 2026-11-20
