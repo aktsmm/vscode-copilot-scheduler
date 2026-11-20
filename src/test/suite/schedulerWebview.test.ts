@@ -2444,6 +2444,22 @@ suite("SchedulerWebview Script Contract Tests", () => {
     ].map((token) => form.indexOf(token));
     assert.ok(ordered.every((position) => position >= 0));
     assert.deepStrictEqual(ordered, [...ordered].sort((a, b) => a - b));
+    // The timeout controls live in Advanced and are wired for labels and the minutes toggle.
+    const advancedStart = form.indexOf('id="advanced-settings"');
+    for (const token of [
+      '<label for="task-timeout-mode">',
+      '<select id="task-timeout-mode" aria-describedby="task-timeout-note">',
+      '<option value="inherit">',
+      '<option value="off">',
+      '<option value="on">',
+      'id="task-timeout-minutes-group" hidden',
+      '<label for="task-timeout-minutes">',
+      'id="task-timeout-minutes" min="1" max="720" step="1"',
+      'id="task-timeout-note"',
+    ]) {
+      assert.ok(form.indexOf(token) > advancedStart, token);
+    }
+    assert.ok(form.indexOf('id="task-timeout-mode"') < form.indexOf('id="chat-session"'));
     const advancedTag = form.match(/<details id="advanced-settings"[^>]*>/)?.[0];
     assert.ok(advancedTag && !/\sopen(?:[=\s>])/.test(advancedTag));
     assert.ok(form.indexOf('id="copilot-cli-configured"') < ordered[8]);

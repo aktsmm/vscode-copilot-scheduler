@@ -1499,34 +1499,19 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize components
   scheduleManager = new ScheduleManager(context);
   if (path.isAbsolute(context.globalStorageUri.fsPath)) {
-    const marker = path.join(context.globalStorageUri.fsPath, "model-fallback-v2-notified");
     // Announce only once the migrated tasks are saved; a failed save migrates
     // again on the next load and announces then.
-    void scheduleManager
-      .whenModelFallbackMigrationSaved()
-      .then((saved) =>
-        saved
-          ? withTaskStoreLock(`${marker}.lock`, async () => {
-              if (fs.existsSync(marker)) return;
-              await writeFileAtomically(marker, "1");
-              void vscode.window.showInformationMessage(messages.modelFallbackMigrated());
-            })
-          : undefined,
-      )
-      .catch(() => logDebug("[CopilotScheduler] Could not record model fallback migration notice."));
-    const overlapMarker = path.join(context.globalStorageUri.fsPath, "overlap-default-v1-notified");
-    void scheduleManager
-      .whenOverlapMigrationSaved()
-      .then((saved) =>
-        saved
-          ? withTaskStoreLock(`${overlapMarker}.lock`, async () => {
-              if (fs.existsSync(overlapMarker)) return;
-              await writeFileAtomically(overlapMarker, "1");
-              void vscode.window.showInformationMessage(messages.overlapDefaultMigrated());
-            })
-          : undefined,
-      )
-      .catch(() => logDebug("[CopilotScheduler] Could not record overlap default notice."));
+    const storageRoot = context.globalStorageUri.fsPath;
+    void announceMigrationOnce(
+      scheduleManager.whenModelFallbackMigrationSaved(),
+      path.join(storageRoot, "model-fallback-v2-notified"),
+      () => messages.modelFallbackMigrated(),
+    );
+    void announceMigrationOnce(
+      scheduleManager.whenOverlapMigrationSaved(),
+      path.join(storageRoot, "overlap-default-v1-notified"),
+      () => messages.overlapDefaultMigrated(),
+    );
   }
   copilotExecutor = new CopilotExecutor();
   CopilotExecutor.configureForExtensionContext(context.globalStorageUri);
@@ -2526,7 +2511,31 @@ async function assertSkillAvailable(
   throw createPromptBlockedError(message, "skillUnavailable");
 }
 
+/**
+ * Shows a one-time notice after a migration was saved. The marker file (taken
+ * under a lock) keeps several windows, and later starts, from repeating it.
+ */
+function announceMigrationOnce(
+  saved: Promise<boolean>,
+  marker: string,
+  message: () => string,
+  show: (text: string) => unknown = (text) => vscode.window.showInformationMessage(text),
+): Promise<void> {
+  return saved
+    .then((wasSaved) =>
+      wasSaved
+        ? withTaskStoreLock(`${marker}.lock`, async () => {
+            if (fs.existsSync(marker)) return;
+            await writeFileAtomically(marker, "1");
+            void show(message());
+          })
+        : undefined,
+    )
+    .catch(() => logDebug("[CopilotScheduler] Could not record a migration notice."));
+}
+
 export const __testOnly = {
+  announceMigrationOnce,
   assertSkillAvailable,
   createAgentHostInputHandler,
   createAgentHostQueueBlockedHandler,
