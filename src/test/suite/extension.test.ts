@@ -1692,6 +1692,51 @@ suite("Execution History Queue Tests", () => {
   });
 });
 
+suite("Migration notices", () => {
+  test("a saved migration is announced once per marker and an unsaved one is not", async () => {
+    const { __testOnly } = await import("../../extension");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-notice-"));
+    try {
+      const shown: string[] = [];
+      const show = (text: string) => { shown.push(text); };
+      const marker = path.join(root, "notified");
+      await __testOnly.announceMigrationOnce(Promise.resolve(false), marker, () => "first", show);
+      assert.deepStrictEqual(shown, []);
+      assert.strictEqual(fs.existsSync(marker), false, "a failed save leaves no marker, so a later load announces");
+      await __testOnly.announceMigrationOnce(Promise.resolve(true), marker, () => "first", show);
+      await __testOnly.announceMigrationOnce(Promise.resolve(true), marker, () => "again", show);
+      assert.deepStrictEqual(shown, ["first"]);
+      // Two windows finishing at once still show the notice once.
+      const other = path.join(root, "concurrent");
+      await Promise.all([
+        __testOnly.announceMigrationOnce(Promise.resolve(true), other, () => "a", show),
+        __testOnly.announceMigrationOnce(Promise.resolve(true), other, () => "b", show),
+      ]);
+      assert.strictEqual(shown.length, 2);
+      // A save that rejects never throws out of the helper.
+      await __testOnly.announceMigrationOnce(Promise.reject(new Error("disk")), path.join(root, "x"), () => "x", show);
+      assert.strictEqual(shown.length, 2);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
+  test("both migrations are announced through the shared helper with their own markers", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "../../../src/extension.ts"), "utf8");
+    for (const token of [
+      "scheduleManager.whenModelFallbackMigrationSaved()",
+      '"model-fallback-v2-notified"',
+      "messages.modelFallbackMigrated()",
+      "scheduleManager.whenOverlapMigrationSaved()",
+      '"overlap-default-v1-notified"',
+      "messages.overlapDefaultMigrated()",
+    ]) {
+      assert.ok(source.includes(token), token);
+    }
+    assert.strictEqual(source.match(/announceMigrationOnce\(\s*scheduleManager\./g)?.length, 2);
+  });
+});
+
 suite("Per-occurrence execution isolation", () => {
   function deferred<T>() {
     let resolve!: (value: T | PromiseLike<T>) => void;
