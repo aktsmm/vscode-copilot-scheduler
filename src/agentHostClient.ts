@@ -44,6 +44,8 @@ export class AgentHostError extends Error {
       "completed" | "queued"
     >,
     readonly rpcCode?: number,
+    /** Set when the run timer, not the Host, ended the wait. */
+    readonly timeout?: "beforeDispatch" | "run",
   ) {
     super(message);
     this.name = "AgentHostError";
@@ -1605,7 +1607,7 @@ async function runTurn(
       timedOut = true;
       if (!dispatchStarted) {
         finish(() =>
-          reject(new AgentHostError("failed", "The Agent Host run timed out before dispatch.", "unknown")),
+          reject(new AgentHostError("failed", "The Agent Host run timed out before dispatch.", "unknown", undefined, "beforeDispatch")),
         );
         return;
       }
@@ -1618,6 +1620,8 @@ async function runTurn(
                 "failed",
                 "The Agent Host run timed out.",
                 "unknown",
+                undefined,
+                "run",
               ),
             ),
           ),

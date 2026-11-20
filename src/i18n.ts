@@ -742,6 +742,19 @@ export const messages = {
       `The Agent Host turn was cancelled.${detail ? ` ${detail}` : ""}`,
       `Agent Host のターンはキャンセルされました。${detail ? ` ${detail}` : ""}`,
     ),
+  agentHostTimedOut: (
+    stage: "beforeDispatch" | "run",
+    minutes: number | undefined,
+  ) =>
+    stage === "beforeDispatch"
+      ? t(
+          "The message was not sent to the Agent Host in time, so the run was abandoned.",
+          "メッセージが時間内に Agent Host へ送られなかったため、実行を中止しました。",
+        )
+      : t(
+          `The run was cancelled after ${minutes ?? "?"} minutes (copilotScheduler.agentHostTimeoutMinutes). Turn off copilotScheduler.agentHostTimeoutEnabled to never cancel a run.`,
+          `実行は ${minutes ?? "?"} 分でキャンセルしました（copilotScheduler.agentHostTimeoutMinutes）。キャンセルしない場合は copilotScheduler.agentHostTimeoutEnabled をオフにしてください。`,
+        ),
   agentHostOutcomeUnknown: (detail: string) =>
     t(
       `The Agent Host turn outcome is unknown and it may still be running. Check Chat and history before retrying.${detail ? ` ${detail}` : ""}`,

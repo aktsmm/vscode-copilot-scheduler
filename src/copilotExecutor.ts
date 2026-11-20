@@ -1619,7 +1619,16 @@ export class CopilotExecutor {
         return decline(error.message);
       }
       const detail = sanitizeAbsolutePathDetails(
-        error instanceof Error ? error.message : "",
+        error instanceof AgentHostError && error.timeout
+          ? messages.agentHostTimedOut(
+              error.timeout,
+              agentHostTimeout.runMs === undefined
+                ? undefined
+                : Math.round(agentHostTimeout.runMs / 60000),
+            )
+          : error instanceof Error
+            ? error.message
+            : "",
         messages.redactedPlaceholder(),
       )
         .replace(/\s+/g, " ")
