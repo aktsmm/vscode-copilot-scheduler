@@ -3,7 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { isPathInsideBaseDir } from "./promptResolver";
-import type { SkillScope, SkillTemplate, TaskSkillRef } from "./types";
+import type { ScheduledTask, SkillScope, SkillTemplate, TaskSkillRef } from "./types";
 
 /** Skill names are lower-case words joined by single hyphens (Agent Skills format). */
 export const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -367,6 +367,105 @@ export async function discoverWorkspaceSkills(): Promise<DiscoveredSkills> {
   return discoverSkills(getCurrentSkillRoots(), {
     workspaceTrusted: vscode.workspace.isTrusted,
   });
+}
+
+export type SkillPromptDiagnostic =
+  | { status: "not_applicable" }
+  | { status: "unknown"; message: string }
+  | { status: "ambiguous"; message: string }
+  | { status: "not_found_in_scanned_roots"; message: string }
+  | { status: "found"; explicitOnly: boolean; userInvocable: boolean; message: string };
+
+export async function diagnoseSkillPrompt(
+  task: Pick<ScheduledTask, "prompt" | "promptSource" | "scope" | "workspacePath">,
+  roots: readonly SkillRoot[] = getCurrentSkillRoots(),
+  workspaceTrusted = vscode.workspace.isTrusted,
+): Promise<SkillPromptDiagnostic> {
+  if (task.promptSource !== "inline") return { status: "not_applicable" };
+  const command = task.prompt.replace(/^\uFEFF/, "").trimStart().match(/^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/)?.[1];
+  if (!command || !isValidSkillName(command)) return { status: "not_applicable" };
+
+  const matches: Array<{ scope: SkillScope; frontmatter: SkillFrontmatter }> = [];
+  let incomplete = false;
+  let taskWorkspaceFound = task.scope !== "workspace";
+  for (const root of roots) {
+    if (root.scope === "workspace") {
+      if (!workspaceTrusted) {
+        incomplete = true;
+        continue;
+      }
+      if (task.scope === "workspace") {
+        if (!task.workspacePath || !root.boundary) {
+          incomplete = true;
+          continue;
+        }
+        const sameFolder = process.platform === "win32"
+          ? path.resolve(task.workspacePath).toLowerCase() === path.resolve(root.boundary).toLowerCase()
+          : path.resolve(task.workspacePath) === path.resolve(root.boundary);
+        if (!sameFolder) continue;
+        taskWorkspaceFound = true;
+      }
+    }
+    try {
+      if (!(await fs.promises.stat(root.dir)).isDirectory()) {
+        incomplete = true;
+        continue;
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        incomplete = true;
+      }
+      continue;
+    }
+    const file = path.join(root.dir, command, "SKILL.md");
+    if (root.boundary && !isPathInsideBaseDir(root.boundary, file)) {
+      incomplete = true;
+      continue;
+    }
+    let handle: fs.promises.FileHandle | undefined;
+    try {
+      handle = await fs.promises.open(file, "r");
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        incomplete = true;
+        continue;
+      }
+      const buffer = Buffer.alloc(Math.min(stat.size, MAX_FRONTMATTER_BYTES));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const frontmatter = parseSkillFrontmatter(buffer.subarray(0, bytesRead).toString("utf8"));
+      if (!frontmatter || frontmatter.name !== command) {
+        incomplete = true;
+        continue;
+      }
+      matches.push({ scope: root.scope, frontmatter });
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        incomplete = true;
+      }
+    } finally {
+      if (handle) await handle.close();
+    }
+  }
+  if (incomplete || !taskWorkspaceFound) {
+    return { status: "unknown", message: "Skill discovery was incomplete; the saved task was not changed." };
+  }
+  const workspace = matches.filter((item) => item.scope === "workspace");
+  const selected = workspace.length ? workspace : matches.filter((item) => item.scope === "user");
+  if (selected.length > 1) {
+    return { status: "ambiguous", message: "Multiple skills match in Scheduler's scanned roots." };
+  }
+  if (!selected.length) {
+    return {
+      status: "not_found_in_scanned_roots",
+      message: "No matching skill was found in Scheduler's scanned roots. It may be a built-in command or available from another location.",
+    };
+  }
+  return {
+    status: "found",
+    explicitOnly: selected[0].frontmatter.disableModelInvocation === true,
+    userInvocable: selected[0].frontmatter.userInvocable !== false,
+    message: "Found in Scheduler's scanned roots; the execution host may use different locations.",
+  };
 }
 
 export type SkillRefCheck =

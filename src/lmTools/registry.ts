@@ -7,18 +7,12 @@ import {
   type ModelSelectionResolver,
   type TargetChatBindingResolver,
 } from "../taskMutationService";
-import { createSchedulerCreateTaskTool } from "./tools/createTask";
-import { createSchedulerDeleteTaskTool } from "./tools/deleteTask";
+import { createSchedulerManageTool } from "./tools/manage";
 import {
   createSchedulerQueryTool,
   type SchedulerCatalogProvider,
 } from "./tools/query";
-import {
-  createSchedulerRunTaskTool,
-  type ManualTaskRunner,
-} from "./tools/runTask";
-import { createSchedulerSetTaskEnabledTool } from "./tools/setTaskEnabled";
-import { createSchedulerUpdateTaskTool } from "./tools/updateTask";
+import type { ManualTaskRunner } from "./tools/runTask";
 
 /**
  * Optional collaborators are injected so this module stays independent of the
@@ -60,25 +54,10 @@ export function registerLmTools(
       createSchedulerQueryTool(scheduleManager, options.catalogProvider),
     ),
     vscode.lm.registerTool(
-      "scheduler_create_task",
-      createSchedulerCreateTaskTool(mutationClient),
-    ),
-    vscode.lm.registerTool(
-      "scheduler_update_task",
-      createSchedulerUpdateTaskTool(mutationClient),
-    ),
-    vscode.lm.registerTool(
-      "scheduler_delete_task",
-      createSchedulerDeleteTaskTool(scheduleManager, mutationClient),
-    ),
-    vscode.lm.registerTool(
-      "scheduler_set_task_enabled",
-      createSchedulerSetTaskEnabledTool(mutationClient),
-    ),
-    vscode.lm.registerTool(
-      "scheduler_run_task",
-      createSchedulerRunTaskTool(
+      "scheduler_manage",
+      createSchedulerManageTool(
         scheduleManager,
+        mutationClient,
         options.runTask ??
           (async () => ({ ok: false, reason: "executorUnavailable" })),
       ),

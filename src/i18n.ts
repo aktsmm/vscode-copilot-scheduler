@@ -63,6 +63,8 @@ export const messages = {
     t(`Task "${name}" disabled`, `タスク「${name}」を無効にしました`),
   taskExecuting: (name: string) =>
     t(`Executing task "${name}"...`, `タスク「${name}」を実行中...`),
+  lmToolInvalidAction: () =>
+    t("Invalid scheduler action", "スケジューラーの操作が無効です"),
   lmToolRunTitle: () => t("Run scheduler task now", "タスクを今すぐ実行"),
   oneTimeDispatchRequiresAgentHost: () =>
     t(

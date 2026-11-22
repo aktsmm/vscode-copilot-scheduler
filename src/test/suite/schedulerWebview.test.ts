@@ -2484,18 +2484,16 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const settings = manifest.contributes.configuration.properties;
     assert.strictEqual(settings["copilotScheduler.showCopilotCliControls"].default, false);
     assert.ok(!Object.hasOwn(settings, "copilotScheduler.maxConcurrentAutomaticRuns"));
-    const create = manifest.contributes.languageModelTools.find(
-      (tool) => tool.name === "scheduler_create_task",
+    const manage = manifest.contributes.languageModelTools.find(
+      (tool) => tool.name === "scheduler_manage",
     );
-    const update = manifest.contributes.languageModelTools.find(
-      (tool) => tool.name === "scheduler_update_task",
-    );
-    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.type, "boolean");
-    assert.strictEqual(create?.inputSchema.properties.allowOverlappingRuns.default, true);
-    const updates = update?.inputSchema.properties.updates.properties;
+    const create = manage?.inputSchema.properties.task.properties;
+    assert.strictEqual(create?.allowOverlappingRuns.type, "boolean");
+    assert.strictEqual(create?.allowOverlappingRuns.default, true);
+    const updates = manage?.inputSchema.properties.updates.properties;
     assert.strictEqual(updates?.allowOverlappingRuns.type, "boolean");
     assert.ok(!Object.hasOwn(updates?.allowOverlappingRuns ?? {}, "default"));
-    assert.ok(!Object.hasOwn(create?.inputSchema.properties ?? {}, "useCopilotCli"));
+    assert.ok(!Object.hasOwn(create ?? {}, "useCopilotCli"));
     assert.ok(!Object.hasOwn(updates ?? {}, "useCopilotCli"));
   });
 

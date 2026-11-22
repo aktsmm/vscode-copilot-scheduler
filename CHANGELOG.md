@@ -5,6 +5,12 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-11-22
+
+### Changed
+
+- **Breaking:** replace the five scheduler write tools (`scheduler_create_task`, `scheduler_update_task`, `scheduler_delete_task`, `scheduler_run_task`, `scheduler_set_task_enabled`) with `scheduler_manage` and an explicit `action`, and retain `scheduler_query`. The old tool IDs are no longer registered, so existing instructions and automations must migrate to the new tool; VS Code approval saved for it may cover every action, including run and delete. Invalid input now names the offending field. Create/update results include bounded skill diagnostics (`skillResolution`). Same change as Stable 1.24.0.
+
 ## [1.23.0] - 2026-11-20
 
 ### Added

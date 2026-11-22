@@ -11,7 +11,7 @@ import {
   shouldUseCustomConfirmation,
 } from "../shared";
 
-interface DeleteTaskToolInput {
+export interface DeleteTaskToolInput {
   id?: string;
 }
 
