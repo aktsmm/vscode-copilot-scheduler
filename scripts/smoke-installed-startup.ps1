@@ -24,6 +24,8 @@ $failures = @()
 New-Item -ItemType Directory -Path $root, "$root\ext", "$root\ws" | Out-Null
 $storage = "$root\user\User\globalStorage\yamapan.copilot-scheduler"
 New-Item -ItemType Directory -Force -Path $storage | Out-Null
+# A Preview build must never edit the real argv.json from this disposable profile.
+Set-Content -LiteralPath "$root\user\User\settings.json" -Value '{ "copilotScheduler.autoEnableProposedApi": false }' -Encoding UTF8
 $now = (Get-Date).ToString('o')
 $tasks = @(
   @{ id = 'legacy-recurring'; name = 'legacy recurring'; prompt = 'hello'; cronExpression = '0 3 * * *'; scope = 'global'; promptSource = 'inline'; enabled = $false; createdAt = $now; updatedAt = $now },
