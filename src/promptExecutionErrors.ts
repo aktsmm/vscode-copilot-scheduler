@@ -10,6 +10,21 @@ import type { AgentHostTurnOutcome } from "./types";
 export const PROMPT_BLOCKED_EXECUTION_ERROR_FLAG =
   "copilotSchedulerPromptBlocked";
 
+const notifiedExecutionErrors = new WeakSet<object>();
+
+export function markExecutionErrorAsUserNotified(error: unknown): void {
+  if (error && typeof error === "object") {
+    notifiedExecutionErrors.add(error);
+  }
+}
+
+export function isExecutionErrorUserNotified(error: unknown): boolean {
+  return !!error &&
+    typeof error === "object" &&
+    (notifiedExecutionErrors.has(error) ||
+      (error as Record<string, unknown>).copilotSchedulerUserNotified === true);
+}
+
 export type PromptBlockedReason =
   | "noPromptPath"
   | "pathUnresolved"

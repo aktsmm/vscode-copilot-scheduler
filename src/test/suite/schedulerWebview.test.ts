@@ -572,6 +572,7 @@ suite("SchedulerWebview Attachment Root Tests", () => {
     };
 
     const snippet = [
+      "function markTaskFormDirty() {}",
       extractFunctionSource(source, "attachmentKey"),
       extractFunctionSource(source, "getAttachmentFileName"),
       extractFunctionSource(source, "announceAttachmentStatus"),
@@ -1679,6 +1680,520 @@ suite("SchedulerWebview Test Prompt Routing Tests", () => {
       sourceContainsToken(clearBlock, "testBtn.disabled = false"),
       "clearTemplateLoading should re-enable testBtn.",
     );
+  });
+});
+
+suite("SchedulerWebview failure recovery draft protection", () => {
+  class TestElement {
+    value = "";
+    parent?: TestElement;
+    children: TestElement[] = [];
+    private readonly listeners = new Map<string, Array<() => void>>();
+
+    set innerHTML(_value: string) { this.children = []; }
+    setAttribute(): void {}
+    appendChild(child: TestElement): void { this.children.push(child); }
+
+    addEventListener(type: string, listener: () => void): void {
+      const current = this.listeners.get(type) ?? [];
+      current.push(listener);
+      this.listeners.set(type, current);
+    }
+
+    fire(type: string): void {
+      for (const listener of this.parent?.listeners.get(type) ?? []) listener();
+      for (const listener of this.listeners.get(type) ?? []) listener();
+    }
+  }
+
+  function createDraftHarness() {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../media/schedulerWebview.js"),
+      "utf8",
+    );
+    const handlerStart = source.indexOf('window.addEventListener("message", function (event) {');
+    const handlerEnd = source.indexOf("  // Initial render", handlerStart);
+    assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+    const latestClick = source.indexOf('loadLatestPromptBtn.addEventListener("click"');
+    const latestBlock = source.lastIndexOf("if (loadLatestPromptBtn) {", latestClick);
+    assert.ok(latestBlock >= 0 && latestClick > latestBlock);
+
+    const form = new TestElement();
+    const prompt = new TestElement();
+    prompt.parent = form;
+    const latest = new TestElement();
+    const modelReset = new TestElement();
+    const friendlyGenerate = new TestElement();
+    const cron = new TestElement();
+    const attachmentList = new TestElement();
+    const api: {
+      posted: Array<Record<string, unknown>>;
+      opened: string[];
+      tabs: string[];
+      errors: string[];
+      receiver?: (event: { data: unknown }) => void;
+      form: TestElement;
+      prompt: TestElement;
+      latest: TestElement;
+      modelReset: TestElement;
+      friendlyGenerate: TestElement;
+      cron: TestElement;
+      attachmentList: TestElement;
+      createElement(): TestElement;
+      preview: { source: string; prompt: string } | null;
+      scope: string;
+    } = {
+      posted: [], opened: [], tabs: [], errors: [],
+      form, prompt, latest, modelReset, friendlyGenerate, cron,
+      attachmentList, createElement: () => new TestElement(),
+      preview: { source: "file", prompt: "file content" },
+      scope: "workspace",
+    };
+
+    const snippets = [
+      `var taskForm = api.form, promptTextInput = api.prompt;
+       var loadLatestPromptBtn = api.latest, modelConfigurationReset = api.modelReset;
+       var friendlyGenerate = api.friendlyGenerate, cronExpression = api.cron;
+       var taskFormDirty = false, taskFormRevision = 0, taskFormGeneration = 0;
+       var formConfirmationSequence = 0, pendingFormConfirmation = null;
+       var promptUserEdited = false, editingTaskId = null;
+       var templateLoadingPath = "", templateRequestSequence = 0, activeTemplateRequestId = 0;
+       var promptEditRevision = 0, templatePromptEditRevision = 0;
+       var templatePromptBaseline = null, pendingSubmit = false, submitBtn = null, testBtn = null;
+       var modelConfigurationState = {}, pendingModelReasoningEffort = "", activeConfigurationModel = null;
+       var attachmentsState = [], maxAttachments = 10;
+       var attachmentList = api.attachmentList, attachmentEmpty = null, addAttachmentBtn = null;
+       var templateSelect = { value: "a.prompt.md" };
+       var document = {
+         querySelector: function() { return { value: "local" }; },
+         getElementById: function(id) { return id === "prompt-text" ? api.prompt : null; },
+         createElement: api.createElement
+       };
+       var strings = { taskFormChangedDuringConfirmation: "stale confirmation",
+         taskFormFileResultOutdated: "stale file result",
+         taskFormSaveInProgress: "saving form", webviewUnknown: "unknown" };
+       var vscode = { postMessage: function(message) { api.posted.push(message); } };
+       var window = {
+         addEventListener: function(_type, listener) { api.receiver = listener; },
+         editTask: function(id) { api.opened.push(id); editingTaskId = id; resetTaskFormTracking(); }
+       };
+       function switchTab(tab) { api.tabs.push(tab); }
+       function showFormError(text) { api.errors.push(text); }
+       function updatePromptFileNotice() {}
+       function getEffectivePromptSource() { return "local"; }
+       function getActivePromptFilePreview() { return api.preview; }
+       function getCurrentScopeValue() { return api.scope; }
+       function announceAttachmentStatus() {}
+       function renderModelConfigurationControls() {}
+       function applyFriendlyCronSelection() { cronExpression.value = "0 * * * *"; return true; }
+       function sanitizeAbsolutePaths(text) { return text; }
+       function clearPendingSubmitState() {}`,
+      ...[
+        "markTaskFormDirty", "resetTaskFormTracking", "requestTaskFormConfirmation",
+        "finishTaskFormConfirmation", "openTaskFromNotification", "attachmentKey",
+        "getAttachmentFileName", "renderAttachments", "addAttachments",
+        "normalizePromptNewlines", "setTemplatePromptBaseline",
+        "syncEditingPromptFromPreview", "setTemplateLoading", "clearTemplateLoading",
+        "requestTemplateLoad",
+      ].map((name) => extractStringAwareFunctionSource(source, name)),
+      ...[
+        "if (taskForm) {",
+        "if (promptTextInput) {",
+        "if (modelConfigurationReset) {",
+        "if (friendlyGenerate) {",
+      ].map((token) => extractBlockFromStartToken(source, token)),
+      extractBlockFromStartToken(
+        source.slice(latestBlock),
+        "if (loadLatestPromptBtn) {",
+      ),
+      source.slice(handlerStart, handlerEnd),
+      `return {
+        receive: function(message) { api.receiver({ data: message }); },
+        setEditing: function(id) { editingTaskId = id; resetTaskFormTracking(); },
+        reset: resetTaskFormTracking,
+        sync: syncEditingPromptFromPreview,
+        load: requestTemplateLoad,
+        clearLoad: clearTemplateLoading,
+        setSaving: function(value) { pendingSubmit = value; },
+        generation: function() { return taskFormGeneration; },
+        activeRequest: function() { return activeTemplateRequestId; },
+        loadingPath: function() { return templateLoadingPath; },
+        baseline: function() { return templatePromptBaseline; },
+        dirty: function() { return taskFormDirty; },
+        attachments: function() { return attachmentsState.slice(); }
+      };`,
+    ].join("\n");
+    const factory = new Function("api", snippets) as (state: typeof api) => {
+      receive(message: Record<string, unknown>): void;
+      setEditing(id: string): void;
+      reset(): void;
+      sync(): void;
+      load(path: string, source: string): void;
+      clearLoad(): void;
+      setSaving(value: boolean): void;
+      generation(): number;
+      activeRequest(): number;
+      loadingPath(): string;
+      baseline(): string | null;
+      dirty(): boolean;
+      attachments(): Array<{ source: string; path: string }>;
+    };
+    return { api, client: factory(api) };
+  }
+
+  test("protects dirty forms across same-task, cancel, acceptance and stale confirmation", () => {
+    const { api, client } = createDraftHarness();
+    client.receive({ type: "editTask", taskId: "first", protectUnsavedForm: true });
+    assert.deepStrictEqual(api.opened, ["first"]);
+    api.form.fire("input");
+    client.receive({ type: "editTask", taskId: "first", protectUnsavedForm: true });
+    assert.deepStrictEqual(api.opened, ["first"]);
+    assert.deepStrictEqual(api.tabs, ["create"]);
+    assert.strictEqual(api.posted.length, 0);
+
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    const cancelled = api.posted.at(-1)!;
+    assert.strictEqual(cancelled.kind, "openTask");
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: cancelled.requestId, confirmed: false });
+    assert.deepStrictEqual(api.opened, ["first"]);
+    assert.strictEqual(client.dirty(), true);
+
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    const outdated = api.posted.at(-1)!;
+    api.form.fire("change");
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: outdated.requestId, confirmed: true });
+    assert.deepStrictEqual(api.opened, ["first"]);
+    assert.deepStrictEqual(api.errors, ["stale confirmation"]);
+
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    const older = api.posted.at(-1)!;
+    client.receive({ type: "editTask", taskId: "third", protectUnsavedForm: true });
+    const current = api.posted.at(-1)!;
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: older.requestId, confirmed: true });
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: current.requestId, confirmed: true });
+    assert.deepStrictEqual(api.opened, ["first", "third"]);
+    assert.strictEqual(client.dirty(), false);
+  });
+
+  test("does not replace another task's form while its save is pending", () => {
+    const { api, client } = createDraftHarness();
+    client.setEditing("first");
+    api.form.fire("input");
+    client.setSaving(true);
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    assert.deepStrictEqual(api.opened, []);
+    assert.strictEqual(api.posted.length, 0);
+    assert.deepStrictEqual(api.errors, ["saving form"]);
+
+    client.setSaving(false);
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    const confirmation = api.posted.at(-1)!;
+    client.setSaving(true);
+    client.receive({
+      type: "confirmUnsavedFormChangesResult",
+      requestId: confirmation.requestId,
+      confirmed: true,
+    });
+    assert.deepStrictEqual(api.opened, []);
+    assert.deepStrictEqual(api.errors, ["saving form", "saving form"]);
+  });
+
+  test("preserves typed prompt edits on preview updates and confirms replacement", () => {
+    const { api, client } = createDraftHarness();
+    client.setEditing("first");
+    api.prompt.value = "initial";
+    client.sync();
+    assert.strictEqual(api.prompt.value, "file content");
+    assert.strictEqual(client.baseline(), "file content");
+
+    api.prompt.value = "my unsaved prompt";
+    api.prompt.fire("input");
+    api.preview = { source: "file", prompt: "new file content" };
+    client.sync();
+    assert.strictEqual(api.prompt.value, "my unsaved prompt");
+    client.receive({ type: "showError", text: "unrelated error" });
+    assert.strictEqual(client.baseline(), null);
+    client.sync();
+    assert.strictEqual(api.prompt.value, "my unsaved prompt");
+    api.latest.fire("click");
+    const cancelled = api.posted.at(-1)!;
+    assert.strictEqual(cancelled.kind, "replacePrompt");
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: cancelled.requestId, confirmed: false });
+    assert.strictEqual(api.prompt.value, "my unsaved prompt");
+
+    api.latest.fire("click");
+    const accepted = api.posted.at(-1)!;
+    api.preview = { source: "file", prompt: "newest file content" };
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: accepted.requestId, confirmed: true });
+    assert.strictEqual(api.prompt.value, "newest file content");
+    assert.strictEqual(client.baseline(), "newest file content");
+    assert.strictEqual(client.dirty(), true);
+    assert.deepStrictEqual(api.errors, ["unrelated error"]);
+
+    api.prompt.value = "another unsaved edit";
+    api.prompt.fire("input");
+    api.latest.fire("click");
+    const unavailable = api.posted.at(-1)!;
+    api.preview = null;
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: unavailable.requestId, confirmed: true });
+    assert.strictEqual(api.prompt.value, "another unsaved edit");
+    assert.deepStrictEqual(api.errors, ["unrelated error", "stale file result"]);
+  });
+
+  test("marks programmatic model, cron and attachment changes as unsaved", () => {
+    const { api, client } = createDraftHarness();
+    for (const control of [api.modelReset, api.friendlyGenerate]) {
+      client.reset();
+      control.fire("click");
+      assert.strictEqual(client.dirty(), true);
+      client.receive({ type: "editTask", taskId: "another", protectUnsavedForm: true });
+      assert.strictEqual(api.posted.at(-1)?.kind, "openTask");
+    }
+    client.reset();
+    client.receive({
+      type: "attachmentsPicked", formGeneration: client.generation(), scope: "workspace",
+      attachments: [{ source: "local", path: "reference.md" }],
+    });
+    assert.strictEqual(client.dirty(), true);
+    assert.deepStrictEqual(client.attachments(), [{ source: "local", path: "reference.md" }]);
+    client.reset();
+    api.attachmentList.children[0].children[1].fire("click");
+    assert.strictEqual(client.dirty(), true);
+    assert.deepStrictEqual(client.attachments(), []);
+  });
+
+  test("rejects stale file successes and failures without corrupting a newer form or request", () => {
+    const { api, client } = createDraftHarness();
+    const oldGeneration = client.generation();
+    client.reset();
+    client.receive({
+      type: "attachmentsPicked", formGeneration: oldGeneration, scope: "workspace",
+      attachments: [{ source: "local", path: "old.md" }],
+    });
+    client.receive({
+      type: "attachmentsPicked", formGeneration: client.generation(), scope: "global",
+      attachments: [{ source: "global", path: "wrong-scope.md" }],
+    });
+    assert.deepStrictEqual(client.attachments(), []);
+    assert.deepStrictEqual(api.errors, ["stale file result", "stale file result"]);
+
+    api.prompt.value = "current draft";
+    client.load("a.prompt.md", "local");
+    const oldRequest = api.posted.at(-1)!;
+    client.load("a.prompt.md", "local");
+    const currentRequest = api.posted.at(-1)!;
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "old",
+      formGeneration: oldRequest.formGeneration, templateRequestId: oldRequest.templateRequestId,
+    });
+    client.receive({
+      type: "showError", text: "old error",
+      formGeneration: oldRequest.formGeneration, templateRequestId: oldRequest.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "current draft");
+    assert.strictEqual(client.loadingPath(), "a.prompt.md");
+    assert.strictEqual(client.activeRequest(), currentRequest.templateRequestId);
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "current",
+      formGeneration: currentRequest.formGeneration, templateRequestId: currentRequest.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "current");
+    assert.strictEqual(client.baseline(), "current");
+    assert.strictEqual(client.loadingPath(), "");
+  });
+
+  test("replacing a form clears an outstanding template load", () => {
+    const { api, client } = createDraftHarness();
+    client.load("a.prompt.md", "local");
+    const previous = api.posted.at(-1)!;
+    assert.strictEqual(client.loadingPath(), "a.prompt.md");
+
+    client.reset();
+    assert.strictEqual(client.loadingPath(), "");
+    assert.strictEqual(client.activeRequest(), 0);
+    api.prompt.value = "new form";
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "old content",
+      formGeneration: previous.formGeneration, templateRequestId: previous.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "new form");
+  });
+
+  test("a template load does not overwrite prompt edits made while it was pending", () => {
+    const { api, client } = createDraftHarness();
+    client.load("a.prompt.md", "local");
+    const request = api.posted.at(-1)!;
+    api.prompt.value = "typed while loading";
+    api.prompt.fire("input");
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "late content",
+      formGeneration: request.formGeneration, templateRequestId: request.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "typed while loading");
+    assert.strictEqual(client.loadingPath(), "");
+    assert.strictEqual(client.activeRequest(), 0);
+    assert.strictEqual(client.dirty(), true);
+    assert.deepStrictEqual(api.errors, ["stale file result"]);
+
+    client.load("a.prompt.md", "local");
+    const next = api.posted.at(-1)!;
+    api.form.fire("input");
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "new content",
+      formGeneration: next.formGeneration, templateRequestId: next.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "new content", "unrelated form edits do not block the load");
+  });
+
+  test("a template load does not overwrite an explicitly selected latest prompt", () => {
+    const { api, client } = createDraftHarness();
+    client.load("a.prompt.md", "local");
+    const request = api.posted.at(-1)!;
+    api.latest.fire("click");
+    assert.strictEqual(api.prompt.value, "file content");
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "late content",
+      formGeneration: request.formGeneration, templateRequestId: request.templateRequestId,
+    });
+    assert.strictEqual(api.prompt.value, "file content");
+    assert.strictEqual(client.loadingPath(), "");
+    assert.deepStrictEqual(api.errors, ["stale file result"]);
+  });
+
+  test("a template result invalidates a pending discard confirmation", () => {
+    const { api, client } = createDraftHarness();
+    client.setEditing("first");
+    api.form.fire("input");
+    client.load("a.prompt.md", "local");
+    const request = api.posted.at(-1)!;
+    client.receive({ type: "editTask", taskId: "second", protectUnsavedForm: true });
+    const confirmation = api.posted.at(-1)!;
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "loaded after confirmation",
+      formGeneration: request.formGeneration, templateRequestId: request.templateRequestId,
+    });
+    client.receive({ type: "confirmUnsavedFormChangesResult", requestId: confirmation.requestId, confirmed: true });
+    assert.strictEqual(api.prompt.value, "loaded after confirmation");
+    assert.deepStrictEqual(api.opened, []);
+    assert.deepStrictEqual(api.errors, ["stale confirmation"]);
+  });
+
+  test("loading equivalent CRLF content does not mark the form dirty", () => {
+    const { api, client } = createDraftHarness();
+    api.prompt.value = "first line\nsecond line";
+    client.load("a.prompt.md", "local");
+    const request = api.posted.at(-1)!;
+    client.receive({
+      type: "promptTemplateLoaded", path: "a.prompt.md", content: "first line\r\nsecond line",
+      formGeneration: request.formGeneration, templateRequestId: request.templateRequestId,
+    });
+    assert.strictEqual(client.dirty(), false);
+  });
+
+  test("native confirmation keeps request identity and ignores a replaced webview", async () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewGeneration: number;
+      postMessage(message: unknown): void;
+      handleMessage(message: unknown): Promise<void>;
+    };
+    const original = {
+      panel: wv.panel,
+      generation: wv.webviewGeneration,
+      post: wv.postMessage,
+      warning: vscode.window.showWarningMessage,
+    };
+    const sent: unknown[] = [];
+    const dialogs: Array<{ text: string; options: { modal: boolean }; action: string }> = [];
+    let response: string | undefined;
+    try {
+      wv.panel = { webview: { postMessage: async () => true } };
+      wv.postMessage = (message) => { sent.push(message); };
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async (text: string, options: { modal: boolean }, action: string) => {
+          dialogs.push({ text, options, action });
+          return response;
+        },
+      });
+      response = messages.actionDiscardAndOpen();
+      await wv.handleMessage({ type: "confirmUnsavedFormChanges", kind: "openTask", requestId: 7 });
+      response = undefined;
+      await wv.handleMessage({ type: "confirmUnsavedFormChanges", kind: "replacePrompt", requestId: 8 });
+      assert.deepStrictEqual(sent, [
+        { type: "confirmUnsavedFormChangesResult", requestId: 7, confirmed: true },
+        { type: "confirmUnsavedFormChangesResult", requestId: 8, confirmed: false },
+      ]);
+      assert.deepStrictEqual(dialogs, [
+        { text: messages.confirmDiscardTaskFormEdits(), options: { modal: true }, action: messages.actionDiscardAndOpen() },
+        { text: messages.confirmReplacePromptEdits(), options: { modal: true }, action: messages.actionReplacePrompt() },
+      ]);
+
+      let finish!: (value: string) => void;
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: () => new Promise<string>((resolve) => { finish = resolve; }),
+      });
+      const pending = wv.handleMessage({ type: "confirmUnsavedFormChanges", kind: "openTask", requestId: 9 });
+      wv.webviewGeneration++;
+      finish(messages.actionDiscardAndOpen());
+      await pending;
+      assert.strictEqual(sent.length, 2);
+    } finally {
+      wv.panel = original.panel;
+      wv.webviewGeneration = original.generation;
+      wv.postMessage = original.post;
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: original.warning });
+    }
+  });
+
+  test("protected edit and attachment results retain their request context in the host", async () => {
+    const wv = SchedulerWebview as unknown as {
+      panel?: WebviewPanelLike;
+      webviewGeneration: number;
+      postMessage(message: unknown): void;
+      handleMessage(message: unknown): Promise<void>;
+      getAttachmentRoots(): unknown[];
+      pickAttachmentsWithQuickPick(): Promise<Array<{ source: string; path: string }>>;
+    };
+    const original = {
+      panel: wv.panel, generation: wv.webviewGeneration, post: wv.postMessage,
+      roots: wv.getAttachmentRoots, pick: wv.pickAttachmentsWithQuickPick,
+    };
+    const sent: unknown[] = [];
+    try {
+      wv.panel = { webview: { postMessage: async () => true } };
+      wv.postMessage = (message) => { sent.push(message); };
+      SchedulerWebview.editTask("task-1", true);
+      assert.deepStrictEqual(sent.shift(), {
+        type: "editTask", taskId: "task-1", protectUnsavedForm: true,
+      });
+
+      wv.getAttachmentRoots = () => [{}];
+      let finish!: (value: Array<{ source: string; path: string }>) => void;
+      wv.pickAttachmentsWithQuickPick = () => new Promise((resolve) => { finish = resolve; });
+      const oldPick = wv.handleMessage({
+        type: "pickAttachments", scope: "workspace", existing: [], formGeneration: 4,
+      });
+      wv.webviewGeneration++;
+      finish([{ source: "local", path: "old.md" }]);
+      await oldPick;
+      assert.deepStrictEqual(sent, []);
+      wv.pickAttachmentsWithQuickPick = async () => [{ source: "local", path: "new.md" }];
+      await wv.handleMessage({
+        type: "pickAttachments", scope: "workspace", existing: [], formGeneration: 5,
+      });
+      assert.deepStrictEqual(sent, [{
+        type: "attachmentsPicked", scope: "workspace", formGeneration: 5,
+        attachments: [{ source: "local", path: "new.md" }],
+      }]);
+    } finally {
+      wv.panel = original.panel;
+      wv.webviewGeneration = original.generation;
+      wv.postMessage = original.post;
+      wv.getAttachmentRoots = original.roots;
+      wv.pickAttachmentsWithQuickPick = original.pick;
+    }
   });
 });
 
@@ -2859,7 +3374,10 @@ suite("SchedulerWebview Script Contract Tests", () => {
     );
     const source = fs.readFileSync(scriptPath, "utf8");
 
-    const submitSource = extractBlockFromStartToken(source, "if (taskForm) {");
+    const submitSource = extractBlockFromStartToken(
+      source,
+      'taskForm.addEventListener("submit", function (e) {',
+    );
 
     const expectedTokens = [
       'getSavedTaskField("chatSession", "default")',
@@ -3377,9 +3895,9 @@ suite("SchedulerWebview Script Contract Tests", () => {
     const expectedTokens = [
       "getActivePromptFilePreview()",
       'preview.source !== "file"',
-      "window.confirm(strings.confirmReplacePromptEdits",
-      "promptTextInput.value = preview.prompt",
-      "setTemplatePromptBaseline(preview.prompt)",
+      'requestTaskFormConfirmation("replacePrompt", applyLatestPrompt)',
+      "promptTextInput.value = latestPreview.prompt",
+      "setTemplatePromptBaseline(latestPreview.prompt)",
     ];
     for (const token of expectedTokens) {
       assert.ok(
@@ -4845,6 +5363,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       var pendingModelReasoningEffort = "";
       var modelSelect = null;
       const rescueFocusFrom = () => {};
+      function markTaskFormDirty() {}
       var strings = { labelInheritModelOptions: "Inherit", labelModelUnavailableSuffix: "Unavailable", labelDynamicModelOptionsBlocked: "Blocked" };
       var modelConfigurationSetup = null;
       ${extractFunctionSource(source, "renderModelConfigurationSetup")}
@@ -5425,6 +5944,7 @@ suite("SchedulerWebview Script Contract Tests", () => {
       var activeConfigurationModel = null;
       var renders = 0;
       function renderModelConfigurationControls() { renders++; }
+      function markTaskFormDirty() {}
       ${extractBlockFromStartToken(source, "if (modelConfigurationReset) {")}
       return { state: () => modelConfigurationState, pending: () => pendingModelReasoningEffort, renders: () => renders };
     `,
@@ -5966,6 +6486,8 @@ suite("SchedulerWebview Template Load Error Feedback Tests", () => {
       loadPromptTemplateContent?: (
         templatePath: string,
         source: "local" | "global",
+        formGeneration?: number,
+        templateRequestId?: number,
       ) => Promise<void>;
     };
 
@@ -5994,13 +6516,17 @@ suite("SchedulerWebview Template Load Error Feedback Tests", () => {
       await wv.loadPromptTemplateContent!(
         "C:\\outside\\not-allowed.md",
         "local",
+        3,
+        42,
       );
 
       const showErrorMessage = (
-        sent as Array<{ type?: unknown; text?: unknown }>
+        sent as Array<{ type?: unknown; text?: unknown; formGeneration?: unknown; templateRequestId?: unknown }>
       ).find((m) => m.type === "showError");
       assert.ok(showErrorMessage);
       assert.strictEqual(showErrorMessage?.text, messages.templateLoadError());
+      assert.strictEqual(showErrorMessage?.formGeneration, 3);
+      assert.strictEqual(showErrorMessage?.templateRequestId, 42);
     } finally {
       wv.panel = originalPanel;
       wv.webviewReady = originalReady;

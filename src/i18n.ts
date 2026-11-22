@@ -145,6 +145,26 @@ export const messages = {
       "Replace your unsaved edits with the latest saved prompt file?",
       "未保存の編集内容を、プロンプトファイルの最新の保存内容で置き換えますか？",
     ),
+  confirmDiscardTaskFormEdits: () =>
+    t(
+      "Discard the unsaved changes in this form and open the task?",
+      "このフォームの未保存の変更を破棄して、タスクを開きますか？",
+    ),
+  taskFormChangedDuringConfirmation: () =>
+    t(
+      "The form changed while confirmation was open. No changes were discarded; please try again.",
+      "確認中にフォームが変更されたため、変更は破棄していません。もう一度操作してください。",
+    ),
+  taskFormSaveInProgress: () =>
+    t(
+      "This task is still being saved. Wait for the save to finish before opening another task.",
+      "タスクの保存中です。保存が完了してから、別のタスクを開いてください。",
+    ),
+  taskFormFileResultOutdated: () =>
+    t(
+      "A file selection or load finished after the form changed and was not applied. Select it again if needed.",
+      "フォーム変更前のファイル選択または読み込み結果は適用しませんでした。必要なら選び直してください。",
+    ),
   executionTriggerAuto: () => t("Auto", "自動"),
   executionTriggerManual: () => t("Manual", "手動"),
   executionHistoryEmpty: () =>
@@ -375,6 +395,29 @@ export const messages = {
   actionDisable: () => t("Disable", "無効化"),
   actionCancel: () => t("Cancel", "キャンセル"),
   actionCopyPrompt: () => t("Copy Prompt", "プロンプトをコピー"),
+  actionOpenTaskSettings: () => t("Open Task Settings", "タスク設定を開く"),
+  actionDiscardAndOpen: () => t("Discard and Open", "破棄して開く"),
+  actionReplacePrompt: () => t("Replace", "置き換える"),
+  taskExecutionWarning: (name: string, warning: string) =>
+    t(`Task "${name}": ${warning}`, `タスク「${name}」: ${warning}`),
+  taskSettingsOpenFailed: () =>
+    t("Could not open task settings.", "タスク設定を開けませんでした。"),
+  promptCopyFailed: () =>
+    t("Could not copy the prompt.", "プロンプトをコピーできませんでした。"),
+  executionWarningFailed: (name?: string, detail?: string) => {
+    const warning = name
+      ? t(
+          `Could not display the failure warning for task "${name}".`,
+          `タスク「${name}」の失敗通知を表示できませんでした。`,
+        )
+      : t(
+          "Could not display the execution failure warning.",
+          "実行失敗の通知を表示できませんでした。",
+        );
+    return detail
+      ? t(`${warning} Details: ${detail}`, `${warning} 詳細: ${detail}`)
+      : warning;
+  },
   actionTestRun: () => t("Test Run", "テスト実行"),
   actionSave: () => t("Update", "更新"),
   actionCreate: () => t("Create", "作成"),

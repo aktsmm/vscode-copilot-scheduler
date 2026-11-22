@@ -8,7 +8,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
-import { notifyInfo } from "./extension";
+import { notifyError, notifyExecutionWarningFailure, notifyInfo } from "./extension";
 import { chooseChatFallbackModel, normalizeModelFallbackPolicy } from "./modelFallback";
 import type {
   AgentInfo,
@@ -70,7 +70,9 @@ import {
 import {
   createPromptBlockedError,
   isAgentHostContextBudgetFailure,
+  isExecutionErrorUserNotified,
   isPromptBlockedError,
+  markExecutionErrorAsUserNotified,
 } from "./promptExecutionErrors";
 import {
   areModelSelectionsEqual,
@@ -749,6 +751,7 @@ export class CopilotExecutor {
       return this.warnAndThrow(
         createPromptBlockedError(messages.agentHostWorkspaceModeInvalid(), "agentHostUnavailable"),
         processedPrompt,
+        options,
       );
     }
 
@@ -759,6 +762,7 @@ export class CopilotExecutor {
           "agentHostUnavailable",
         ),
         processedPrompt,
+        options,
       );
     }
 
@@ -768,6 +772,7 @@ export class CopilotExecutor {
         return this.warnAndThrow(
           createPromptBlockedError(messages.oneTimeDispatchRequiresAgentHost(), "agentHostUnavailable"),
           processedPrompt,
+          options,
         );
       }
       return this.executePromptViaCopilotCli(processedPrompt, options);
@@ -804,6 +809,7 @@ export class CopilotExecutor {
           "agentHostUnavailable",
         ),
         routing.legacyPrompt,
+        options,
       );
     }
     const chatSession = resolveChatSessionBehavior(
@@ -829,101 +835,114 @@ export class CopilotExecutor {
       return this.warnAndThrow(
         createPromptBlockedError(messages.oneTimeDispatchRequiresAgentHost(), "agentHostUnavailable"),
         routing.legacyPrompt,
+        options,
       );
     }
     let requestedModel: NormalizedModelSelection;
+    let resolved: ResolvedModelSelectionResult;
     try {
-      requestedModel = normalizeModelSelection(options);
-    } catch {
-      throw createPromptBlockedError(
-        messages.dynamicConfigurationUnavailable(),
-        "modelConfigurationUnavailable",
-      );
-    }
-    let resolved = await CopilotExecutor.resolveRequestedModelSelection(
-      requestedModel,
-      options?.modelFallback === true,
-      options?.modelFallbackPolicy,
-    );
-    if (resolved.fallback) {
-      logDebug(
-        `[CopilotScheduler] Model fallback applied: ${resolved.fallback.from} -> ${resolved.fallback.to}`,
-      );
-    }
-    if (resolved.selection.modelConfiguration !== undefined) {
-      if (resolved.selection.modelReasoningEffort) {
+      try {
+        requestedModel = normalizeModelSelection(options);
+      } catch {
         throw createPromptBlockedError(
           messages.dynamicConfigurationUnavailable(),
           "modelConfigurationUnavailable",
         );
       }
-      if (Object.keys(resolved.selection.modelConfiguration).length > 0) {
-        if (!resolved.matched)
-          throw createPromptBlockedError(
-            messages.dynamicConfigurationUnavailable(),
-            "modelConfigurationUnavailable",
-          );
-        try {
-          validateModelConfiguration(
-            resolved.matched,
-            resolved.selection.modelConfiguration,
-          );
-        } catch {
+      resolved = await CopilotExecutor.resolveRequestedModelSelection(
+        requestedModel,
+        options?.modelFallback === true,
+        options?.modelFallbackPolicy,
+      );
+      if (resolved.fallback) {
+        logDebug(
+          `[CopilotScheduler] Model fallback applied: ${resolved.fallback.from} -> ${resolved.fallback.to}`,
+        );
+      }
+      if (resolved.selection.modelConfiguration !== undefined) {
+        if (resolved.selection.modelReasoningEffort) {
           throw createPromptBlockedError(
             messages.dynamicConfigurationUnavailable(),
             "modelConfigurationUnavailable",
           );
         }
-        const participant = /^(@[^\s]+)(?:\s|$)/u.exec(
-          routing.chatOpenPrompt.trim(),
-        )?.[1];
-        if (
-          !hasSystemMessageDeclaration() ||
-          ((!participant ||
-            PARTICIPANT_STYLE_AGENTS.has(participant.toLowerCase())) &&
-            !supportsSystemMessageForwarding())
-        ) {
-          throw createPromptBlockedError(
-            !hasSystemMessageDeclaration()
-              ? messages.detailedOptionsRequirePreview()
-              : messages.dynamicConfigurationSystemMessagesUnsupported(),
-            "modelConfigurationUnavailable",
-          );
-        }
-        try {
-          const configured = await resolveConfiguredTaskModel(
-            resolved.matched,
-            resolved.selection.modelConfiguration,
-          );
-          resolved = {
-            selection: {
-              ...modelInfoToSelection(configured),
-              modelConfiguration: resolved.selection.modelConfiguration,
-            },
-            matched: configured,
-          };
-        } catch {
-          throw createPromptBlockedError(
-            messages.dynamicConfigurationExecutionBlocked(),
-            "modelConfigurationUnavailable",
-          );
+        if (Object.keys(resolved.selection.modelConfiguration).length > 0) {
+          if (!resolved.matched)
+            throw createPromptBlockedError(
+              messages.dynamicConfigurationUnavailable(),
+              "modelConfigurationUnavailable",
+            );
+          try {
+            validateModelConfiguration(
+              resolved.matched,
+              resolved.selection.modelConfiguration,
+            );
+          } catch {
+            throw createPromptBlockedError(
+              messages.dynamicConfigurationUnavailable(),
+              "modelConfigurationUnavailable",
+            );
+          }
+          const participant = /^(@[^\s]+)(?:\s|$)/u.exec(
+            routing.chatOpenPrompt.trim(),
+          )?.[1];
+          if (
+            !hasSystemMessageDeclaration() ||
+            ((!participant ||
+              PARTICIPANT_STYLE_AGENTS.has(participant.toLowerCase())) &&
+              !supportsSystemMessageForwarding())
+          ) {
+            throw createPromptBlockedError(
+              !hasSystemMessageDeclaration()
+                ? messages.detailedOptionsRequirePreview()
+                : messages.dynamicConfigurationSystemMessagesUnsupported(),
+              "modelConfigurationUnavailable",
+            );
+          }
+          try {
+            const configured = await resolveConfiguredTaskModel(
+              resolved.matched,
+              resolved.selection.modelConfiguration,
+            );
+            resolved = {
+              selection: {
+                ...modelInfoToSelection(configured),
+                modelConfiguration: resolved.selection.modelConfiguration,
+              },
+              matched: configured,
+            };
+          } catch {
+            throw createPromptBlockedError(
+              messages.dynamicConfigurationExecutionBlocked(),
+              "modelConfigurationUnavailable",
+            );
+          }
         }
       }
-    }
 
-    if (!areModelSelectionsEqual(requestedModel, resolved.selection)) {
-      logDebug(
-        `[CopilotScheduler] Resolved model selection to current environment: ${formatModelSelectionForLog(resolved.selection)}`,
-      );
-    }
+      if (!areModelSelectionsEqual(requestedModel, resolved.selection)) {
+        logDebug(
+          `[CopilotScheduler] Resolved model selection to current environment: ${formatModelSelectionForLog(resolved.selection)}`,
+        );
+      }
 
-    if (
-      resolved.selection.modelConfiguration === undefined &&
-      resolved.selection.modelReasoningEffort
-    ) {
-      await this.syncExperimentalModelQuality(
-        resolved.selection,
-        resolved.matched,
+      if (
+        resolved.selection.modelConfiguration === undefined &&
+        resolved.selection.modelReasoningEffort
+      ) {
+        await this.syncExperimentalModelQuality(
+          resolved.selection,
+          resolved.matched,
+        );
+      }
+    } catch (error) {
+      return this.warnAndThrow(
+        error,
+        routing.legacyPrompt,
+        options,
+        isPromptBlockedError(error) && error instanceof Error
+          ? error.message
+          : messages.autoExecuteFailed(),
       );
     }
 
@@ -1008,6 +1027,7 @@ export class CopilotExecutor {
       return this.warnAndThrow(
         error,
         routing.legacyPrompt,
+        options,
         isPromptBlockedError(error) && error instanceof Error
           ? error.message
           : messages.autoExecuteFailed(),
@@ -1069,6 +1089,7 @@ export class CopilotExecutor {
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
+          options,
         );
       }
       return { fallbackReason: detail };
@@ -1092,6 +1113,7 @@ export class CopilotExecutor {
           "modelConfigurationUnavailable",
         ),
         routing.legacyPrompt,
+        options,
       );
     }
     const hasSelector = hasModelSelection({
@@ -1108,6 +1130,7 @@ export class CopilotExecutor {
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
+          options,
         );
       }
       hostModelIdExplicit = !!selection.agentHostModelId;
@@ -1125,6 +1148,7 @@ export class CopilotExecutor {
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
+          options,
         );
       }
       modelId = selection.agentHostModelId ?? selection.model?.trim();
@@ -1593,7 +1617,7 @@ export class CopilotExecutor {
         );
       }
       if (isPromptBlockedError(error)) {
-        return this.warnAndThrow(error, routing.legacyPrompt);
+        return this.warnAndThrow(error, routing.legacyPrompt, options);
       }
       if (error instanceof AgentHostError && error.kind === "workspaceMode") {
         return this.warnAndThrow(
@@ -1604,6 +1628,7 @@ export class CopilotExecutor {
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
+          options,
         );
       }
       if (error instanceof AgentHostError && error.kind === "modelIdentity") {
@@ -1613,6 +1638,7 @@ export class CopilotExecutor {
             "agentHostUnavailable",
           ),
           routing.legacyPrompt,
+          options,
         );
       }
       if (error instanceof AgentHostError && error.kind !== "failed") {
@@ -1652,6 +1678,7 @@ export class CopilotExecutor {
           turnOutcome,
         ),
         routing.legacyPrompt,
+        options,
       );
     }
   }
@@ -1775,35 +1802,70 @@ export class CopilotExecutor {
   private warnAndThrow(
     error: unknown,
     promptForCopy: string,
+    task?: Pick<ExecuteOptions, "taskId" | "taskName">,
     warning?: string,
   ): never {
+    const taskId = task?.taskId;
+    const propagatedError =
+      error !== null && typeof error === "object"
+        ? error
+        : Object.assign(new Error(String(error ?? "")), { cause: error });
+    if (isExecutionErrorUserNotified(propagatedError)) {
+      throw propagatedError;
+    }
+    const detail = warning ??
+      (error instanceof Error ? error.message : messages.autoExecuteFailed());
+    const taskName = task?.taskName?.replace(/[\r\n]+/g, " ").trim();
     try {
-      void Promise.resolve(
-        vscode.window.showWarningMessage(
-          warning ?? (error instanceof Error ? error.message : messages.autoExecuteFailed()),
-          messages.actionCopyPrompt(),
-          messages.actionCancel(),
-        ),
-      )
+      const notification = vscode.window.showWarningMessage(
+        taskName ? messages.taskExecutionWarning(taskName, detail) : detail,
+        ...(taskId ? [messages.actionOpenTaskSettings()] : []),
+        messages.actionCopyPrompt(),
+        messages.actionCancel(),
+      );
+      markExecutionErrorAsUserNotified(propagatedError);
+      void Promise.resolve(notification)
         .then(async (action) => {
-          if (action === messages.actionCopyPrompt()) {
-            await vscode.env.clipboard.writeText(promptForCopy);
-            notifyInfo(messages.promptCopied());
+          try {
+            if (taskId && action === messages.actionOpenTaskSettings()) {
+              await vscode.commands.executeCommand(
+                "copilotScheduler.editTask",
+                taskId,
+                true,
+              );
+            } else if (action === messages.actionCopyPrompt()) {
+              await vscode.env.clipboard.writeText(promptForCopy);
+              notifyInfo(messages.promptCopied());
+            }
+          } catch (actionError) {
+            logError(
+              "[CopilotScheduler] Execution warning action failed:",
+              toSafeErrorDetails(actionError),
+            );
+            notifyError(
+              action === messages.actionOpenTaskSettings()
+                ? messages.taskSettingsOpenFailed()
+                : messages.promptCopyFailed(),
+            );
           }
         })
-        .catch((notificationError: unknown) =>
+        .catch((notificationError: unknown) => {
           logError(
             "[CopilotScheduler] Execution warning failed:",
             toSafeErrorDetails(notificationError),
-          ),
-        );
+          );
+          notifyExecutionWarningFailure(taskName, detail);
+        });
     } catch (notificationError) {
       logError(
         "[CopilotScheduler] Execution warning failed:",
         toSafeErrorDetails(notificationError),
       );
+      if (notifyExecutionWarningFailure(taskName, detail)) {
+        markExecutionErrorAsUserNotified(propagatedError);
+      }
     }
-    throw error;
+    throw propagatedError;
   }
 
   /**
@@ -1821,6 +1883,7 @@ export class CopilotExecutor {
       return this.warnAndThrow(
         error,
         prompt,
+        options,
         isPromptBlockedError(error) && error instanceof Error
           ? error.message
           : messages.autoExecuteFailed(),

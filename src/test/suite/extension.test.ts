@@ -18,6 +18,9 @@ import type {
   ScheduledTask,
 } from "../../types";
 import { runSharedSanitizerCases } from "./helpers/sanitizerAssertions";
+import { ScheduleManager } from "../../scheduleManager";
+import { SchedulerWebview } from "../../schedulerWebview";
+import { ScheduledTaskItem } from "../../treeProvider";
 
 function findMatchingBraceEnd(source: string, braceStart: number): number {
   let depth = 0;
@@ -152,6 +155,69 @@ function extractBlockFromStartToken(
 }
 
 suite("Extension Test Suite", () => {
+  test("failure task settings opens the exact saved ID and rejects deleted tasks", async () => {
+    await vscode.extensions.getExtension("yamapan.copilot-scheduler")!.activate();
+    const task: ScheduledTask = {
+      id: "failure-settings-target",
+      name: "Synthetic task",
+      prompt: "Do not dispatch",
+      promptSource: "inline",
+      scope: "global",
+      cronExpression: "0 9 * * *",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const originals = {
+      getAllTasks: ScheduleManager.prototype.getAllTasks,
+      show: SchedulerWebview.show,
+      editTask: SchedulerWebview.editTask,
+      quickPick: vscode.window.showQuickPick,
+      error: vscode.window.showErrorMessage,
+    };
+    const opened: Array<{ id: string; protect: boolean | undefined }> = [];
+    const errors: string[] = [];
+    let shown = 0;
+    let picks = 0;
+    ScheduleManager.prototype.getAllTasks = () => [task];
+    SchedulerWebview.show = async () => { shown++; };
+    SchedulerWebview.editTask = (id, protect) => {
+      if (id) opened.push({ id, protect });
+    };
+    Object.defineProperty(vscode.window, "showQuickPick", {
+      configurable: true,
+      value: async () => { picks++; return { id: task.id }; },
+    });
+    Object.defineProperty(vscode.window, "showErrorMessage", {
+      configurable: true,
+      value: async (message: string) => { errors.push(message); },
+    });
+    try {
+      await vscode.commands.executeCommand("copilotScheduler.editTask", task.id, true);
+      assert.deepStrictEqual(opened, [{ id: task.id, protect: true }]);
+      assert.strictEqual(picks, 0);
+      await vscode.commands.executeCommand("copilotScheduler.editTask", new ScheduledTaskItem(task, true));
+      await vscode.commands.executeCommand("copilotScheduler.editTask");
+      assert.deepStrictEqual(opened, [
+        { id: task.id, protect: true },
+        { id: task.id, protect: false },
+        { id: task.id, protect: false },
+      ]);
+      assert.strictEqual(picks, 1);
+      await vscode.commands.executeCommand("copilotScheduler.editTask", "deleted-task");
+      await vscode.commands.executeCommand("copilotScheduler.editTask", "");
+      assert.strictEqual(shown, 3);
+      assert.strictEqual(picks, 1);
+      assert.deepStrictEqual(errors, [messages.taskNotFound(), messages.taskNotFound()]);
+    } finally {
+      ScheduleManager.prototype.getAllTasks = originals.getAllTasks;
+      SchedulerWebview.show = originals.show;
+      SchedulerWebview.editTask = originals.editTask;
+      Object.defineProperty(vscode.window, "showQuickPick", { configurable: true, value: originals.quickPick });
+      Object.defineProperty(vscode.window, "showErrorMessage", { configurable: true, value: originals.error });
+    }
+  });
+
   test("Extension should be present", () => {
     assert.ok(vscode.extensions.getExtension("yamapan.copilot-scheduler"));
   });
@@ -2024,6 +2090,8 @@ suite("Per-occurrence execution isolation", () => {
         _prompt: string,
         executionOptions: ExecuteOptions,
       ) => {
+        assert.strictEqual(executionOptions.taskId, "occurrence-option");
+        assert.strictEqual(executionOptions.taskName, "Isolation test");
         options.push(executionOptions);
         return {};
       },
@@ -2839,20 +2907,453 @@ suite("Webview Test Prompt Wiring Tests", () => {
     }
   });
 
-  test("a blocked attachment warns once per attachment set and clears after a successful run", () => {
-    const sourcePath = path.resolve(__dirname, "../../../src/extension.ts");
-    const source = fs.readFileSync(sourcePath, "utf8");
+  test("attachment failure warning names the task, opens its protected editor, and avoids duplicate manual errors", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { createPromptBlockedError, isExecutionErrorUserNotified } =
+      await import("../../promptExecutionErrors");
+    const task: ScheduledTask = {
+      id: "attachment-warning-task",
+      name: "Synthetic attachment task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const original = {
+      warning: vscode.window.showWarningMessage,
+      command: vscode.commands.executeCommand,
+    };
+    const warnings: Array<{ text: string; actions: string[] }> = [];
+    const opened: unknown[][] = [];
+    let openResolved!: () => void;
+    const openedOnce = new Promise<void>((resolve) => { openResolved = resolve; });
+    const notifications = __testOnly.preflightBlockNotifications;
+    try {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async (text: string, ...actions: string[]) => {
+          warnings.push({ text, actions });
+          return messages.actionOpenTaskSettings();
+        },
+      });
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: async (...args: unknown[]) => { opened.push(args); openResolved(); },
+      });
+      const failed = async () => {
+        const error = createPromptBlockedError("attachment missing", "attachmentMissing");
+        await assert.rejects(
+          __testOnly.executeTask(task, "manual", undefined, {
+            notifyInfo: () => {},
+            executePrompt: async () => { throw error; },
+          }),
+          (caught: unknown) => caught === error,
+        );
+        return error;
+      };
+      const first = await failed();
+      assert.strictEqual(isExecutionErrorUserNotified(first), true);
+      assert.deepStrictEqual(warnings, [{
+        text: messages.taskExecutionWarning(task.name, "attachment missing"),
+        actions: [messages.actionOpenTaskSettings()],
+      }]);
+      await openedOnce;
+      assert.deepStrictEqual(opened, [["copilotScheduler.editTask", task.id, true]]);
+      const second = await failed();
+      assert.strictEqual(isExecutionErrorUserNotified(second), true);
+      assert.strictEqual(warnings.length, 2, "each manual attempt needs its recovery action");
 
-    assert.ok(
-      /getPromptBlockedReason\(error\) === "attachmentMissing" &&\s*attachmentBlockNotifications\.get\(task\.id\) !== attachmentSignature\s*\)\s*\{\s*attachmentBlockNotifications\.set\(task\.id, attachmentSignature\);\s*void vscode\.window\.showWarningMessage\(/.test(
-        source,
-      ),
-      "the attachment warning must be keyed by the failing attachment set so a scheduled task cannot warn on every tick",
-    );
-    assert.ok(
-      source.includes("attachmentBlockNotifications.delete(task.id);"),
-      "a successful run must clear the notification so a later block warns again",
-    );
+      await __testOnly.executeTask(task, "manual", undefined, {
+        notifyInfo: () => {},
+        executePrompt: async () => ({}),
+      });
+      await failed();
+      assert.strictEqual(warnings.length, 3);
+    } finally {
+      notifications.delete(task.id);
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: original.warning });
+      Object.defineProperty(vscode.commands, "executeCommand", { configurable: true, value: original.command });
+    }
+  });
+
+  test("scheduled attachment warnings repeat when the missing files change", async () => {
+    const { __testOnly } = await import("../../extension");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduler-attachment-warning-"));
+    const task: ScheduledTask = {
+      id: "attachment-warning-changed",
+      name: "Synthetic attachment task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "workspace",
+      workspacePath: root,
+      promptSource: "inline",
+      attachments: [
+        { source: "local", path: "first.md" },
+        { source: "local", path: "second.md" },
+      ],
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const originalWarning = vscode.window.showWarningMessage;
+    const warnings: string[] = [];
+    try {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async (text: string) => { warnings.push(text); return undefined; },
+      });
+      const failed = () => assert.rejects(__testOnly.executeTask(task, "auto", undefined, {
+        notifyInfo: () => {},
+        recordHistory: async () => {},
+        executePrompt: async () => { assert.fail("missing attachments must block dispatch"); },
+      }));
+      await failed();
+      await failed();
+      assert.strictEqual(warnings.length, 1);
+      assert.ok(warnings[0].includes("first.md") && warnings[0].includes("second.md"));
+
+      fs.writeFileSync(path.join(root, "first.md"), "synthetic");
+      await failed();
+      await failed();
+      assert.strictEqual(warnings.length, 2);
+      assert.ok(warnings[1].includes("second.md") && !warnings[1].includes("first.md"));
+    } finally {
+      __testOnly.preflightBlockNotifications.delete(task.id);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: originalWarning,
+      });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a synchronous preflight warning failure is reported and does not suppress retry", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { createPromptBlockedError } = await import("../../promptExecutionErrors");
+    const task: ScheduledTask = {
+      id: "sync-warning-failure",
+      name: "Synthetic attachment task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const original = {
+      warning: vscode.window.showWarningMessage,
+      error: vscode.window.showErrorMessage,
+      config: vscode.workspace.getConfiguration,
+    };
+    const errors: string[] = [];
+    let warningCount = 0;
+    try {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: (section?: string) => {
+          const config = original.config.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get: (key: string, fallback?: unknown) =>
+              key === "showNotifications" ? true
+                : key === "notificationMode" ? "sound"
+                  : config.get(key, fallback),
+          };
+        },
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: () => {
+          if (++warningCount === 1) throw new Error("warning unavailable");
+          return Promise.resolve(undefined);
+        },
+      });
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true,
+        value: async (message: string) => { errors.push(message); },
+      });
+      const failed = async () => {
+        const error = createPromptBlockedError("attachment missing", "attachmentMissing");
+        await assert.rejects(
+          __testOnly.executeTask(task, "manual", undefined, {
+            notifyInfo: () => {},
+            executePrompt: async () => { throw error; },
+          }),
+          (caught: unknown) => caught === error,
+        );
+      };
+      await failed();
+      assert.deepStrictEqual(errors, [messages.executionWarningFailed(task.name, "attachment missing")]);
+      assert.strictEqual(__testOnly.preflightBlockNotifications.has(task.id), false);
+      await failed();
+      assert.strictEqual(warningCount, 2);
+    } finally {
+      __testOnly.preflightBlockNotifications.delete(task.id);
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: original.warning });
+      Object.defineProperty(vscode.window, "showErrorMessage", { configurable: true, value: original.error });
+      Object.defineProperty(vscode.workspace, "getConfiguration", { configurable: true, value: original.config });
+    }
+  });
+
+  test("file and skill preflight blocks offer recovery without repeating scheduled warnings", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { isExecutionErrorUserNotified } = await import("../../promptExecutionErrors");
+    const originalWarning = vscode.window.showWarningMessage;
+    const configDescriptor = Object.getOwnPropertyDescriptor(vscode.workspace, "getConfiguration");
+    const originalGetConfiguration = vscode.workspace.getConfiguration;
+    const warnings: Array<{ text: string; actions: string[] }> = [];
+    const base: ScheduledTask = {
+      id: "preflight-block",
+      name: "Synthetic blocked task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const cases = [
+      {
+        task: {
+          ...base,
+          id: "preflight-block-file",
+          promptSource: "local" as const,
+          promptPath: ".github\\prompts\\missing.md",
+        },
+        resolution: {
+          text: base.prompt,
+          source: "snapshotFallback" as const,
+          fallbackReason: "readFailed" as const,
+          hash: "synthetic",
+          resolvedAt: new Date().toISOString(),
+          candidateCount: 1,
+        },
+        reason: "readFailed",
+      },
+      {
+        task: {
+          ...base,
+          id: "preflight-block-path",
+          promptSource: "local" as const,
+          promptPath: ".github\\prompts\\unresolved.md",
+        },
+        resolution: {
+          text: base.prompt,
+          source: "snapshotFallback" as const,
+          fallbackReason: "pathUnresolved" as const,
+          hash: "synthetic",
+          resolvedAt: new Date().toISOString(),
+          candidateCount: 0,
+        },
+        reason: "pathUnresolved",
+      },
+      {
+        task: {
+          ...base,
+          id: "preflight-block-skill",
+          prompt: "/zz-scheduler-test-missing-skill go",
+          skillRef: {
+            name: "zz-scheduler-test-missing-skill",
+            scope: "user" as const,
+            root: ".copilot/skills",
+          },
+        },
+        resolution: {
+          text: "/zz-scheduler-test-missing-skill go",
+          source: "inline" as const,
+          hash: "synthetic",
+          resolvedAt: new Date().toISOString(),
+          candidateCount: 0,
+        },
+        reason: "skillUnavailable",
+      },
+    ];
+    try {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async (text: string, ...actions: string[]) => {
+          warnings.push({ text, actions });
+          return undefined;
+        },
+      });
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: (...args: Parameters<typeof vscode.workspace.getConfiguration>) => {
+          const config = originalGetConfiguration.apply(vscode.workspace, args);
+          return {
+            ...config,
+            get<T>(name: string, fallback?: T): T {
+              return name === "promptFileFallback"
+                ? ("blockAlways" as T)
+                : config.get<T>(name, fallback as T);
+            },
+          } as vscode.WorkspaceConfiguration;
+        },
+      });
+      for (const { task, resolution, reason } of cases) {
+        const deps = {
+          resolvePromptSnapshot: async () => resolution,
+          executePrompt: async () => {
+            assert.fail("a preflight-blocked task must not be sent");
+          },
+          recordHistory: async () => {},
+          notifyInfo: () => {},
+        };
+        const firstWarning = warnings.length;
+        await assert.rejects(
+          __testOnly.executeTask(task, "auto", undefined, deps),
+          (error: unknown) =>
+            isExecutionErrorUserNotified(error) &&
+            (error as Record<string, unknown>).copilotSchedulerPromptBlocked === reason,
+        );
+        assert.ok(warnings[firstWarning].text.includes(task.name));
+        assert.deepStrictEqual(warnings[firstWarning].actions, [
+          messages.actionOpenTaskSettings(),
+        ]);
+        await assert.rejects(
+          __testOnly.executeTask(task, "auto", undefined, deps),
+          (error: unknown) => !isExecutionErrorUserNotified(error),
+        );
+        assert.strictEqual(warnings.length, firstWarning + 1);
+        await assert.rejects(
+          __testOnly.executeTask(task, "manual", undefined, deps),
+          (error: unknown) => isExecutionErrorUserNotified(error),
+        );
+        assert.strictEqual(warnings.length, firstWarning + 2);
+      }
+    } finally {
+      for (const { task } of cases) {
+        __testOnly.preflightBlockNotifications.delete(task.id);
+      }
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: originalWarning,
+      });
+      if (configDescriptor) {
+        Object.defineProperty(vscode.workspace, "getConfiguration", configDescriptor);
+      } else {
+        Reflect.deleteProperty(vscode.workspace, "getConfiguration");
+      }
+    }
+  });
+
+  test("a late attachment warning failure cannot clear a newer warning", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { createPromptBlockedError } = await import("../../promptExecutionErrors");
+    const task: ScheduledTask = {
+      id: "attachment-warning-race",
+      name: "Synthetic attachment task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const warning = vscode.window.showWarningMessage;
+    const errorMessage = vscode.window.showErrorMessage;
+    let warningCount = 0;
+    let rejectFirst!: (error: Error) => void;
+    try {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: () => {
+          warningCount++;
+          return new Promise<string | undefined>((_resolve, reject) => {
+            if (warningCount === 1) rejectFirst = reject;
+          });
+        },
+      });
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true, value: async () => undefined,
+      });
+      const failed = async (target: ScheduledTask = task) => {
+        await assert.rejects(__testOnly.executeTask(target, "auto", undefined, {
+          notifyInfo: () => {},
+          recordHistory: async () => {},
+          executePrompt: async () => {
+            throw createPromptBlockedError("attachment missing", "attachmentMissing");
+          },
+        }));
+      };
+      await failed();
+      await __testOnly.executeTask(task, "auto", undefined, {
+        notifyInfo: () => {},
+        recordHistory: async () => {},
+        executePrompt: async () => ({}),
+      });
+      await failed();
+      assert.strictEqual(warningCount, 2);
+      rejectFirst(new Error("first warning failed"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await failed();
+      assert.strictEqual(warningCount, 2);
+      await failed({
+        ...task,
+        attachments: [{ source: "global", path: "synthetic-missing-attachment.md" }],
+      });
+      assert.strictEqual(warningCount, 3, "a changed attachment set warns again");
+    } finally {
+      __testOnly.preflightBlockNotifications.delete(task.id);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: warning,
+      });
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true, value: errorMessage,
+      });
+    }
+  });
+
+  test("an unrelated failure re-arms the preflight warning for a block that returns", async () => {
+    const { __testOnly } = await import("../../extension");
+    const { createPromptBlockedError } = await import("../../promptExecutionErrors");
+    const task: ScheduledTask = {
+      id: "preflight-rearm",
+      name: "Synthetic rearm task",
+      prompt: "synthetic",
+      cronExpression: "0 * * * *",
+      scope: "global",
+      promptSource: "inline",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const warning = vscode.window.showWarningMessage;
+    let warnings = 0;
+    const run = async (error: Error) => {
+      try {
+        await __testOnly.executeTask(task, "auto", undefined, {
+          notifyInfo: () => {},
+          recordHistory: async () => {},
+          executePrompt: async () => { throw error; },
+        });
+      } catch {
+        // The failure itself is expected; only the warning count matters.
+      }
+    };
+    try {
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async () => { warnings += 1; return undefined; },
+      });
+      const blocked = () => createPromptBlockedError("attachment missing", "attachmentMissing");
+      await run(blocked());
+      await run(blocked());
+      assert.strictEqual(warnings, 1);
+      await run(new Error("unrelated failure"));
+      await run(blocked());
+      assert.strictEqual(warnings, 2);
+    } finally {
+      __testOnly.preflightBlockNotifications.delete(task.id);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: warning,
+      });
+    }
   });
 
   test("editing a blocked task's attachments makes the next failure audible again", async () => {
@@ -2861,8 +3362,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
       __testOnly.getAttachmentSignature as unknown as (
         task: ScheduledTask,
       ) => string;
-    const notifications =
-      __testOnly.attachmentBlockNotifications as unknown as Map<string, string>;
+    const notifications = __testOnly.preflightBlockNotifications;
 
     const base: ScheduledTask = {
       id: "t-attach-signature",
@@ -2900,10 +3400,10 @@ suite("Webview Test Prompt Wiring Tests", () => {
     notifications.delete(base.id);
     try {
       const shouldWarn = (task: ScheduledTask): boolean =>
-        notifications.get(task.id) !== getAttachmentSignature(task);
+        notifications.get(task.id)?.signature !== getAttachmentSignature(task);
 
       assert.strictEqual(shouldWarn(broken), true);
-      notifications.set(broken.id, getAttachmentSignature(broken));
+      notifications.set(broken.id, { signature: getAttachmentSignature(broken) });
       assert.strictEqual(
         shouldWarn(broken),
         false,
@@ -2924,15 +3424,14 @@ suite("Webview Test Prompt Wiring Tests", () => {
     const prune = __testOnly.pruneRuntimeCachesForRemovedTasks as unknown as (
       taskIds: Set<string>,
     ) => void;
-    const notifications =
-      __testOnly.attachmentBlockNotifications as unknown as Map<string, string>;
+    const notifications = __testOnly.preflightBlockNotifications;
 
-    notifications.set("t-kept", "local:a.md");
-    notifications.set("t-deleted", "local:b.md");
+    notifications.set("t-kept", { signature: "local:a.md" });
+    notifications.set("t-deleted", { signature: "local:b.md" });
     try {
       prune(new Set(["t-kept"]));
 
-      assert.strictEqual(notifications.get("t-kept"), "local:a.md");
+      assert.strictEqual(notifications.get("t-kept")?.signature, "local:a.md");
       assert.strictEqual(
         notifications.has("t-deleted"),
         false,
@@ -2965,7 +3464,7 @@ suite("Webview Test Prompt Wiring Tests", () => {
 
     for (const cache of [
       "manualRunInFlightTaskIds",
-      "attachmentBlockNotifications",
+      "preflightBlockNotifications",
       "lastPromptResolutionByTaskId",
     ]) {
       assert.ok(

@@ -9,7 +9,11 @@ import * as copilotCliRunner from "../../copilotCliRunner";
 import { withAgentHostDispatchJournal } from "../../agentHostDispatchJournal";
 import { messages } from "../../i18n";
 import * as configuredModels from "../../configured-model-provider";
-import { createPromptBlockedError, getPromptBlockedReason } from "../../promptExecutionErrors";
+import {
+  createPromptBlockedError,
+  getPromptBlockedReason,
+  isExecutionErrorUserNotified,
+} from "../../promptExecutionErrors";
 import type { ExecuteOptions } from "../../types";
 
 function useAgentHostTestStorage(): () => void {
@@ -25,6 +29,328 @@ function useAgentHostTestStorage(): () => void {
 }
 
 suite("CopilotExecutor Agent Prefix Tests", () => {
+  test("failure task settings retains each run across preflight, Host, Chat and CLI warnings", async () => {
+    const warning = vscode.window.showWarningMessage;
+    const command = vscode.commands.executeCommand;
+    const getConfig = vscode.workspace.getConfiguration;
+    const notices: Array<{ text: string; actions: string[]; resolve: (action: string | undefined) => void }> = [];
+    const opened: Array<{ taskId: unknown; protect: unknown }> = [];
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: (section?: string) => {
+        const config = getConfig.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get: (key: string, fallback?: unknown) =>
+            key === "executionRoute" ? "agentHost" : config.get(key, fallback),
+        };
+      },
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: (text: string, ...actions: string[]) => new Promise<string | undefined>((resolve) => {
+        notices.push({ text, actions, resolve });
+      }),
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async (id: string, taskId: unknown, protect: unknown) => {
+        assert.strictEqual(id, "copilotScheduler.editTask");
+        opened.push({ taskId, protect });
+      },
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const routes: ExecuteOptions[] = [
+        { targetChatId: "synthetic", useCopilotCli: true },
+        { model: "vendor/model", modelVendor: "synthetic" },
+        { useCopilotCli: true, model: "synthetic", agent: "ask" },
+      ];
+      for (const [index, options] of routes.entries()) {
+        await assert.rejects(executor.executePrompt("synthetic", {
+          ...options, taskId: `task-${index}`, taskName: `Failure ${index}`,
+        }));
+      }
+      const internals = executor as unknown as {
+        tryExecuteViaAgentHost(): Promise<{ fallbackReason: string }>;
+        tryOpenChatWithPrompt(): Promise<never>;
+      };
+      internals.tryExecuteViaAgentHost = async () => ({ fallbackReason: "test" });
+      internals.tryOpenChatWithPrompt = async () => {
+        throw createPromptBlockedError("synthetic chat failure", "agentHostFailed", "unknown");
+      };
+      await assert.rejects(executor.executePrompt("synthetic", {
+        chatSession: "continue", taskId: "task-3", taskName: "Failure 3",
+      }));
+      assert.strictEqual(notices.length, 4);
+      for (const [index, notice] of notices.entries()) {
+        assert.ok(notice.text.startsWith(messages.taskExecutionWarning(`Failure ${index}`, "")));
+        assert.deepStrictEqual(notice.actions, [
+          messages.actionOpenTaskSettings(), messages.actionCopyPrompt(), messages.actionCancel(),
+        ]);
+      }
+      assert.strictEqual(notices[3].text, messages.taskExecutionWarning("Failure 3", "synthetic chat failure"));
+      for (const notice of [...notices].reverse()) {
+        notice.resolve(messages.actionOpenTaskSettings());
+      }
+      await Promise.resolve();
+      assert.deepStrictEqual(opened, [
+        { taskId: "task-3", protect: true },
+        { taskId: "task-2", protect: true },
+        { taskId: "task-1", protect: true },
+        { taskId: "task-0", protect: true },
+      ]);
+    } finally {
+      for (const notice of notices) notice.resolve(undefined);
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: warning });
+      Object.defineProperty(vscode.commands, "executeCommand", { configurable: true, value: command });
+      Object.defineProperty(vscode.workspace, "getConfiguration", { configurable: true, value: getConfig });
+    }
+  });
+
+  test("failure task settings keeps the copy action unchanged", async () => {
+    const warning = vscode.window.showWarningMessage;
+    const clipboard = Object.getOwnPropertyDescriptor(vscode.env, "clipboard")!;
+    let copied!: (value: string) => void;
+    const copy = new Promise<string>((resolve) => { copied = resolve; });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async () => messages.actionCopyPrompt(),
+    });
+    Object.defineProperty(vscode.env, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value: string) => { copied(value); } },
+    });
+    try {
+      await assert.rejects(new CopilotExecutor().executePrompt("synthetic original prompt", {
+        taskId: "saved", taskName: "Saved task",
+        targetChatId: "synthetic", useCopilotCli: true,
+      }));
+      assert.strictEqual(await copy, "synthetic original prompt");
+    } finally {
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: warning });
+      Object.defineProperty(vscode.env, "clipboard", clipboard);
+    }
+  });
+
+  test("failure task settings covers blocked chat model setup", async () => {
+    const originalConfig = vscode.workspace.getConfiguration;
+    const originalWarning = vscode.window.showWarningMessage;
+    const originalModels = CopilotExecutor.getAvailableModelsWithSource;
+    const warnings: Array<{ text: string; actions: string[] }> = [];
+    Object.defineProperty(vscode.workspace, "getConfiguration", {
+      configurable: true,
+      value: (section?: string) => {
+        const config = originalConfig.call(vscode.workspace, section);
+        if (section !== "copilotScheduler") return config;
+        return {
+          ...config,
+          get: (key: string, fallback?: unknown) =>
+            key === "executionRoute" ? "chat" : config.get(key, fallback),
+        };
+      },
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async (text: string, ...actions: string[]) => {
+        warnings.push({ text, actions });
+        return undefined;
+      },
+    });
+    CopilotExecutor.getAvailableModelsWithSource = async () => ({
+      source: "api",
+      models: [],
+    });
+    try {
+      const executor = new CopilotExecutor();
+      const cases: Array<{
+        options: ExecuteOptions;
+        reason: string;
+        detail: string;
+      }> = [
+        {
+          options: { agentHostModelId: "\0" },
+          reason: "modelConfigurationUnavailable",
+          detail: messages.dynamicConfigurationUnavailable(),
+        },
+        {
+          options: { model: "missing", modelVendor: "synthetic" },
+          reason: "providerModelUnavailable",
+          detail: messages.providerModelUnavailable(),
+        },
+        {
+          options: { modelConfiguration: { reasoningEffort: "high" } },
+          reason: "modelConfigurationUnavailable",
+          detail: messages.dynamicConfigurationUnavailable(),
+        },
+      ];
+      for (const [index, item] of cases.entries()) {
+        await assert.rejects(
+          executor.executePrompt("synthetic", {
+            ...item.options,
+            taskId: `model-${index}`,
+            taskName: `Model task ${index}`,
+          }),
+          (error: unknown) =>
+            getPromptBlockedReason(error) === item.reason &&
+            isExecutionErrorUserNotified(error),
+        );
+      }
+      assert.deepStrictEqual(
+        warnings,
+        cases.map((item, index) => ({
+          text: messages.taskExecutionWarning(`Model task ${index}`, item.detail),
+          actions: [
+            messages.actionOpenTaskSettings(),
+            messages.actionCopyPrompt(),
+            messages.actionCancel(),
+          ],
+        })),
+      );
+    } finally {
+      CopilotExecutor.getAvailableModelsWithSource = originalModels;
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true, value: originalConfig,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true, value: originalWarning,
+      });
+    }
+  });
+
+  test("failure task settings leaves unsaved tests copy-only and preserves unknown outcomes on edit errors", async () => {
+    const warning = vscode.window.showWarningMessage;
+    const command = vscode.commands.executeCommand;
+    const notices: Array<{ text: string; actions: string[] }> = [];
+    let attempted!: () => void;
+    const editAttempted = new Promise<void>((resolve) => { attempted = resolve; });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true,
+      value: async (text: string, ...actions: string[]) => {
+        notices.push({ text, actions });
+        return actions.includes(messages.actionOpenTaskSettings())
+          ? messages.actionOpenTaskSettings() : undefined;
+      },
+    });
+    Object.defineProperty(vscode.commands, "executeCommand", {
+      configurable: true,
+      value: async () => { attempted(); throw new Error("editor unavailable"); },
+    });
+    try {
+      const executor = new CopilotExecutor() as unknown as {
+        warnAndThrow(error: Error, prompt: string, task?: Pick<ExecuteOptions, "taskId" | "taskName">): never;
+      };
+      const error = createPromptBlockedError(messages.agentHostOutcomeUnknown("synthetic"), "agentHostFailed", "unknown");
+      assert.throws(() => executor.warnAndThrow(error, "synthetic"), (caught: unknown) => caught === error);
+      assert.deepStrictEqual(notices[0], {
+        text: error.message,
+        actions: [messages.actionCopyPrompt(), messages.actionCancel()],
+      });
+      const savedError = createPromptBlockedError(error.message, "agentHostFailed", "unknown");
+      assert.throws(() => executor.warnAndThrow(savedError, "synthetic", {
+        taskId: "saved", taskName: "Saved\r\ntask",
+      }), (caught: unknown) => caught === savedError);
+      await editAttempted;
+      await Promise.resolve();
+      assert.strictEqual(notices[1].text, messages.taskExecutionWarning("Saved task", error.message));
+    } finally {
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: warning });
+      Object.defineProperty(vscode.commands, "executeCommand", { configurable: true, value: command });
+    }
+  });
+
+  test("failure task settings reports failed recovery actions and rejected warnings", async () => {
+    const original = {
+      warning: vscode.window.showWarningMessage,
+      error: vscode.window.showErrorMessage,
+      command: vscode.commands.executeCommand,
+      config: vscode.workspace.getConfiguration,
+      clipboard: Object.getOwnPropertyDescriptor(vscode.env, "clipboard")!,
+    };
+    let mode: "settings" | "copy" | "notification" | "sync-notification" = "settings";
+    let report!: (message: string) => void;
+    let reportedMessage = "";
+    try {
+      Object.defineProperty(vscode.workspace, "getConfiguration", {
+        configurable: true,
+        value: (section?: string) => {
+          const config = original.config.call(vscode.workspace, section);
+          if (section !== "copilotScheduler") return config;
+          return {
+            ...config,
+            get: (key: string, fallback?: unknown) =>
+              key === "showNotifications" ? true
+                : key === "notificationMode" ? "sound"
+                  : config.get(key, fallback),
+          };
+        },
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: () => {
+          if (mode === "sync-notification") throw new Error("warning unavailable");
+          return mode === "notification"
+            ? Promise.reject(new Error("warning unavailable"))
+            : Promise.resolve(mode === "settings"
+              ? messages.actionOpenTaskSettings()
+              : messages.actionCopyPrompt());
+        },
+      });
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true,
+        value: async (message: string) => { reportedMessage = message; report(message); },
+      });
+      Object.defineProperty(vscode.commands, "executeCommand", {
+        configurable: true,
+        value: async () => { throw new Error("editor unavailable"); },
+      });
+      Object.defineProperty(vscode.env, "clipboard", {
+        configurable: true,
+        value: { writeText: async () => { throw new Error("clipboard unavailable"); } },
+      });
+      const executor = new CopilotExecutor() as unknown as {
+        warnAndThrow(error: Error, prompt: string, task: Pick<ExecuteOptions, "taskId" | "taskName">): never;
+      };
+      for (const [nextMode, expected] of [
+        ["settings", messages.taskSettingsOpenFailed()],
+        ["copy", messages.promptCopyFailed()],
+        ["notification", messages.executionWarningFailed("Saved task", "original execution failure")],
+      ] as const) {
+        mode = nextMode;
+        const reported = new Promise<string>((resolve) => { report = resolve; });
+        const originalError = new Error("original execution failure");
+        assert.throws(
+          () => executor.warnAndThrow(originalError, "synthetic", { taskId: "saved", taskName: "Saved task" }),
+          (caught: unknown) => caught === originalError,
+        );
+        assert.strictEqual(await reported, expected);
+      }
+      mode = "sync-notification";
+      reportedMessage = "";
+      const originalError = new Error("original execution failure");
+      assert.throws(
+        () => executor.warnAndThrow(originalError, "synthetic", { taskId: "saved", taskName: "Saved task" }),
+        (caught: unknown) => caught === originalError,
+      );
+      assert.strictEqual(reportedMessage, messages.executionWarningFailed("Saved task", "original execution failure"));
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true,
+        value: () => { throw new Error("fallback unavailable"); },
+      });
+      assert.throws(
+        () => executor.warnAndThrow(originalError, "synthetic", { taskId: "saved", taskName: "Saved task" }),
+        (caught: unknown) => caught === originalError,
+      );
+    } finally {
+      Object.defineProperty(vscode.window, "showWarningMessage", { configurable: true, value: original.warning });
+      Object.defineProperty(vscode.window, "showErrorMessage", { configurable: true, value: original.error });
+      Object.defineProperty(vscode.commands, "executeCommand", { configurable: true, value: original.command });
+      Object.defineProperty(vscode.workspace, "getConfiguration", { configurable: true, value: original.config });
+      Object.defineProperty(vscode.env, "clipboard", original.clipboard);
+    }
+  });
+
   test("dispatch storage follows the global storage path whatever scheme VS Code reports", () => {
     const previous = Object.getOwnPropertyDescriptor(CopilotExecutor, "extensionGlobalStorageUri")!;
     const directory = path.join(os.tmpdir(), "scheduler-userdata-scheme");
@@ -1188,9 +1514,13 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       configurable: true,
       value: undefined,
     });
+    let warnings = 0;
     Object.defineProperty(vscode.window, "showWarningMessage", {
       configurable: true,
-      value: async () => undefined,
+      value: async () => {
+        warnings += 1;
+        return undefined;
+      },
     });
     try {
       const executor = new CopilotExecutor() as unknown as {
@@ -1221,10 +1551,12 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
         ),
         /Agent Host|エージェントホスト/,
       );
+      const before = warnings;
       await assert.rejects(
         executor.tryExecuteViaAgentHost(routing, {}, config("fail"), "new"),
         /Agent Host|エージェントホスト/,
       );
+      assert.strictEqual(warnings - before, 1);
       await assert.rejects(
         executor.tryExecuteViaAgentHost(
           routing,
@@ -1743,6 +2075,7 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
   test("system-bearing chat routes block advertised overrides without System permission", async () => {
     const originalModels = CopilotExecutor.getAvailableModelsWithSource;
     const originalCommand = vscode.commands.executeCommand;
+    const originalWarning = vscode.window.showWarningMessage;
     const systemPermission = Object.getOwnPropertyDescriptor(
       configuredModels,
       "supportsSystemMessageForwarding",
@@ -1752,6 +2085,9 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
     Object.defineProperty(configuredModels, "supportsSystemMessageForwarding", {
       ...systemPermission,
       value: () => false,
+    });
+    Object.defineProperty(vscode.window, "showWarningMessage", {
+      configurable: true, value: async () => undefined,
     });
     CopilotExecutor.getAvailableModelsWithSource = async () => ({
       source: "api",
@@ -1860,6 +2196,10 @@ suite("CopilotExecutor Agent Prefix Tests", () => {
       Object.defineProperty(vscode.commands, "executeCommand", {
         configurable: true,
         value: originalCommand,
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
       });
     }
   });
