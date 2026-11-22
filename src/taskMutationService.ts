@@ -690,7 +690,7 @@ export function createLmToolMutationClient(
           ok: false,
           reason: "enabled_not_allowed",
           message:
-            "Use scheduler_set_task_enabled to change the enabled state.",
+            "Use scheduler_manage with action=enable to change the enabled state.",
         };
       }
 

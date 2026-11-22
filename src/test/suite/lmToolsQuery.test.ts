@@ -403,8 +403,8 @@ suite("lmTools scheduler_query", () => {
     assert.ok(
       schema("scheduler_query")?.kind.enum?.includes("list_agent_host_models"),
     );
-    const create = schema("scheduler_create_task");
-    const update = schema("scheduler_update_task")?.updates.properties;
+    const create = schema("scheduler_manage")?.task.properties;
+    const update = schema("scheduler_manage")?.updates.properties;
     for (const properties of [create, update]) {
       assert.strictEqual(properties?.agentHostModelId?.type, "string");
       assert.strictEqual(properties?.preventAgentHostFallback?.type, "boolean");
@@ -415,23 +415,17 @@ suite("lmTools scheduler_query", () => {
       const nls = JSON.parse(
         fs.readFileSync(path.join(root, file), "utf8"),
       ) as Record<string, string>;
-      for (const tool of [
-        "scheduler_query",
-        "scheduler_create_task",
-        "scheduler_update_task",
-      ]) {
+      for (const tool of ["scheduler_query", "scheduler_manage"]) {
         assert.ok(
           nls[`tool.${tool}.modelDescription`]?.includes(
             "list_agent_host_models",
           ),
         );
       }
-      for (const tool of ["scheduler_create_task", "scheduler_update_task"]) {
-        const description = nls[`tool.${tool}.modelDescription`] ?? "";
-        assert.match(description, file.endsWith(".ja.json")
-          ? /対応関係を検証しません.*ユーザーに対応する ID を選んでもらってください/
-          : /does not verify correspondence with model.*ask the user to select/);
-      }
+      const description = nls["tool.scheduler_manage.modelDescription"] ?? "";
+      assert.match(description, file.endsWith(".ja.json")
+        ? /対応関係を検証しません.*ユーザーに対応する ID を選んで/
+        : /does not verify correspondence with model.*ask the user to select/i);
     }
   });
 

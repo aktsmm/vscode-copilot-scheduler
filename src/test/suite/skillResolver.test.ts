@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import {
   checkSkillRef,
+  diagnoseSkillPrompt,
   discoverSkills,
   findSkillByRef,
   getCurrentSkillRoots,
@@ -43,6 +44,86 @@ suite("Skill resolver", () => {
 
   teardown(() => {
     fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  test("skill prompt diagnostics report local results without exposing prompts or paths", async () => {
+    const roots = getSkillRoots([ws], home);
+    const root = path.join(ws, ".github", "skills");
+    writeSkill(root, "explicit", ["name: explicit", "disable-model-invocation: true"]);
+    writeSkill(root, "automatic", ["name: automatic"]);
+    const task = { scope: "workspace" as const, workspacePath: ws, promptSource: "inline" as const, prompt: "/explicit private argument" };
+    const explicit = await diagnoseSkillPrompt(task, roots, true);
+    assert.strictEqual(explicit.status, "found");
+    if (explicit.status === "found") assert.strictEqual(explicit.explicitOnly, true);
+    const automatic = await diagnoseSkillPrompt({ ...task, prompt: "/automatic" }, roots, true);
+    assert.strictEqual(automatic.status, "found");
+    if (automatic.status === "found") assert.strictEqual(automatic.explicitOnly, false);
+    assert.strictEqual((await diagnoseSkillPrompt({ ...task, prompt: "/missing" }, roots, true)).status, "not_found_in_scanned_roots");
+    assert.strictEqual((await diagnoseSkillPrompt({ ...task, prompt: "/missing" }, roots, false)).status, "unknown");
+    assert.strictEqual((await diagnoseSkillPrompt({ ...task, prompt: "plain prompt" }, roots, true)).status, "not_applicable");
+    assert.strictEqual((await diagnoseSkillPrompt({ ...task, promptSource: "local" }, roots, true)).status, "not_applicable");
+    assert.ok(!JSON.stringify(explicit).includes("private argument"));
+    assert.ok(!JSON.stringify(explicit).includes(ws));
+    writeSkill(path.join(ws, ".agents", "skills"), "explicit", ["name: explicit"]);
+    assert.strictEqual((await diagnoseSkillPrompt(task, roots, true)).status, "ambiguous");
+  });
+
+  test("skill diagnostics distinguish non-invocable skills, other workspaces and native commands", async () => {
+    const root = path.join(ws, ".github", "skills");
+    writeSkill(root, "hidden", ["name: hidden", "user-invocable: false"]);
+    const roots = getSkillRoots([ws], home);
+    const task = { scope: "workspace" as const, workspacePath: ws, promptSource: "inline" as const, prompt: "/hidden" };
+    const hidden = await diagnoseSkillPrompt(task, roots, true);
+    assert.strictEqual(hidden.status, "found");
+    if (hidden.status === "found") assert.strictEqual(hidden.userInvocable, false);
+    assert.strictEqual(
+      (await diagnoseSkillPrompt({ ...task, workspacePath: path.join(tmp, "another") }, roots, true)).status,
+      "unknown",
+    );
+    const native = await diagnoseSkillPrompt({ ...task, prompt: "/plan do something" }, roots, true);
+    assert.strictEqual(native.status, "not_found_in_scanned_roots");
+    if (native.status === "not_found_in_scanned_roots") {
+      assert.match(native.message, /built-in command/);
+    }
+  });
+
+  test("skill diagnostics report unknown for unreadable skill files", async () => {
+    const roots = getSkillRoots([ws], home);
+    const originalOpen = fs.promises.open;
+    const deniedFile = path.join(ws, ".github", "skills", "private", "SKILL.md");
+    fs.mkdirSync(path.dirname(deniedFile), { recursive: true });
+    Object.defineProperty(fs.promises, "open", {
+      configurable: true,
+      value: async (...args: Parameters<typeof originalOpen>) => {
+        if (args[0] === deniedFile) {
+          throw Object.assign(new Error("private path"), { code: "EACCES" });
+        }
+        return originalOpen(...args);
+      },
+    });
+    try {
+      const result = await diagnoseSkillPrompt(
+        { scope: "workspace", workspacePath: ws, promptSource: "inline", prompt: "/private" },
+        roots,
+        true,
+      );
+      assert.strictEqual(result.status, "unknown");
+      assert.ok(!JSON.stringify(result).includes("private path"));
+    } finally {
+      Object.defineProperty(fs.promises, "open", { configurable: true, value: originalOpen });
+    }
+  });
+
+  test("skill diagnostics report unknown when a skill root is not a directory", async () => {
+    const root = path.join(home, ".copilot", "skills");
+    fs.mkdirSync(path.dirname(root), { recursive: true });
+    fs.writeFileSync(root, "not a directory");
+    const result = await diagnoseSkillPrompt(
+      { scope: "global", promptSource: "inline", prompt: "/example" },
+      getSkillRoots([], home),
+      true,
+    );
+    assert.strictEqual(result.status, "unknown");
   });
 
   test("frontmatter parsing reads the flat keys and tolerates BOM, CRLF and quoting", () => {

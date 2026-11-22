@@ -2,7 +2,7 @@
   "name": "copilot-scheduler",
   "displayName": "Copilot Scheduler",
   "description": "Schedule recurring and one-time AI prompts in VS Code",
-  "version": "1.22.0",
+  "version": "1.24.0",
   "publisher": "yamapan",
   "license": "CC-BY-NC-SA-4.0",
   "icon": "images/icon.png",
@@ -538,231 +538,10 @@
         }
       },
       {
-        "name": "scheduler_create_task",
-        "displayName": "%tool.scheduler_create_task.displayName%",
-        "modelDescription": "%tool.scheduler_create_task.modelDescription%",
-        "toolReferenceName": "scheduler_create_task",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(add)",
-        "tags": [
-          "copilot-scheduler"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Human-readable task name."
-            },
-            "cronExpression": {
-              "type": "string",
-              "description": "Cron expression for recurring tasks. Omit when runAt is set. Supports multiple lines separated by newlines."
-            },
-            "runAt": {
-              "type": "string",
-              "description": "One-time execution instant as ISO 8601 with explicit timezone offset, e.g. 2026-09-26T21:00:00+09:00. Mutually exclusive with cronExpression."
-            },
-            "afterRun": {
-              "type": "string",
-              "enum": [
-                "disable",
-                "delete"
-              ],
-              "description": "After a one-time task is dispatched, disable it (default) or delete it after its history is saved. Requires runAt."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "global",
-                "workspace"
-              ],
-              "description": "Where the task lives. workspace requires an open folder."
-            },
-            "promptSource": {
-              "type": "string",
-              "enum": [
-                "inline",
-                "local",
-                "global"
-              ],
-              "description": "Where the prompt comes from. Defaults to 'inline'."
-            },
-            "prompt": {
-              "type": "string",
-              "description": "Prompt text sent to Copilot. Always required, even when promptSource is 'local' or 'global' (use the file content)."
-            },
-            "promptPath": {
-              "type": "string",
-              "description": "Required when promptSource is 'local' or 'global'. Path relative to the resolved prompts root."
-            },
-            "agent": {
-              "type": "string",
-              "description": "Agent to use (e.g. '@workspace', 'agent', 'ask', 'edit'). Call scheduler_query with kind=list_agents to discover valid ids."
-            },
-            "model": {
-              "type": "string",
-              "description": "AI model id for this task. Use an 'id' returned by scheduler_query kind=list_models. Omit or pass an empty string to use the default model."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
-            },
-            "agentHostModelId": {
-              "type": "string",
-              "description": "Exact opaque id explicitly selected from scheduler_query kind=list_agent_host_models. Copy it unchanged; never infer or construct it from model, vendor, name, or a suffix. The catalog does not verify correspondence with model; if unclear, ask the user to select the matching ID. Omit when no Agent Host ID is selected."
-            },
-            "modelConfiguration": {
-              "type": "object",
-              "description": "Model-specific enum values from list_models configurationOptions. Empty object inherits shared Chat settings. Explicit options execute through a fixed per-request model on VS Code 1.141 or later without changing shared settings. Requires source-provider authorization. Do not combine with modelReasoningEffort.",
-              "additionalProperties": false,
-              "properties": {
-                "mode": {
-                  "type": "string"
-                },
-                "reasoningEffort": {
-                  "type": "string"
-                },
-                "speedMode": {
-                  "type": "string"
-                },
-                "contextSize": {
-                  "type": [
-                    "string",
-                    "number"
-                  ]
-                }
-              }
-            },
-            "modelReasoningEffort": {
-              "type": "string",
-              "enum": [
-                "none",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max"
-              ],
-              "description": "Experimental reasoning effort. Only send a value listed in 'supportedReasoningEfforts' for the chosen model in scheduler_query kind=list_models; unsupported values are dropped with a warning."
-            },
-            "enabled": {
-              "type": "boolean",
-              "description": "Whether the task is enabled after creation. Defaults to true. Enabling requires the disclaimer to be accepted."
-            },
-            "chatSession": {
-              "type": "string",
-              "enum": [
-                "default",
-                "new",
-                "continue"
-              ],
-              "description": "Per-task chat session override. 'default' uses the global setting."
-            },
-            "agentHostWorkspaceMode": {
-              "type": "string",
-              "enum": [
-                "default",
-                "folder",
-                "worktree"
-              ],
-              "description": "Location for NEW Agent Host sessions only. folder shares the existing folder, including uncommitted changes and local records; worktree requests a new Git worktree. Omitted/default preserves previous Host behavior (normally worktree for Git). Resume keeps the original location without forcing a new session. Inactive for bound existing chats and actual CLI runs; saved values are retained. If an applicable explicit choice cannot be honored, the prompt is not sent."
-            },
-            "targetChatId": {
-              "type": "string",
-              "description": "Optional opaque bindingId returned by scheduler_query kind=list_sessions. Queues this task in that existing Copilot chat. Call list_sessions first; never guess or use an internal URI. Workspace tasks must match the selected chat's sole workspace."
-            },
-            "autoMode": {
-              "type": "boolean",
-              "description": "Prepend an autonomous-execution hint to the runtime prompt. Defaults to the copilotScheduler.autoModeDefault setting."
-            },
-            "modelFallback": {
-              "type": "boolean",
-              "description": "Enable task-level model fallback before dispatch when the selected model is absent. Defaults to false when omitted by this tool. Without an explicit policy, Chat prefers a replacement from a different provider and family; Agent Host needs an explicit replacement ID, which can be set in the task editor."
-            },
-            "preventAgentHostFallback": {
-              "type": "boolean",
-              "description": "When true, block fallback from Agent Host to Chat. Default false; existing fallback policy still applies. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models."
-            },
-            "timeout": {
-              "type": "object",
-              "description": "Timeout of this task for Agent Host and Copilot CLI runs. mode 'inherit' (default) follows the copilotScheduler.*TimeoutEnabled settings (off by default), 'off' never stops the run, 'on' stops it after minutes (1-720; the configured minutes when omitted). A stopped Agent Host run may leave its outcome unknown.",
-              "properties": {
-                "mode": {
-                  "type": "string",
-                  "enum": ["inherit", "off", "on"]
-                },
-                "minutes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 720
-                }
-              },
-              "required": ["mode"],
-              "additionalProperties": false
-            },
-            "jitterSeconds": {
-              "type": "number",
-              "description": "Max random delay in seconds before execution (0 = off). Spreads out runs to reduce rate-limit risk. Defaults to the copilotScheduler.jitterSeconds setting.",
-              "minimum": 0,
-              "maximum": 1800
-            },
-            "maxExecutionsPerDay": {
-              "type": "number",
-              "description": "Per-task execution cap per day (0 = unlimited).",
-              "minimum": 0
-            },
-            "allowOverlappingRuns": {
-              "type": "boolean",
-              "default": true,
-              "description": "Allow overlapping automatic occurrences of this recurring task. Default true. Manual runs and one-time tasks keep their existing guards; runs using the same chat queue."
-            },
-            "allowedTimeStart": {
-              "type": "string",
-              "description": "Earliest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
-            },
-            "allowedTimeEnd": {
-              "type": "string",
-              "description": "Latest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
-            },
-            "attachments": {
-              "type": "array",
-              "description": "Files attached to the chat request when the task runs. Every attachment must resolve at run time or the task is skipped. Only workspace-scoped tasks may use source 'local'.",
-              "maxItems": 10,
-              "items": {
-                "type": "object",
-                "properties": {
-                  "source": {
-                    "type": "string",
-                    "enum": [
-                      "local",
-                      "global"
-                    ],
-                    "description": "'local' resolves against the task's workspace folder, 'global' against the global prompts folder."
-                  },
-                  "path": {
-                    "type": "string",
-                    "description": "Path relative to the source root, e.g. '.github/instructions/style.instructions.md'. Absolute paths and '..' are rejected."
-                  }
-                },
-                "required": [
-                  "source",
-                  "path"
-                ]
-              }
-            }
-          },
-          "required": [
-            "name",
-            "prompt",
-            "scope"
-          ]
-        }
-      },
-      {
-        "name": "scheduler_update_task",
-        "displayName": "%tool.scheduler_update_task.displayName%",
-        "modelDescription": "%tool.scheduler_update_task.modelDescription%",
-        "toolReferenceName": "scheduler_update_task",
+        "name": "scheduler_manage",
+        "displayName": "%tool.scheduler_manage.displayName%",
+        "modelDescription": "%tool.scheduler_manage.modelDescription%",
+        "toolReferenceName": "scheduler_manage",
         "canBeReferencedInPrompt": true,
         "icon": "$(edit)",
         "tags": [
@@ -771,13 +550,241 @@
         "inputSchema": {
           "type": "object",
           "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "run",
+                "enable"
+              ],
+              "description": "Operation to perform. Create uses task; update uses id and updates; delete and run use id; enable uses id and enabled."
+            },
+            "task": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Human-readable task name."
+                },
+                "cronExpression": {
+                  "type": "string",
+                  "description": "Cron expression for recurring tasks. Omit when runAt is set. Supports multiple lines separated by newlines."
+                },
+                "runAt": {
+                  "type": "string",
+                  "description": "One-time execution instant as ISO 8601 with explicit timezone offset, e.g. 2026-09-26T21:00:00+09:00. Mutually exclusive with cronExpression."
+                },
+                "afterRun": {
+                  "type": "string",
+                  "enum": [
+                    "disable",
+                    "delete"
+                  ],
+                  "description": "After a one-time task is dispatched, disable it (default) or delete it after its history is saved. Requires runAt."
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "global",
+                    "workspace"
+                  ],
+                  "description": "Where the task lives. workspace requires an open folder."
+                },
+                "promptSource": {
+                  "type": "string",
+                  "enum": [
+                    "inline",
+                    "local",
+                    "global"
+                  ],
+                  "description": "Where the prompt comes from. Defaults to 'inline'."
+                },
+                "prompt": {
+                  "type": "string",
+                  "description": "Prompt text sent to Copilot. Always required, even when promptSource is 'local' or 'global' (use the file content)."
+                },
+                "promptPath": {
+                  "type": "string",
+                  "description": "Required when promptSource is 'local' or 'global'. Path relative to the resolved prompts root."
+                },
+                "agent": {
+                  "type": "string",
+                  "description": "Agent to use (e.g. '@workspace', 'agent', 'ask', 'edit'). Call scheduler_query with kind=list_agents to discover valid ids."
+                },
+                "model": {
+                  "type": "string",
+                  "description": "AI model id for this task. Use an 'id' returned by scheduler_query kind=list_models. Omit or pass an empty string to use the default model."
+                },
+                "modelVendor": {
+                  "type": "string",
+                  "description": "Provider identity from scheduler_query kind=list_models (vendor). Required when multiple providers offer the same model id. Preserved during resolution and dispatch."
+                },
+                "agentHostModelId": {
+                  "type": "string",
+                  "description": "Exact opaque id explicitly selected from scheduler_query kind=list_agent_host_models. Copy it unchanged; never infer or construct it from model, vendor, name, or a suffix. The catalog does not verify correspondence with model; if unclear, ask the user to select the matching ID. Omit when no Agent Host ID is selected."
+                },
+                "modelConfiguration": {
+                  "type": "object",
+                  "description": "Model-specific enum values from list_models configurationOptions. Empty object inherits shared Chat settings. Explicit options execute through a fixed per-request model on VS Code 1.141 or later without changing shared settings. Requires source-provider authorization. Do not combine with modelReasoningEffort.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "type": "string"
+                    },
+                    "reasoningEffort": {
+                      "type": "string"
+                    },
+                    "speedMode": {
+                      "type": "string"
+                    },
+                    "contextSize": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    }
+                  }
+                },
+                "modelReasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ],
+                  "description": "Experimental reasoning effort. Only send a value listed in 'supportedReasoningEfforts' for the chosen model in scheduler_query kind=list_models; unsupported values are dropped with a warning."
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Whether the task is enabled after creation. Defaults to true. Enabling requires the disclaimer to be accepted."
+                },
+                "chatSession": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "new",
+                    "continue"
+                  ],
+                  "description": "Per-task chat session override. 'default' uses the global setting."
+                },
+                "agentHostWorkspaceMode": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "folder",
+                    "worktree"
+                  ],
+                  "description": "Location for NEW Agent Host sessions only. folder shares the existing folder, including uncommitted changes and local records; worktree requests a new Git worktree. Omitted/default preserves previous Host behavior (normally worktree for Git). Resume keeps the original location without forcing a new session. Inactive for bound existing chats and actual CLI runs; saved values are retained. If an applicable explicit choice cannot be honored, the prompt is not sent."
+                },
+                "targetChatId": {
+                  "type": "string",
+                  "description": "Optional opaque bindingId returned by scheduler_query kind=list_sessions. Queues this task in that existing Copilot chat. Call list_sessions first; never guess or use an internal URI. Workspace tasks must match the selected chat's sole workspace."
+                },
+                "autoMode": {
+                  "type": "boolean",
+                  "description": "Prepend an autonomous-execution hint to the runtime prompt. Defaults to the copilotScheduler.autoModeDefault setting."
+                },
+                "modelFallback": {
+                  "type": "boolean",
+                  "description": "Enable task-level model fallback before dispatch when the selected model is absent. Defaults to false when omitted by this tool. Without an explicit policy, Chat prefers a replacement from a different provider and family; Agent Host needs an explicit replacement ID, which can be set in the task editor."
+                },
+                "preventAgentHostFallback": {
+                  "type": "boolean",
+                  "description": "When true, block fallback from Agent Host to Chat. Default false; existing fallback policy still applies. Does not affect routes initially selected as Chat, Local, remote, or CLI. Independent of modelFallback, which changes models."
+                },
+                "timeout": {
+                  "type": "object",
+                  "description": "Timeout of this task for Agent Host and Copilot CLI runs. mode 'inherit' (default) follows the copilotScheduler.*TimeoutEnabled settings (off by default), 'off' never stops the run, 'on' stops it after minutes (1-720; the configured minutes when omitted). A stopped Agent Host run may leave its outcome unknown.",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "inherit",
+                        "off",
+                        "on"
+                      ]
+                    },
+                    "minutes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 720
+                    }
+                  },
+                  "required": [
+                    "mode"
+                  ],
+                  "additionalProperties": false
+                },
+                "jitterSeconds": {
+                  "type": "number",
+                  "description": "Max random delay in seconds before execution (0 = off). Spreads out runs to reduce rate-limit risk. Defaults to the copilotScheduler.jitterSeconds setting.",
+                  "minimum": 0,
+                  "maximum": 1800
+                },
+                "maxExecutionsPerDay": {
+                  "type": "number",
+                  "description": "Per-task execution cap per day (0 = unlimited).",
+                  "minimum": 0
+                },
+                "allowOverlappingRuns": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Allow overlapping automatic occurrences of this recurring task. Default true. Manual runs and one-time tasks keep their existing guards; runs using the same chat queue."
+                },
+                "allowedTimeStart": {
+                  "type": "string",
+                  "description": "Earliest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
+                },
+                "allowedTimeEnd": {
+                  "type": "string",
+                  "description": "Latest wall-clock time the task may run, as 'HH:mm', read in the scheduler timezone."
+                },
+                "attachments": {
+                  "type": "array",
+                  "description": "Files attached to the chat request when the task runs. Every attachment must resolve at run time or the task is skipped. Only workspace-scoped tasks may use source 'local'.",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "local",
+                          "global"
+                        ],
+                        "description": "'local' resolves against the task's workspace folder, 'global' against the global prompts folder."
+                      },
+                      "path": {
+                        "type": "string",
+                        "description": "Path relative to the source root, e.g. '.github/instructions/style.instructions.md'. Absolute paths and '..' are rejected."
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "path"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "prompt",
+                "scope"
+              ],
+              "additionalProperties": false
+            },
             "id": {
               "type": "string",
-              "description": "Task id to update."
+              "description": "Task ID for update, delete, run, and enable."
             },
             "updates": {
               "type": "object",
-              "description": "Fields to change. Use scheduler_set_task_enabled to toggle enabled; passing enabled here returns an error.",
+              "description": "Fields to change. Use scheduler_manage with action=enable to toggle enabled; passing enabled here returns an error.",
               "additionalProperties": false,
               "properties": {
                 "name": {
@@ -908,7 +915,11 @@
                   "properties": {
                     "mode": {
                       "type": "string",
-                      "enum": ["inherit", "off", "on"]
+                      "enum": [
+                        "inherit",
+                        "off",
+                        "on"
+                      ]
                     },
                     "minutes": {
                       "type": "integer",
@@ -916,7 +927,9 @@
                       "maximum": 720
                     }
                   },
-                  "required": ["mode"],
+                  "required": [
+                    "mode"
+                  ],
                   "additionalProperties": false
                 },
                 "jitterSeconds": {
@@ -969,87 +982,16 @@
                   }
                 }
               }
-            }
-          },
-          "required": [
-            "id",
-            "updates"
-          ]
-        }
-      },
-      {
-        "name": "scheduler_delete_task",
-        "displayName": "%tool.scheduler_delete_task.displayName%",
-        "modelDescription": "%tool.scheduler_delete_task.modelDescription%",
-        "toolReferenceName": "scheduler_delete_task",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(trash)",
-        "tags": [
-          "copilot-scheduler"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Task id to delete. This is not recoverable."
-            }
-          },
-          "required": [
-            "id"
-          ]
-        }
-      },
-      {
-        "name": "scheduler_set_task_enabled",
-        "displayName": "%tool.scheduler_set_task_enabled.displayName%",
-        "modelDescription": "%tool.scheduler_set_task_enabled.modelDescription%",
-        "toolReferenceName": "scheduler_set_task_enabled",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(check)",
-        "tags": [
-          "copilot-scheduler"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Task id."
             },
             "enabled": {
               "type": "boolean",
-              "description": "True to enable, false to disable."
+              "description": "Required for action=enable; true enables and false disables."
             }
           },
           "required": [
-            "id",
-            "enabled"
-          ]
-        }
-      },
-      {
-        "name": "scheduler_run_task",
-        "displayName": "%tool.scheduler_run_task.displayName%",
-        "modelDescription": "%tool.scheduler_run_task.modelDescription%",
-        "toolReferenceName": "scheduler_run_task",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(play)",
-        "tags": [
-          "copilot-scheduler"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Task id to run once immediately. The task's enabled state is not changed."
-            }
-          },
-          "required": [
-            "id"
-          ]
+            "action"
+          ],
+          "additionalProperties": false
         }
       }
     ],

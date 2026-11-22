@@ -10,7 +10,7 @@ import {
   toTaskSummary,
 } from "../shared";
 
-interface SetEnabledToolInput {
+export interface SetEnabledToolInput {
   id?: string;
   enabled?: boolean;
 }

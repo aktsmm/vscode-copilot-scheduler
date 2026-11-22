@@ -108,11 +108,13 @@ Copilot Chat のエージェントモードでは、`#` 参照でスケジュー
 | ツール                        | 説明                                                                                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `#scheduler_query`            | 読み取り専用の問い合わせ。`kind=list_sessions` で既存 Copilot チャットと不透明な ID を取得できます。会話内容や内部 URI は返しません。 |
-| `#scheduler_create_task`      | モデル・エージェント・実行制御・既存チャット宛先を含めてタスクを作成します。                                                        |
-| `#scheduler_update_task`      | `model` / `agent` / `scope` / 実行制御 / 既存チャット宛先を更新します。有効/無効の変更は `#scheduler_set_task_enabled` を使います。 |
-| `#scheduler_delete_task`      | タスク名・scope・ワークスペースを表示する強い確認後に削除します。                                                                     |
-| `#scheduler_set_task_enabled` | タスクを有効化または無効化します。                                                                                                    |
-| `#scheduler_run_task`         | タスクを今すぐ実行します。定期タスクの有効/無効は維持し、単発タスクには実行後の処理を適用します。                                     |
+| `#scheduler_manage`           | `action` を指定してタスクを作成・更新・削除・実行・有効化・無効化します。 |
+
+`scheduler_manage` の入力は、`{ "action": "create", "task": { ... } }`、`{ "action": "update", "id": "...", "updates": { ... } }`、`{ "action": "delete" | "run", "id": "..." }`、または `{ "action": "enable", "id": "...", "enabled": true | false }` です。`update` では `enabled` を変更できません。有効化には引き続き初回実行同意が必要です。
+
+**破壊的変更:** 既存の instruction や自動化にある `scheduler_create_task`、`scheduler_update_task`、`scheduler_delete_task`、`scheduler_run_task`、`scheduler_set_task_enabled` を、対応する `action` を指定した `scheduler_manage` に変更してください。旧ツール ID は登録されません。VS Code の `scheduler_manage` に対する保存済み承認は実行・削除を含む全操作に適用される場合があり、旧ツールごとの承認は引き継がれません。Scheduler の確認設定と VS Code のポリシーは引き続き適用されます。
+
+定期タスクには `disable-model-invocation: true` のスキルを `/<skill-name>` で呼ぶ形を推奨します。作成・更新結果の `skillResolution` は Scheduler の探索範囲での検出結果と明示呼び出し専用かを返します。未発見の場合も組み込みコマンドや別の場所のスキルである可能性があり、探索が不完全なら不明と返します。診断の失敗で保存済みタスクが取り消されることはありません。
 
 単発タスクの手動実行後、ツールは `enabledStateChanged` と `taskDeleted` を返します。実行済みの単発タスクは `oneTimeCompleted` と再設定の案内を返し、再送信しません。
 
@@ -130,7 +132,7 @@ Codex Bridge、BYOK、Local LLM などの追加 provider が VS Code Chat に登
 
 VS Code は[旧 Local ハーネスを2027年2月に削除予定](https://code.visualstudio.com/updates/v1_146#_copilot-harness-and-deprecation-of-the-local-harness)です。Chat 画面の廃止ではありません。既定の Copilot ハーネスは Agent Host で動作し、共通モデルの選択は Chat・CLI・Agent Host の詳細設定に引き続き使われます。
 
-外部モデルを Agent Host で実行する場合は、共通モデルを選び、Host の一覧から完全な **Agent Host のモデル ID** を明示的に選びます。タスク編集画面を開くと最新の一覧を取得し、手動でも更新できます。選んだ Host ID が提供元のモデルに対応していることを確認してください。Scheduler はこの対応関係を自動検証できません。一覧は稼働中の Host に依存し、起動直後は空の場合があります。ID は送信前に再確認します。古い BYOK タスクで対応関係を特定できない場合は、候補が 1 件でも自動選択せず停止します。`scheduler_query` の `kind=list_agent_host_models` でも同じ ID を取得でき、`scheduler_create_task` / `scheduler_update_task` は `agentHostModelId` を受け付けます。提供元のモデルを変更すると、新しい ID を明示しない限り古い紐付けは解除されます。この ID は Host への要求を指定するもので、実際に処理するバックエンドやアカウントの証明ではありません。
+外部モデルを Agent Host で実行する場合は、共通モデルを選び、Host の一覧から完全な **Agent Host のモデル ID** を明示的に選びます。タスク編集画面を開くと最新の一覧を取得し、手動でも更新できます。選んだ Host ID が提供元のモデルに対応していることを確認してください。Scheduler はこの対応関係を自動検証できません。一覧は稼働中の Host に依存し、起動直後は空の場合があります。ID は送信前に再確認します。古い BYOK タスクで対応関係を特定できない場合は、候補が 1 件でも自動選択せず停止します。`scheduler_query` の `kind=list_agent_host_models` でも同じ ID を取得でき、`scheduler_manage` の create/update は `agentHostModelId` を受け付けます。提供元のモデルを変更すると、新しい ID を明示しない限り古い紐付けは解除されます。この ID は Host への要求を指定するもので、実際に処理するバックエンドやアカウントの証明ではありません。
 
 追加 provider を明示選択した場合、モデル不在や Chat への送信失敗時には停止し、既定モデルや別の提供元に切り替えて再試行しません。提供元の認証・接続と、選択した Chat / Agent モードへの対応は必要です。送信成功は提供元の応答完了を保証しません。独立した Claude / Codex のエージェント実行環境のスケジュールは対象外です。
 
@@ -215,8 +217,8 @@ map は通常編集・複製・再読み込みで維持し、モデル変更時�
 - CLI はプロンプトモードで `/スキル` を実行しない（CLI 1.0.99 で確認）ため、Scheduler がスキルの `SKILL.md` の指示（front matter を除く）とスキルのフォルダーを、引数の前に付けます。スキル一覧と同じ規則で、名前の一致が必要で、ワークスペースのスキルは信頼されたワークスペースでのみ使え、ユーザーのスキルより優先されます。
 - 実行はタスクのワークスペースフォルダーで行います（グローバルのタスクは最初のローカルワークスペースフォルダー）。応答はチャットに表示せず、保存もしません。実行履歴には、指定したモデル、CLI が応答で報告したモデル、使ったプレミアムリクエストを記録します。
 - 未対応（メッセージを出して停止）: 添付ファイル、モデルの詳細オプション、カスタムエージェント。モデルが reasoning effort を受け付けないときは、CLI 自身のエラーで失敗します。
-- **ツール**: バックグラウンド実行は承認を求められないため、`copilotScheduler.cliAllowAllTools` がオンでない限りツールは拒否されます。無人のタスクがタスクのフォルダーでコマンドを実行しファイルを変更できることを許容する場合だけオンにしてください。Chat（`scheduler_create_task`）からこのオプションは設定できません。
-- **長時間の実行**: スケジュール実行の CLI は、ほかのタスクを止めません。終了までは日次実行枠を予約し、日次上限は引き続き適用されます。手動実行（実行ボタンや `scheduler_run_task`）は CLI の終了まで待ち、`copilotScheduler.cliTimeoutEnabled` がオンのときだけ `cliTimeoutMinutes` で打ち切ります。VS Code を閉じると、実行中の CLI も停止します。
+- **ツール**: バックグラウンド実行は承認を求められないため、`copilotScheduler.cliAllowAllTools` がオンでない限りツールは拒否されます。無人のタスクがタスクのフォルダーでコマンドを実行しファイルを変更できることを許容する場合だけオンにしてください。Chat（`scheduler_manage`）からこのオプションは設定できません。
+- **長時間の実行**: スケジュール実行の CLI は、ほかのタスクを止めません。終了までは日次実行枠を予約し、日次上限は引き続き適用されます。手動実行（実行ボタンや `scheduler_manage` の `action=run`）は CLI の終了まで待ち、`copilotScheduler.cliTimeoutEnabled` がオンのときだけ `cliTimeoutMinutes` で打ち切ります。VS Code を閉じると、実行中の CLI も停止します。
 - 設定は `copilotScheduler.cliPath`（既定: PATH 上の `copilot`。Windows は `copilot.exe` が必要）、`copilotScheduler.cliTimeoutEnabled`（既定オフ）、`copilotScheduler.cliTimeoutMinutes`（既定 180。タイムアウトがオンのときだけ使用）です。いずれもユーザー／リモートの設定だけが有効で、ワークスペースからは変更できません。
 
 #### モデル指定とセッションの種類
@@ -272,7 +274,7 @@ VS Code 1.142（Windows）で確認した内容です。
 
 同じ名前のタスクが scope をまたいで複数あり得る場合は、更新・無効化・削除の前に登録済みタスクを表示するよう Copilot に依頼すると、対象タスクを確認してから進められます。
 
-`scheduler_run_task` の入力は `{ "id": "..." }` だけで、プロンプト・添付の解決と履歴記録は既存の「今すぐ実行」と共通です。無効タスクは無効のまま、有効タスクの `nextRun` は `manualRunNextRunPolicy` に従って進みます。手動実行なので jitter・実行可能時間帯・日次上限は適用しません。workspace タスクは現在のワークスペースに属する必要があります。確認したタスクが実行開始前に変更された場合は実行を拒否します。`confirmationMode=always` では呼び出し時点の内容を確認し、確認画面を開いている間の変更も拒否します。
+`scheduler_manage` の run の入力は `{ "action": "run", "id": "..." }` だけで、プロンプト・添付の解決と履歴記録は既存の「今すぐ実行」と共通です。無効タスクは無効のまま、有効タスクの `nextRun` は `manualRunNextRunPolicy` に従って進みます。手動実行なので jitter・実行可能時間帯・日次上限は適用しません。workspace タスクは現在のワークスペースに属する必要があります。確認したタスクが実行開始前に変更された場合は実行を拒否します。`confirmationMode=always` では呼び出し時点の内容を確認し、確認画面を開いている間の変更も拒否します。
 
 `ok: true` と `executionSemantics: "prompt_dispatched"` または `"prompt_queued"` は、送信またはキュー受理を示します。Agent Host の完了を確認できた場合は `turnOutcome` と `responseText` も返しますが、依頼した作業の成功を保証するものではありません。`saveFailed` は同じ送信状態と `retrySafe: false` を返します。Agent Host の失敗・キャンセル・結果不明も自動再試行せず、Chat と履歴を確認してください。`claimFailed` または `taskChanged` は、その呼び出しではプロンプトを送信していないことを示します。再実行前にタスクの保存状態を確認してください。ツール呼び出しのキャンセル確認は実行開始前だけで、送信済みのプロンプトは取り消せません。呼び出しごとに新しい手動要求として扱い、同じウィンドウで送信・履歴記録中の重複要求は拒否します。処理終了後の再呼び出しは再実行になるため、冪等な操作ではありません。
 
@@ -328,7 +330,7 @@ AI が適用した編集を遅延後に自動で保持するには、VS Code 設
 
 ウィンドウ全体の自動実行同時上限は廃止しました。`settings.json` に残る `copilotScheduler.maxConcurrentAutomaticRuns` は無視され、手動で削除できます。Scheduler は設定ファイルを自動編集しません。別のタスクは日次上限の範囲で並列に開始できます。同じ定期タスクの前回が同じウィンドウで実行中でも、既定では次の予定を実行します（タスクごとの **自動実行の重複を許可する** がオン）。オフにすると、実行中は次の予定をスキップします。手動実行と単発タスクの重複防止は変わりません。別ウィンドウでは同じタスクの異なる予定回が同時に動く場合があります。同じフォルダーを複数実行が変更すると競合するため、必要に応じて既存の worktree 選択肢を検討してください。
 
-タスク単位の設定（「チャットセッション」、任意の「既存 Copilot チャット」、「上限/日」、「実行許可時間帯」、「タイムアウト」、重複実行）は Webview の作成/編集フォームで指定できます。「タイムアウト」はそのタスクの Agent Host と Copilot CLI の実行に適用します。「設定に従う」（既定）は `copilotScheduler.agentHostTimeoutEnabled` / `copilotScheduler.cliTimeoutEnabled`（既定はオフ）に従い、「オフ」はそのタスクを停止せず、「オン」は指定の分数（1〜720。空欄なら設定の分数、既定 180）で停止します。`scheduler_create_task` / `scheduler_update_task` の `timeout` は `{ "mode": "inherit" | "off" | "on", "minutes"? }` で指定します。Agent Host が起動中にチャット一覧を更新して選択します。保存時と実行時に宛先を再検証し、workspace タスクはチャットの唯一の workspace と一致する必要があります。紐付けたタスクはキューへ追加され、実行中のターンには割り込みません。重複許可時は予定回ごとに別のキュー項目になり、未許可時は同じタスクの保留をまとめます。キュー受理は実行完了ではなく、先行ターンの失敗・取消や入力待ちで保留が続く場合があります。「上限/日」と「実行許可時間帯」はスケジュールと同じ時計で判定します。`copilotScheduler.timezone` を設定していればそのタイムゾーン、未設定ならマシンのローカル時刻です。
+タスク単位の設定（「チャットセッション」、任意の「既存 Copilot チャット」、「上限/日」、「実行許可時間帯」、「タイムアウト」、重複実行）は Webview の作成/編集フォームで指定できます。「タイムアウト」はそのタスクの Agent Host と Copilot CLI の実行に適用します。「設定に従う」（既定）は `copilotScheduler.agentHostTimeoutEnabled` / `copilotScheduler.cliTimeoutEnabled`（既定はオフ）に従い、「オフ」はそのタスクを停止せず、「オン」は指定の分数（1〜720。空欄なら設定の分数、既定 180）で停止します。`scheduler_manage` の create/update の `timeout` は `{ "mode": "inherit" | "off" | "on", "minutes"? }` で指定します。Agent Host が起動中にチャット一覧を更新して選択します。保存時と実行時に宛先を再検証し、workspace タスクはチャットの唯一の workspace と一致する必要があります。紐付けたタスクはキューへ追加され、実行中のターンには割り込みません。重複許可時は予定回ごとに別のキュー項目になり、未許可時は同じタスクの保留をまとめます。キュー受理は実行完了ではなく、先行ターンの失敗・取消や入力待ちで保留が続く場合があります。「上限/日」と「実行許可時間帯」はスケジュールと同じ時計で判定します。`copilotScheduler.timezone` を設定していればそのタイムゾーン、未設定ならマシンのローカル時刻です。
 
 Webview では、対応 family に対して Copilot Chat に近い思考の負荷候補をプレビュー表示します。失敗するときは「既定」を選んでください。
 

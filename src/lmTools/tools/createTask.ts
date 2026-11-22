@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
+import type { SkillPromptDiagnostic } from "../../skillResolver";
 import type {
   CreateTaskInput,
+  ScheduledTask,
   TaskAttachment,
   ModelConfiguration,
 } from "../../types";
@@ -23,7 +25,7 @@ import {
   validateTaskTimeoutField,
 } from "../shared";
 
-interface CreateTaskToolInput {
+export interface CreateTaskToolInput {
   name?: string;
   cronExpression?: string;
   runAt?: string;
@@ -94,6 +96,7 @@ function toCreateInput(input: CreateTaskToolInput): CreateTaskInput {
 
 export function createSchedulerCreateTaskTool(
   client: LmToolMutationClient,
+  diagnoseSkill?: (task: ScheduledTask) => Promise<SkillPromptDiagnostic>,
 ): vscode.LanguageModelTool<CreateTaskToolInput> {
   return {
     async prepareInvocation(
@@ -190,6 +193,7 @@ export function createSchedulerCreateTaskTool(
         task: Record<string, unknown>;
         warning?: string;
         warnings?: string[];
+        skillResolution?: SkillPromptDiagnostic;
       } = {
         ok: true,
         action: "create",
@@ -201,6 +205,16 @@ export function createSchedulerCreateTaskTool(
       }
       if (result.warnings && result.warnings.length > 0) {
         payload.warnings = result.warnings;
+      }
+      if (diagnoseSkill) {
+        try {
+          payload.skillResolution = await diagnoseSkill(result.task);
+        } catch {
+          payload.skillResolution = {
+            status: "unknown",
+            message: "Skill discovery failed after the task was saved. Do not retry creation; query the task.",
+          };
+        }
       }
       return buildJsonTextResult(payload);
     },

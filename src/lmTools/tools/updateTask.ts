@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 
 import type { LmToolMutationClient } from "../../taskMutationService";
-import type { CreateTaskInput } from "../../types";
+import type { SkillPromptDiagnostic } from "../../skillResolver";
+import type { CreateTaskInput, ScheduledTask } from "../../types";
 import {
   assertWriteToolGates,
   buildJsonTextResult,
@@ -18,7 +19,7 @@ import {
   validateTaskTimeoutField,
 } from "../shared";
 
-interface UpdateTaskToolInput {
+export interface UpdateTaskToolInput {
   id?: string;
   updates?: Partial<CreateTaskInput> & { enabled?: unknown };
 }
@@ -64,6 +65,7 @@ function findUnexpectedUpdateKeys(updates: object): string[] {
 
 export function createSchedulerUpdateTaskTool(
   client: LmToolMutationClient,
+  diagnoseSkill?: (task: ScheduledTask) => Promise<SkillPromptDiagnostic>,
 ): vscode.LanguageModelTool<UpdateTaskToolInput> {
   return {
     async prepareInvocation(
@@ -175,6 +177,7 @@ export function createSchedulerUpdateTaskTool(
         task: Record<string, unknown>;
         warning?: string;
         warnings?: string[];
+        skillResolution?: SkillPromptDiagnostic;
       } = {
         ok: true,
         action: "update",
@@ -186,6 +189,16 @@ export function createSchedulerUpdateTaskTool(
       }
       if (result.warnings && result.warnings.length > 0) {
         payload.warnings = result.warnings;
+      }
+      if (diagnoseSkill) {
+        try {
+          payload.skillResolution = await diagnoseSkill(result.task);
+        } catch {
+          payload.skillResolution = {
+            status: "unknown",
+            message: "Skill discovery failed after the task was saved. Query the task before retrying.",
+          };
+        }
       }
       return buildJsonTextResult(payload);
     },

@@ -946,70 +946,17 @@ suite("Extension Test Suite", () => {
     const nlsJa = JSON.parse(
       fs.readFileSync(path.join(root, "package.nls.ja.json"), "utf8"),
     ) as Record<string, string>;
-    const createDescription =
-      nls["tool.scheduler_create_task.modelDescription"] ?? "";
-    const createDescriptionJa =
-      nlsJa["tool.scheduler_create_task.modelDescription"] ?? "";
-    const updateDescription =
-      nls["tool.scheduler_update_task.modelDescription"] ?? "";
-    const updateDescriptionJa =
-      nlsJa["tool.scheduler_update_task.modelDescription"] ?? "";
-    const deleteDescription =
-      nls["tool.scheduler_delete_task.modelDescription"] ?? "";
-    const deleteDescriptionJa =
-      nlsJa["tool.scheduler_delete_task.modelDescription"] ?? "";
-    const setEnabledDescription =
-      nls["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
-    const setEnabledDescriptionJa =
-      nlsJa["tool.scheduler_set_task_enabled.modelDescription"] ?? "";
-    const runDescription =
-      nls["tool.scheduler_run_task.modelDescription"] ?? "";
-    const runDescriptionJa =
-      nlsJa["tool.scheduler_run_task.modelDescription"] ?? "";
-
-    assert.match(createDescription, /Use when the user asks/i);
-    assert.match(createDescription, /schedule|set up|register|automate/i);
-    assert.match(
-      createDescriptionJa,
-      /スケジュール設定|定期実行|タスク登録|自動化/,
-    );
-    assert.match(updateDescription, /Use when the user asks/i);
-    assert.match(updateDescription, /change|edit|reschedule|revise/i);
-    assert.match(updateDescriptionJa, /変更|編集|リスケジュール|見直し/);
-    assert.match(deleteDescription, /Use when the user asks/i);
-    assert.match(deleteDescription, /delete|remove|cancel/i);
-    assert.match(deleteDescriptionJa, /削除|除去|キャンセル/);
-    assert.match(setEnabledDescription, /Use when the user asks/i);
-    assert.match(
-      setEnabledDescription,
-      /enable|disable|pause|resume|turn on|turn off/i,
-    );
-    assert.match(
-      setEnabledDescriptionJa,
-      /有効化|無効化|一時停止|再開|オン|オフ/,
-    );
-    assert.match(runDescription, /run|execute|trigger|test/i);
-    assert.match(
-      runDescription,
-      /Recurring tasks keep their enabled state.*one-time tasks are reserved and disabled before execution/i,
-    );
-    assert.match(
-      runDescription,
-      /afterRun delete applies only after success and saved history/i,
-    );
-    assert.match(runDescription, /claimFailed means no prompt was sent/i);
-    assert.match(runDescriptionJa, /今すぐ1回実行|起動|テスト/);
-    assert.match(
-      runDescriptionJa,
-      /定期タスクの有効\/無効は維持.*単発タスクは実行前に確保・無効化/,
-    );
-    assert.match(runDescriptionJa, /afterRun の削除は成功と履歴保存後だけ/);
-    assert.match(runDescriptionJa, /claimFailed は今回プロンプトを送信していない/);
-    assert.match(runDescription, /not model response completion/);
-    assert.match(runDescription, /saveFailed.*do not retry automatically/);
-    assert.match(runDescription, /manualRunNextRunPolicy/);
-    assert.match(runDescriptionJa, /モデル応答完了は意味しません/);
-    assert.match(runDescriptionJa, /saveFailed.*自動再試行しない/);
+    const description = nls["tool.scheduler_manage.modelDescription"] ?? "";
+    const descriptionJa = nlsJa["tool.scheduler_manage.modelDescription"] ?? "";
+    assert.match(description, /Use when the user asks/i);
+    for (const action of ["create", "update", "delete", "run", "enable"]) {
+      assert.ok(description.includes(action), action);
+      assert.ok(descriptionJa.includes(action), action);
+    }
+    assert.match(description, /disable-model-invocation: true/);
+    assert.match(descriptionJa, /disable-model-invocation: true/);
+    assert.match(description, /Never automatically retry/i);
+    assert.match(descriptionJa, /自動再試行せず/);
   });
 
   test("LM tools manifest keeps prompt references and avoids proposed toolsets", () => {
@@ -1030,11 +977,7 @@ suite("Extension Test Suite", () => {
     const tools = manifest.contributes?.languageModelTools ?? [];
     const expectedToolNames = [
       "scheduler_query",
-      "scheduler_create_task",
-      "scheduler_update_task",
-      "scheduler_delete_task",
-      "scheduler_set_task_enabled",
-      "scheduler_run_task",
+      "scheduler_manage",
     ];
 
     assert.deepStrictEqual(
@@ -1087,17 +1030,10 @@ suite("Extension Test Suite", () => {
     assert.ok(queryKinds?.includes("list_agents"));
     assert.ok(queryKinds?.includes("list_skills"));
 
-    const createProperties =
-      toolByName("scheduler_create_task")?.inputSchema?.properties ?? {};
-    const runSchema = toolByName("scheduler_run_task")?.inputSchema as {
-      additionalProperties?: boolean;
-      required?: string[];
-      properties?: Record<string, unknown>;
-    };
-    assert.strictEqual(runSchema.additionalProperties, false);
-    assert.deepStrictEqual(runSchema.required, ["id"]);
-    assert.deepStrictEqual(Object.keys(runSchema.properties ?? {}), ["id"]);
-    const updates = toolByName("scheduler_update_task")?.inputSchema?.properties
+    const manageProperties = toolByName("scheduler_manage")?.inputSchema?.properties;
+    const createProperties = (manageProperties?.task as
+      { properties?: Record<string, Record<string, unknown>> } | undefined)?.properties ?? {};
+    const updates = manageProperties
       ?.updates as
       | { additionalProperties?: boolean; properties?: Record<string, unknown> }
       | undefined;
@@ -1116,16 +1052,16 @@ suite("Extension Test Suite", () => {
     ]) {
       assert.ok(
         createProperties[key],
-        `scheduler_create_task must expose '${key}' so agent mode can set it.`,
+        `scheduler_manage task must expose '${key}' so agent mode can set it.`,
       );
       assert.ok(
         updates?.properties?.[key],
-        `scheduler_update_task updates must expose '${key}'.`,
+        `scheduler_manage updates must expose '${key}'.`,
       );
     }
     for (const [toolName, schema] of [
-      ["scheduler_create_task", createProperties.modelReasoningEffort],
-      ["scheduler_update_task", updates?.properties?.modelReasoningEffort],
+      ["scheduler_manage create", createProperties.modelReasoningEffort],
+      ["scheduler_manage update", updates?.properties?.modelReasoningEffort],
     ] as const) {
       assert.deepStrictEqual(
         (schema as { enum?: unknown } | undefined)?.enum,

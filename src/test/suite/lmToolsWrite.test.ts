@@ -8,6 +8,7 @@ import { createSchedulerDeleteTaskTool } from "../../lmTools/tools/deleteTask";
 import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
 import { createSchedulerSetTaskEnabledTool } from "../../lmTools/tools/setTaskEnabled";
 import { createSchedulerUpdateTaskTool, RECOGNIZED_UPDATE_KEYS } from "../../lmTools/tools/updateTask";
+import { createSchedulerManageTool } from "../../lmTools/tools/manage";
 import {
   escapeConfirmationText,
   formatConfirmationCode,
@@ -278,6 +279,87 @@ function confirmationMessageText(
 }
 
 suite("lmTools write wrappers", () => {
+  test("manage routes actions and rejects invalid or unrelated fields without mutation", async () => {
+    const task = fakeTask();
+    const client = new FakeClient(task);
+    let runs = 0;
+    const tool = createSchedulerManageTool(fakeScheduleManager(task), client, async () => {
+      runs++;
+      return { ok: true };
+    });
+    const badInputs: unknown[] = [
+      { action: "missing", id: task.id },
+      { action: "run", id: task.id, enabled: true },
+      { action: "delete", id: task.id, task: {} },
+      { action: "enable", id: task.id, enabled: "yes" },
+      { action: "create", task: { name: 7 } },
+      { action: "create", task: { unexpected: true } },
+      { action: "update", id: task.id, updates: [] },
+    ];
+    for (const input of badInputs) {
+      assert.strictEqual(parseJson(await invoke(tool, input)).reason, "validation");
+    }
+    const named: Array<[unknown, string]> = [
+      [{ action: "update", id: task.id, updates: { bogus: 1 } }, "updates.bogus"],
+      [{ action: "create", task: { allowOverlappingRuns: "yes" } }, "task.allowOverlappingRuns"],
+      [{ action: "run", id: task.id, enabled: true }, "'enabled'"],
+      [{ action: "enable", id: task.id, enabled: 1 }, "'enabled' must be a boolean"],
+    ];
+    for (const [input, expected] of named) {
+      const message = String(parseJson(await invoke(tool, input)).message);
+      assert.ok(message.includes(expected), `${message} should name ${expected}`);
+    }
+    assert.strictEqual(Boolean(client.createInput), false);
+    assert.strictEqual(Boolean(client.updateArgs), false);
+    assert.strictEqual(client.deletedId, undefined);
+    assert.strictEqual(client.enabledArgs, undefined);
+    assert.strictEqual(runs, 0);
+
+    const created = parseJson(await invoke(tool, {
+      action: "create",
+      task: { name: task.name, cronExpression: task.cronExpression, prompt: task.prompt, scope: task.scope },
+    }));
+    assert.strictEqual(created.ok, true);
+    assert.ok(created.skillResolution);
+    assert.strictEqual(client.createInput?.name, task.name);
+    assert.strictEqual(parseJson(await invoke(tool, { action: "update", id: task.id, updates: { name: "Updated" } })).ok, true);
+    assert.strictEqual(client.updateArgs?.updates.name, "Updated");
+    assert.strictEqual(parseJson(await invoke(tool, { action: "enable", id: task.id, enabled: false })).ok, true);
+    assert.deepStrictEqual(client.enabledArgs, { id: task.id, enabled: false });
+    assert.strictEqual(parseJson(await invoke(tool, { action: "run", id: task.id })).ok, true);
+    assert.strictEqual(runs, 1);
+    assert.strictEqual(parseJson(await invoke(tool, { action: "delete", id: task.id })).ok, true);
+    assert.strictEqual(client.deletedId, task.id);
+  });
+
+  test("skill diagnostic failure preserves a successful create and does not expose the error", async () => {
+    const tool = createSchedulerCreateTaskTool(new FakeClient(), async () => {
+      throw new Error("private diagnostic secret");
+    });
+    const result = await invoke(tool, {
+      name: "Test", cronExpression: "0 9 * * *", prompt: "/missing", scope: "global",
+    });
+    const payload = parseJson(result);
+    assert.strictEqual(payload.ok, true);
+    assert.deepStrictEqual((payload.skillResolution as { status: string }).status, "unknown");
+    assert.ok(!textOf(result).includes("private diagnostic secret"));
+  });
+
+  test("updating other fields diagnoses the saved prompt and preserves warnings", async () => {
+    const task = fakeTask({ prompt: "/existing private argument" });
+    let diagnosedPrompt = "";
+    const tool = createSchedulerUpdateTaskTool(new WarningClient(task), async (savedTask) => {
+      diagnosedPrompt = savedTask.prompt;
+      return { status: "unknown", message: "Incomplete discovery." };
+    });
+    const result = parseJson(await invoke(tool, { id: task.id, updates: { name: "Updated" } }));
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(diagnosedPrompt, task.prompt);
+    assert.deepStrictEqual(result.warnings, ["first", "second"]);
+    assert.strictEqual((result.skillResolution as { status: string }).status, "unknown");
+    assert.strictEqual((result.task as { id: string }).id, task.id);
+  });
+
   test("the update schema, the runtime whitelist and the create schema list the same fields", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
@@ -286,14 +368,13 @@ suite("lmTools write wrappers", () => {
       manifest.contributes.languageModelTools.find(
         (item: { name: string }) => item.name === name,
       );
-    const updateKeys = Object.keys(
-      find("scheduler_update_task").inputSchema.properties.updates.properties,
-    ).sort();
+    const properties = find("scheduler_manage").inputSchema.properties;
+    const updateKeys = Object.keys(properties.updates.properties).sort();
     // `enabled` is recognized only to return its dedicated error; it is not offered.
     const runtimeKeys = [...RECOGNIZED_UPDATE_KEYS].filter((key) => key !== "enabled").sort();
     assert.deepStrictEqual(updateKeys, runtimeKeys);
     // Creation also accepts `enabled`, which an update changes through its own tool.
-    const createKeys = Object.keys(find("scheduler_create_task").inputSchema.properties)
+    const createKeys = Object.keys(properties.task.properties)
       .filter((key) => key !== "enabled")
       .sort();
     assert.deepStrictEqual(createKeys, updateKeys);
@@ -303,14 +384,10 @@ suite("lmTools write wrappers", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
     );
-    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
-      const tool = manifest.contributes.languageModelTools.find(
-        (item: { name: string }) => item.name === name,
-      );
-      const properties =
-        name === "scheduler_update_task"
-          ? tool.inputSchema.properties.updates.properties
-          : tool.inputSchema.properties;
+    const tool = manifest.contributes.languageModelTools.find(
+      (item: { name: string }) => item.name === "scheduler_manage",
+    );
+    for (const properties of [tool.inputSchema.properties.task.properties, tool.inputSchema.properties.updates.properties]) {
       assert.strictEqual(properties.allowOverlappingRuns.type, "boolean");
     }
 
@@ -359,14 +436,10 @@ suite("lmTools write wrappers", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
     );
-    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
-      const tool = manifest.contributes.languageModelTools.find(
-        (item: { name: string }) => item.name === name,
-      );
-      const properties =
-        name === "scheduler_update_task"
-          ? tool.inputSchema.properties.updates.properties
-          : tool.inputSchema.properties;
+    const tool = manifest.contributes.languageModelTools.find(
+      (item: { name: string }) => item.name === "scheduler_manage",
+    );
+    for (const properties of [tool.inputSchema.properties.task.properties, tool.inputSchema.properties.updates.properties]) {
       assert.strictEqual(properties.timeout.type, "object");
       assert.deepStrictEqual(properties.timeout.properties.mode.enum, ["inherit", "off", "on"]);
       assert.deepStrictEqual(properties.timeout.required, ["mode"]);
@@ -438,14 +511,10 @@ suite("lmTools write wrappers", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8"),
     );
-    for (const name of ["scheduler_create_task", "scheduler_update_task"]) {
-      const tool = manifest.contributes.languageModelTools.find(
-        (item: { name: string }) => item.name === name,
-      );
-      const properties =
-        name === "scheduler_update_task"
-          ? tool.inputSchema.properties.updates.properties
-          : tool.inputSchema.properties;
+    const tool = manifest.contributes.languageModelTools.find(
+      (item: { name: string }) => item.name === "scheduler_manage",
+    );
+    for (const properties of [tool.inputSchema.properties.task.properties, tool.inputSchema.properties.updates.properties]) {
       assert.deepStrictEqual(properties.agentHostWorkspaceMode.enum, [
         "default",
         "folder",
@@ -737,12 +806,12 @@ suite("lmTools write wrappers", () => {
         { subscriptions: disposables } as vscode.ExtensionContext,
         fakeScheduleManager(task),
       );
-      assert.strictEqual(registered.size, 6);
-      assert.strictEqual(disposables.length, 6);
-      const tool = registered.get("scheduler_run_task");
+      assert.strictEqual(registered.size, 2);
+      assert.strictEqual(disposables.length, 2);
+      const tool = registered.get("scheduler_manage");
       assert.ok(tool);
       assert.strictEqual(
-        parseJson(await invoke(tool, { id: task.id })).reason,
+        parseJson(await invoke(tool, { action: "run", id: task.id })).reason,
         "executorUnavailable",
       );
     } finally {
@@ -1000,14 +1069,20 @@ suite("lmTools write wrappers", () => {
     const alwaysPrepared = await withConfirmationMode("always", () =>
       prepare(tool, { id: task.id }),
     );
+    const minimalPrepared = await withConfirmationMode("minimal", () =>
+      prepare(tool, { id: task.id }),
+    );
     assert.strictEqual(defaultPrepared.confirmationMessages, undefined);
     assert.strictEqual(alwaysPrepared.confirmationMessages, undefined);
+    assert.strictEqual(minimalPrepared.confirmationMessages, undefined);
     const prompts: string[] = [];
     await withRunConfirmation(async (message) => {
       prompts.push(message);
       return messages.actionRun();
     }, async () => {
       await invoke(tool, { id: task.id });
+      assert.strictEqual(prompts.length, 0);
+      await withConfirmationMode("minimal", () => invoke(tool, { id: task.id }));
       assert.strictEqual(prompts.length, 0);
       await withConfirmationMode("always", () => invoke(tool, { id: task.id }));
     });
@@ -1736,6 +1811,29 @@ suite("lmTools write wrappers", () => {
     assert.ok(
       message.includes(`workspace: ${escapeConfirmationText("workspace-a")}`),
     );
+  });
+
+  test("manage keeps the per-action confirmations and never mutates while preparing", async () => {
+    const task = fakeTask();
+    const client = new FakeClient(task);
+    let runs = 0;
+    const tool = createSchedulerManageTool(fakeScheduleManager(task), client, async () => {
+      runs++;
+      return { ok: true };
+    });
+    const deletePrepared = await prepare(tool, { action: "delete", id: task.id });
+    assert.strictEqual(deletePrepared.confirmationMessages?.title, "⚠️ Delete scheduler task");
+    assert.ok(confirmationMessageText(deletePrepared).includes(escapeConfirmationText(task.name)));
+    const alwaysRun = await withConfirmationMode("always", () =>
+      prepare(tool, { action: "enable", id: task.id, enabled: false }),
+    );
+    assert.strictEqual(alwaysRun.confirmationMessages?.title, "Disable scheduler task");
+    const invalid = await prepare(tool, { action: "delete" });
+    assert.strictEqual(invalid.confirmationMessages, undefined);
+    await prepare(tool, { action: "run", id: task.id });
+    assert.strictEqual(client.deletedId, undefined);
+    assert.strictEqual(client.enabledArgs, undefined);
+    assert.strictEqual(runs, 0);
   });
 
   test("minimal confirmation mode suppresses delete custom confirmation", async () => {
