@@ -10,6 +10,7 @@ import { messages } from "../../i18n";
 import { getFirstDistinctCronRuns } from "../../cronExpressions";
 import { createSchedulerRunTaskTool } from "../../lmTools/tools/runTask";
 import { createPromptBlockedError } from "../../promptExecutionErrors";
+import { CopilotExecutor } from "../../copilotExecutor";
 
 function normalizePathForAssertion(p: string): string {
   const resolved = path.normalize(path.resolve(p));
@@ -7201,6 +7202,144 @@ suite("ScheduleManager RunNow Tests", () => {
       assert.strictEqual((await manager.runTaskNowDetailed(task.id)).ok, false);
       assert.strictEqual(executions, 1);
     } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("manual execution reports exactly one actionable warning or one fallback error", async () => {
+    const { __testOnly: extensionTest } = await import("../../extension");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-scheduler-"));
+    const originalWarning = vscode.window.showWarningMessage;
+    const originalError = vscode.window.showErrorMessage;
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    let releaseWarning: ((value: string | undefined) => void) | undefined;
+    try {
+      const manager = new ScheduleManager(createMockContext(tmp));
+      const task = await manager.createTask({
+        name: "Synthetic failing task",
+        prompt: "synthetic prompt",
+        cronExpression: "0 * * * *",
+        scope: "global",
+        enabled: false,
+      });
+      const internals = manager as unknown as {
+        onExecuteCallback: (task: ScheduledTask) => Promise<void>;
+      };
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true,
+        value: async (text: string) => {
+          errors.push(text);
+          return undefined;
+        },
+      });
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: (text: string) => {
+          warnings.push(text);
+          return new Promise<string | undefined>((resolve) => {
+            releaseWarning = resolve;
+          });
+        },
+      });
+      const executor = new CopilotExecutor();
+      internals.onExecuteCallback = async (runningTask) => {
+        await extensionTest.executeTask(runningTask, "manual", undefined, {
+          notifyInfo: () => {},
+          executePrompt: (prompt, options) =>
+            executor.executePrompt(prompt, {
+              ...options,
+              targetChatId: "synthetic",
+              useCopilotCli: true,
+            }),
+        });
+      };
+      const blocked = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(blocked.ok, false);
+      if (blocked.ok) throw new Error("Expected blocked execution");
+      assert.strictEqual(blocked.reason, "promptBlocked");
+      assert.strictEqual(blocked.userNotified, true);
+      extensionTest.handleManualRunFailure(task.name, blocked);
+      assert.strictEqual(warnings.length, 1);
+      assert.ok(warnings[0].includes(task.name));
+      assert.strictEqual(errors.length, 0);
+      releaseWarning?.(undefined);
+
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: () => {
+          throw new Error("Synthetic notification failure");
+        },
+      });
+      const undisplayed = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(undisplayed.ok, false);
+      if (undisplayed.ok) throw new Error("Expected blocked execution");
+      assert.strictEqual(undisplayed.userNotified, true);
+      extensionTest.handleManualRunFailure(task.name, undisplayed);
+      assert.strictEqual(errors.length, 1);
+      assert.ok(errors[0].includes(task.name));
+      assert.ok(errors[0].includes(messages.targetChatRequiresAgentHost()));
+
+      errors.length = 0;
+      internals.onExecuteCallback = async (runningTask) => {
+        await extensionTest.executeTask(runningTask, "manual", undefined, {
+          notifyInfo: () => {},
+          executePrompt: async () => {
+            throw new Error("Synthetic unreported failure");
+          },
+        });
+      };
+      const unreported = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(unreported.ok, false);
+      if (unreported.ok) throw new Error("Expected failed execution");
+      assert.strictEqual(unreported.reason, "executionFailed");
+      assert.notStrictEqual(unreported.userNotified, true);
+      extensionTest.handleManualRunFailure(task.name, unreported);
+      assert.strictEqual(errors.length, 1);
+      assert.ok(errors[0].includes(task.name));
+
+      warnings.length = 0;
+      errors.length = 0;
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: async (text: string) => {
+          warnings.push(text);
+          return undefined;
+        },
+      });
+      const primitiveExecutor = executor as unknown as {
+        warnAndThrow(error: unknown, prompt: string, task: { taskId: string; taskName: string }): never;
+      };
+      internals.onExecuteCallback = async (runningTask) => {
+        await extensionTest.executeTask(runningTask, "manual", undefined, {
+          notifyInfo: () => {},
+          executePrompt: async (prompt) => primitiveExecutor.warnAndThrow(
+            "Synthetic primitive failure",
+            prompt,
+            { taskId: runningTask.id, taskName: runningTask.name },
+          ),
+        });
+      };
+      const primitive = await manager.runTaskNowDetailed(task.id);
+      assert.strictEqual(primitive.ok, false);
+      if (primitive.ok) throw new Error("Expected failed execution");
+      assert.strictEqual(primitive.reason, "executionFailed");
+      assert.strictEqual(primitive.userNotified, true);
+      assert.ok(primitive.errorMessage?.includes("Synthetic primitive failure"));
+      extensionTest.handleManualRunFailure(task.name, primitive);
+      assert.strictEqual(warnings.length, 1);
+      assert.ok(warnings[0].includes(task.name));
+      assert.strictEqual(errors.length, 0);
+    } finally {
+      releaseWarning?.(undefined);
+      Object.defineProperty(vscode.window, "showWarningMessage", {
+        configurable: true,
+        value: originalWarning,
+      });
+      Object.defineProperty(vscode.window, "showErrorMessage", {
+        configurable: true,
+        value: originalError,
+      });
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });

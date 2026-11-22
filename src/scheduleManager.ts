@@ -62,6 +62,7 @@ import {
   createPromptBlockedError,
   getAgentHostTurnFailure,
   getPromptBlockedReason,
+  isExecutionErrorUserNotified,
   isPromptBlockedError,
 } from "./promptExecutionErrors";
 import { normalizeSkillRef } from "./skillResolver";
@@ -133,8 +134,6 @@ type ManualRunResult =
       turnOutcome?: Exclude<AgentHostTurnOutcome, "completed" | "queued">;
       executionInfo?: ManualRunExecutionInfo;
     };
-
-const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
 
 function getLocalDateKey(date = new Date()): string {
   const y = date.getFullYear();
@@ -3995,20 +3994,17 @@ export class ScheduleManager {
         if (isPromptBlockedError(error)) {
           logError("[CopilotScheduler] runTaskNow blocked:", details);
           const turnOutcome = getAgentHostTurnFailure(error);
+          const userNotified = isExecutionErrorUserNotified(error);
           return {
             ok: false,
             reason: "promptBlocked",
             errorMessage: details,
+            ...(userNotified ? { userNotified: true } : {}),
             executionInfo,
             ...(turnOutcome ? { turnOutcome } : {}),
           };
         }
-        const userNotified =
-          !!error &&
-          typeof error === "object" &&
-          (error as Record<string, unknown>)[
-            USER_NOTIFIED_EXECUTION_ERROR_FLAG
-          ] === true;
+        const userNotified = isExecutionErrorUserNotified(error);
         logError("[CopilotScheduler] runTaskNow failed:", details);
         return {
           ok: false,

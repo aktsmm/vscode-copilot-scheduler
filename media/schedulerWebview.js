@@ -341,6 +341,13 @@
     }
 
     if (
+      promptUserEdited &&
+      normalizePromptNewlines(promptTextInput.value) !==
+        normalizePromptNewlines(preview.prompt)
+    ) {
+      return;
+    }
+    if (
       normalizePromptNewlines(promptTextInput.value) !==
       normalizePromptNewlines(preview.prompt)
     ) {
@@ -348,6 +355,7 @@
     }
     // Always re-anchor the baseline: it may have been cleared by an error toast.
     setTemplatePromptBaseline(preview.prompt);
+    promptUserEdited = false;
   }
 
   function buildPromptFileMeta(preview) {
@@ -501,6 +509,7 @@
       return;
     }
     templateLoadingPath = "";
+    activeTemplateRequestId = 0;
     if (submitBtn && !pendingSubmit) {
       submitBtn.disabled = false;
     }
@@ -516,10 +525,14 @@
       return;
     }
     setTemplateLoading(selectedPath);
+    activeTemplateRequestId = ++templateRequestSequence;
+    templatePromptEditRevision = promptEditRevision;
     vscode.postMessage({
       type: "loadPromptTemplate",
       path: selectedPath,
       source: source,
+      formGeneration: taskFormGeneration,
+      templateRequestId: activeTemplateRequestId,
     });
   }
 
@@ -645,8 +658,18 @@
   var editingTaskSnapshot = null;
   var editingTaskNormalizedSnapshot = null;
   var editingTaskCanDelete = false;
+  var taskFormDirty = false;
+  var taskFormRevision = 0;
+  var taskFormGeneration = 0;
+  var formConfirmationSequence = 0;
+  var pendingFormConfirmation = null;
+  var promptUserEdited = false;
   var pendingSubmit = false;
   var templateLoadingPath = "";
+  var templateRequestSequence = 0;
+  var activeTemplateRequestId = 0;
+  var promptEditRevision = 0;
+  var templatePromptEditRevision = 0;
   var templatePromptBaseline = null;
   var layoutRefreshPending = false;
   // Display-only latest prompt-file state, keyed by task id.
@@ -718,6 +741,69 @@
 
   // DOM elements - with null safety
   var taskForm = document.getElementById("task-form");
+  function markTaskFormDirty() {
+    taskFormDirty = true;
+    taskFormRevision++;
+  }
+  function resetTaskFormTracking() {
+    taskFormDirty = false;
+    promptUserEdited = false;
+    taskFormRevision++;
+    taskFormGeneration++;
+    clearTemplateLoading();
+  }
+  function requestTaskFormConfirmation(kind, action) {
+    var requestId = ++formConfirmationSequence;
+    pendingFormConfirmation = {
+      requestId: requestId,
+      revision: taskFormRevision,
+      action: action,
+    };
+    vscode.postMessage({
+      type: "confirmUnsavedFormChanges",
+      kind: kind,
+      requestId: requestId,
+    });
+  }
+  function finishTaskFormConfirmation(message) {
+    if (
+      !pendingFormConfirmation ||
+      pendingFormConfirmation.requestId !== message.requestId
+    ) {
+      return;
+    }
+    var pending = pendingFormConfirmation;
+    pendingFormConfirmation = null;
+    if (!message.confirmed) return;
+    if (pending.revision !== taskFormRevision) {
+      showFormError(strings.taskFormChangedDuringConfirmation || "", 8000);
+      return;
+    }
+    pending.action();
+  }
+  function openTaskFromNotification(taskId) {
+    if (editingTaskId === taskId && (taskFormDirty || pendingSubmit)) {
+      switchTab("create", true);
+      return;
+    }
+    function openTask() {
+      if (pendingSubmit) {
+        switchTab("create", true);
+        showFormError(strings.taskFormSaveInProgress || "", 8000);
+        return;
+      }
+      window.editTask(taskId);
+    }
+    if (pendingSubmit || !taskFormDirty) {
+      openTask();
+      return;
+    }
+    requestTaskFormConfirmation("openTask", openTask);
+  }
+  if (taskForm) {
+    taskForm.addEventListener("input", markTaskFormDirty, true);
+    taskForm.addEventListener("change", markTaskFormDirty, true);
+  }
   var taskList = document.getElementById("task-list");
   var editTaskIdInput = document.getElementById("edit-task-id");
   var submitBtn = document.getElementById("submit-btn");
@@ -869,6 +955,7 @@
       );
       removeBtn.addEventListener("click", function () {
         attachmentsState.splice(index, 1);
+        markTaskFormDirty();
         renderAttachments();
         announceAttachmentStatus(
           (strings.attachmentRemoved || "Attachment removed") + ": " + name,
@@ -922,6 +1009,7 @@
       added++;
     });
 
+    if (added > 0) markTaskFormDirty();
     renderAttachments();
     if (rejectedForLimit) {
       showFormError(strings.attachmentLimitExceeded || "");
@@ -2404,6 +2492,7 @@
       modelConfigurationState = {};
       pendingModelReasoningEffort = "";
       renderModelConfigurationControls(activeConfigurationModel, null);
+      markTaskFormDirty();
     });
   }
   if (templateSelect) {
@@ -2493,7 +2582,11 @@
   });
 
   if (promptTextInput) {
-    promptTextInput.addEventListener("input", updatePromptFileNotice);
+    promptTextInput.addEventListener("input", function () {
+      promptUserEdited = true;
+      promptEditRevision++;
+      updatePromptFileNotice();
+    });
   }
 
   if (addAttachmentBtn) {
@@ -2503,6 +2596,7 @@
         scope: getCurrentScopeValue(),
         existing: attachmentsState,
         taskId: editingTaskId || undefined,
+        formGeneration: taskFormGeneration,
       });
     });
   }
@@ -2515,6 +2609,7 @@
         existing: attachmentsState,
         browse: true,
         taskId: editingTaskId || undefined,
+        formGeneration: taskFormGeneration,
       });
     });
   }
@@ -2533,14 +2628,27 @@
       var hasManualEdits =
         templatePromptBaseline !== null &&
         String(promptTextInput.value || "") !== templatePromptBaseline;
-      if (
-        hasManualEdits &&
-        !window.confirm(strings.confirmReplacePromptEdits || "")
-      ) {
-        return;
+      function applyLatestPrompt() {
+        var latestPreview = getActivePromptFilePreview();
+        if (
+          !latestPreview ||
+          latestPreview.source !== "file" ||
+          typeof latestPreview.prompt !== "string"
+        ) {
+          showFormError(strings.taskFormFileResultOutdated || "", 8000);
+          return;
+        }
+        promptTextInput.value = latestPreview.prompt;
+        setTemplatePromptBaseline(latestPreview.prompt);
+        promptUserEdited = false;
+        promptEditRevision++;
+        markTaskFormDirty();
       }
-      promptTextInput.value = preview.prompt;
-      setTemplatePromptBaseline(preview.prompt);
+      if (hasManualEdits || promptUserEdited) {
+        requestTaskFormConfirmation("replacePrompt", applyLatestPrompt);
+      } else {
+        applyLatestPrompt();
+      }
     });
   }
 
@@ -2615,7 +2723,13 @@
 
   if (friendlyGenerate) {
     friendlyGenerate.addEventListener("click", function () {
-      applyFriendlyCronSelection(true);
+      var previousExpression = cronExpression ? cronExpression.value : "";
+      if (
+        applyFriendlyCronSelection(true) &&
+        cronExpression.value !== previousExpression
+      ) {
+        markTaskFormDirty();
+      }
     });
   }
 
@@ -4121,6 +4235,7 @@
     updateFriendlyVisibility();
     updateCronPreview();
     updatePromptFileNotice();
+    resetTaskFormTracking();
   }
 
   function applyUpdatedDefaultsToCreateForm() {
@@ -4533,7 +4648,10 @@
     var task = taskListArray.find(function (t) {
       return t && t.id === id;
     });
-    if (!task) return;
+    if (!task) {
+      showFormError(strings.taskNotFound || "", 8000);
+      return;
+    }
     editingTaskSnapshot = Object.assign({}, task);
     editingTaskNormalizedSnapshot = normalizeTaskForEditDiff(task);
     collapseAdvancedSettings();
@@ -4732,6 +4850,7 @@
     switchTab("create", true);
     vscode.postMessage({ type: "requestPromptPreview", taskId: id });
     updatePromptFileNotice();
+    resetTaskFormTracking();
   };
 
   if (newTaskBtn) {
@@ -4803,6 +4922,14 @@
     try {
       switch (message.type) {
         case "attachmentsPicked":
+          if (
+            (typeof message.formGeneration === "number" &&
+              message.formGeneration !== taskFormGeneration) ||
+            (message.scope && message.scope !== getCurrentScopeValue())
+          ) {
+            showFormError(strings.taskFormFileResultOutdated || "", 8000);
+            break;
+          }
           addAttachments(message.attachments);
           break;
         case "updateTasks":
@@ -4985,9 +5112,25 @@
           break;
         case "promptTemplateLoaded":
           {
+            if (
+              (typeof message.formGeneration === "number" &&
+                message.formGeneration !== taskFormGeneration) ||
+              (typeof message.templateRequestId === "number" &&
+                message.templateRequestId !== activeTemplateRequestId)
+            ) {
+              showFormError(strings.taskFormFileResultOutdated || "", 8000);
+              break;
+            }
             var loadedPath = message.path ? String(message.path) : "";
             if (loadedPath) {
               clearTemplateLoading(loadedPath);
+            }
+            if (
+              typeof message.templateRequestId === "number" &&
+              promptEditRevision !== templatePromptEditRevision
+            ) {
+              showFormError(strings.taskFormFileResultOutdated || "", 8000);
+              break;
             }
             var promptSourceEl = document.querySelector(
               'input[name="prompt-source"]:checked',
@@ -5010,6 +5153,12 @@
             }
             var promptTextEl = document.getElementById("prompt-text");
             if (promptTextEl) {
+              if (
+                normalizePromptNewlines(promptTextEl.value) !==
+                normalizePromptNewlines(message.content)
+              ) {
+                markTaskFormDirty();
+              }
               promptTextEl.value = message.content;
               setTemplatePromptBaseline(String(message.content || ""));
             }
@@ -5065,13 +5214,29 @@
           break;
         case "editTask":
           if (message.taskId && typeof window.editTask === "function") {
-            window.editTask(message.taskId);
+            if (message.protectUnsavedForm === true) {
+              openTaskFromNotification(message.taskId);
+            } else {
+              window.editTask(message.taskId);
+            }
           }
+          break;
+        case "confirmUnsavedFormChangesResult":
+          finishTaskFormConfirmation(message);
           break;
         case "startCreateTask":
           openCreateTaskForm();
           break;
         case "showError":
+          if (
+            (typeof message.formGeneration === "number" &&
+              message.formGeneration !== taskFormGeneration) ||
+            (typeof message.templateRequestId === "number" &&
+              message.templateRequestId !== activeTemplateRequestId)
+          ) {
+            showFormError(strings.taskFormFileResultOutdated || "", 8000);
+            break;
+          }
           var rawText =
             message.text == null
               ? String(strings.webviewUnknown || "")

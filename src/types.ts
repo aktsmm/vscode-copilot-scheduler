@@ -589,6 +589,9 @@ export interface ExecuteOptions extends ModelSelectionFields {
   /** Stable task identifier used to coalesce its pending message in the target chat. */
   taskId?: string;
 
+  /** Display name for execution warnings; never used to resolve a task. */
+  taskName?: string;
+
   /** Stable scheduled occurrence identifier when overlapping runs are enabled. */
   queueOccurrenceId?: string;
 
@@ -722,13 +725,25 @@ export type WebviewToExtensionMessage =
   | { type: "copyTask"; taskId: string }
   | { type: "requestPromptPreview"; taskId: string }
   | { type: "openPromptFile"; taskId: string }
-  | { type: "loadPromptTemplate"; path: string; source: "local" | "global" }
+  | {
+      type: "confirmUnsavedFormChanges";
+      kind: "openTask" | "replacePrompt";
+      requestId: number;
+    }
+  | {
+      type: "loadPromptTemplate";
+      path: string;
+      source: "local" | "global";
+      formGeneration?: number;
+      templateRequestId?: number;
+    }
   | {
       type: "pickAttachments";
       scope: TaskScope;
       existing: TaskAttachment[];
       browse?: boolean;
       taskId?: string;
+      formGeneration?: number;
     }
   | {
       type: "openAttachment";

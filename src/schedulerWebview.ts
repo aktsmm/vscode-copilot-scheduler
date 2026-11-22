@@ -789,11 +789,12 @@ export class SchedulerWebview {
   /**
    * Start editing a specific task (opens edit mode in the webview)
    */
-  static editTask(taskId?: string): void {
+  static editTask(taskId?: string, protectUnsavedForm = false): void {
     if (!taskId) return;
     this.postMessage({
       type: "editTask",
       taskId: taskId,
+      protectUnsavedForm,
     });
   }
 
@@ -804,6 +805,43 @@ export class SchedulerWebview {
     message: WebviewToExtensionMessage,
   ): Promise<void> {
     switch (message.type) {
+      case "confirmUnsavedFormChanges": {
+        if (
+          !Number.isSafeInteger(message.requestId) ||
+          message.requestId < 1 ||
+          (message.kind !== "openTask" && message.kind !== "replacePrompt")
+        ) {
+          logError("[CopilotScheduler] Invalid form confirmation request");
+          this.showError(messages.webviewUnknown());
+          break;
+        }
+        const panel = this.panel;
+        const generation = this.webviewGeneration;
+        if (!panel) {
+          logDebug("[CopilotScheduler] Form confirmation has no webview panel");
+          break;
+        }
+        const isOpenTask = message.kind === "openTask";
+        const action = isOpenTask
+          ? messages.actionDiscardAndOpen()
+          : messages.actionReplacePrompt();
+        const choice = await vscode.window.showWarningMessage(
+          isOpenTask
+            ? messages.confirmDiscardTaskFormEdits()
+            : messages.confirmReplacePromptEdits(),
+          { modal: true },
+          action,
+        );
+        if (this.panel === panel && this.webviewGeneration === generation) {
+          this.postMessage({
+            type: "confirmUnsavedFormChangesResult",
+            requestId: message.requestId,
+            confirmed: choice === action,
+          });
+        }
+        break;
+      }
+
       case "createTask":
         if (this.onTaskActionCallback) {
           // Use a special action for create
@@ -1047,7 +1085,12 @@ export class SchedulerWebview {
         break;
 
       case "loadPromptTemplate":
-        await this.loadPromptTemplateContent(message.path, message.source);
+        await this.loadPromptTemplateContent(
+          message.path,
+          message.source,
+          message.formGeneration,
+          message.templateRequestId,
+        );
         break;
 
       case "requestPromptPreview":
@@ -1064,6 +1107,7 @@ export class SchedulerWebview {
           message.existing,
           message.browse === true,
           message.taskId,
+          message.formGeneration,
         );
         break;
 
@@ -1372,7 +1416,10 @@ export class SchedulerWebview {
     existing: TaskAttachment[],
     browse: boolean,
     taskId: string | undefined,
+    formGeneration?: number,
   ): Promise<void> {
+    const panel = this.panel;
+    const webviewGeneration = this.webviewGeneration;
     const existingKeys = new Set(
       (Array.isArray(existing) ? existing : [])
         .filter((item) => item && typeof item.path === "string")
@@ -1398,7 +1445,15 @@ export class SchedulerWebview {
       return;
     }
 
-    this.postMessage({ type: "attachmentsPicked", attachments: added });
+    if (this.panel !== panel || this.webviewGeneration !== webviewGeneration) {
+      return;
+    }
+    this.postMessage({
+      type: "attachmentsPicked",
+      attachments: added,
+      scope,
+      formGeneration,
+    });
   }
 
   private static async pickAttachmentsWithQuickPick(
@@ -1714,7 +1769,11 @@ export class SchedulerWebview {
   private static async loadPromptTemplateContent(
     templatePath: string,
     source: "local" | "global",
+    formGeneration?: number,
+    templateRequestId?: number,
   ): Promise<void> {
+    const panel = this.panel;
+    const webviewGeneration = this.webviewGeneration;
     try {
       const validation = validateTemplateLoadRequest({
         templatePath,
@@ -1735,10 +1794,15 @@ export class SchedulerWebview {
         vscode.Uri.file(resolvedPath),
       );
       const content = Buffer.from(bytes).toString("utf8");
+      if (this.panel !== panel || this.webviewGeneration !== webviewGeneration) {
+        return;
+      }
       this.postMessage({
         type: "promptTemplateLoaded",
         content: content,
         path: templatePath,
+        formGeneration,
+        templateRequestId,
       });
     } catch (error) {
       const templateFile = path.basename(templatePath);
@@ -1751,7 +1815,14 @@ export class SchedulerWebview {
         error: safeError,
       });
       const message = messages.templateLoadError();
-      this.showError(message);
+      if (this.panel === panel && this.webviewGeneration === webviewGeneration) {
+        this.postMessage({
+          type: "showError",
+          text: this.resolveDisplayErrorMessage(message),
+          formGeneration,
+          templateRequestId,
+        });
+      }
     }
   }
 
@@ -1893,7 +1964,11 @@ export class SchedulerWebview {
       attachmentLocalOnGlobalScope: messages.attachmentLocalOnGlobalScope(),
       attachmentLimitExceeded:
         messages.attachmentLimitExceeded(MAX_TASK_ATTACHMENTS),
-      confirmReplacePromptEdits: messages.confirmReplacePromptEdits(),
+      taskFormChangedDuringConfirmation:
+        messages.taskFormChangedDuringConfirmation(),
+      taskFormSaveInProgress: messages.taskFormSaveInProgress(),
+      taskFormFileResultOutdated: messages.taskFormFileResultOutdated(),
+      taskNotFound: messages.taskNotFound(),
       labelPrompt: messages.labelPrompt(),
       labelSchedule: messages.labelSchedule(),
       labelCronExpression: messages.labelCronExpression(),

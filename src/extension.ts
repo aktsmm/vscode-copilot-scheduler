@@ -39,7 +39,9 @@ import {
   createPromptBlockedError,
   getAgentHostTurnFailure,
   getPromptBlockedReason,
+  isExecutionErrorUserNotified,
   isPromptBlockedError,
+  markExecutionErrorAsUserNotified,
   type PromptBlockedReason,
 } from "./promptExecutionErrors";
 import {
@@ -547,6 +549,21 @@ export function notifyError(message: string, timeoutMs = 6000): void {
   void vscode.window.showErrorMessage(displayMessage);
 }
 
+export function notifyExecutionWarningFailure(taskName?: string, detail?: string): boolean {
+  try {
+    notifyError(messages.executionWarningFailed(taskName, detail));
+    return true;
+  } catch (error) {
+    logError(
+      "[CopilotScheduler] Execution warning fallback failed:",
+      sanitizeErrorDetailsForLog(
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+    return false;
+  }
+}
+
 function getNotificationNextRun(
   task: ScheduledTask,
   baseTime = new Date(),
@@ -879,11 +896,10 @@ function buildExecutionResultDetail(
   return details.length > 0 ? details.join(" / ") : undefined;
 }
 /**
- * Attachment sets already reported as blocked, so the warning is not repeated
- * every tick. Keyed by task id and valued by the attachment set that failed, so
- * editing the attachments makes the next failure audible again.
+ * Preflight failures already reported for automatic runs, so warnings are not
+ * repeated every tick. Identity prevents a late failure clearing a newer warning.
  */
-const attachmentBlockNotifications = new Map<string, string>();
+const preflightBlockNotifications = new Map<string, { signature: string }>();
 
 function getAttachmentSignature(task: ScheduledTask): string {
   return (task.attachments ?? [])
@@ -891,11 +907,37 @@ function getAttachmentSignature(task: ScheduledTask): string {
     .join("|");
 }
 
+function getPreflightBlockSignature(task: ScheduledTask, error: unknown): string | undefined {
+  const reason = getPromptBlockedReason(error);
+  if (reason === "attachmentMissing") {
+    return JSON.stringify([
+      reason,
+      getAttachmentSignature(task),
+      error instanceof Error ? error.message : undefined,
+    ]);
+  }
+  if (
+    reason === "noPromptPath" ||
+    reason === "pathUnresolved" ||
+    reason === "readFailed" ||
+    reason === "skillUnavailable"
+  ) {
+    return JSON.stringify([
+      reason,
+      task.promptSource,
+      task.promptPath,
+      task.skillRef,
+      error instanceof Error ? error.message : undefined,
+    ]);
+  }
+  return undefined;
+}
+
 /** Drop per-task runtime caches for tasks that no longer exist. */
 function pruneRuntimeCachesForRemovedTasks(taskIds: Set<string>): void {
-  for (const id of [...attachmentBlockNotifications.keys()]) {
+  for (const id of [...preflightBlockNotifications.keys()]) {
     if (!taskIds.has(id)) {
-      attachmentBlockNotifications.delete(id);
+      preflightBlockNotifications.delete(id);
     }
   }
   for (const id of [...lastPromptResolutionByTaskId.keys()]) {
@@ -951,21 +993,6 @@ type ManualRunSuccessResult = {
   executionInfo?: ManualRunExecutionInfo;
 };
 
-const USER_NOTIFIED_EXECUTION_ERROR_FLAG = "copilotSchedulerUserNotified";
-
-function markExecutionErrorAsUserNotified(error: unknown): void {
-  if (!error || typeof error !== "object") {
-    return;
-  }
-
-  try {
-    (error as Record<string, unknown>)[USER_NOTIFIED_EXECUTION_ERROR_FLAG] =
-      true;
-  } catch {
-    // best-effort marker only
-  }
-}
-
 function handleManualRunFailure(
   taskName: string,
   runResult: ManualRunFailureResult,
@@ -1010,10 +1037,14 @@ function handleManualRunFailure(
   }
 
   if (runResult.reason === "promptBlocked") {
-    const msg =
+    if (runResult.userNotified) {
+      return;
+    }
+    const detail =
       resolveDisplayErrorMessage(
         runResult.errorMessage || messages.webviewUnknown(),
       ) || messages.webviewUnknown();
+    const msg = messages.taskExecutionWarning(taskName, detail);
     notifyError(msg);
     if (showWebviewError) {
       SchedulerWebview.showError(msg);
@@ -1825,7 +1856,7 @@ export function deactivate(): void {
   SchedulerWebview.dispose();
   extensionContextRef = undefined;
   manualRunInFlightTaskIds.clear();
-  attachmentBlockNotifications.clear();
+  preflightBlockNotifications.clear();
   lastPromptResolutionByTaskId.clear();
   lastModelFallbackByTaskId.clear();
   lastCopilotCliRunByTaskId.clear();
@@ -1890,66 +1921,60 @@ async function executeTask(
     );
     await assertSkillAvailable(task, resolved.prompt);
 
-    // Execute the prompt
-    try {
-      executionResult = await (deps?.executePrompt ??
-        ((prompt, options) => copilotExecutor.executePrompt(prompt, options)))(
-        resolved.prompt,
-        {
-          ...buildPromptExecutionOptions(
-            resolved,
-            getTaskAttachmentRoots(task),
-            task.scope === "workspace" ? task.workspacePath : undefined,
-          ),
-          targetChatId: task.targetChatId,
-          taskId: task.id,
-          onAgentHostInputNeeded: createAgentHostInputHandler(),
-          onAgentHostQueueBlocked: createAgentHostQueueBlockedHandler(),
-          ...(trigger === "auto" &&
-          isOverlapAllowed(task) &&
-          dueAt
-            ? { queueOccurrenceId: dueAt }
-            : {}),
-          ...(dispatchGuard
-            ? { dispatchGuard, allowUnguardedFallback: !task.runAt }
-            : {}),
-        },
-      );
-      if (trigger === "manual") {
-        if (executionResult?.cliRun) {
-          lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
-        }
-        if (executionResult?.agentHostRun) {
-          lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
-        }
-        if (executionResult?.modelExecution) {
-          lastModelExecutionByTaskId.set(
-            task.id,
-            executionResult.modelExecution,
-          );
-        }
-        if (executionResult?.modelFallback) {
-          lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
-        }
+    executionResult = await (deps?.executePrompt ??
+      ((prompt, options) => copilotExecutor.executePrompt(prompt, options)))(
+      resolved.prompt,
+      {
+        ...buildPromptExecutionOptions(
+          resolved,
+          getTaskAttachmentRoots(task),
+          task.scope === "workspace" ? task.workspacePath : undefined,
+        ),
+        targetChatId: task.targetChatId,
+        taskId: task.id,
+        taskName: task.name,
+        onAgentHostInputNeeded: createAgentHostInputHandler(),
+        onAgentHostQueueBlocked: createAgentHostQueueBlockedHandler(),
+        ...(trigger === "auto" &&
+        isOverlapAllowed(task) &&
+        dueAt
+          ? { queueOccurrenceId: dueAt }
+          : {}),
+        ...(dispatchGuard
+          ? { dispatchGuard, allowUnguardedFallback: !task.runAt }
+          : {}),
+      },
+    );
+    if (trigger === "manual") {
+      if (executionResult?.cliRun) {
+        lastCopilotCliRunByTaskId.set(task.id, executionResult.cliRun);
       }
-      if (executionResult?.modelFallback) {
-        notify(
-          executionResult.modelFallback.route
-            ? messages.executionHistoryModelReplacement(
-                executionResult.modelFallback.from,
-                executionResult.modelFallback.to,
-                executionResult.modelFallback.route === "agentHost",
-              )
-            : messages.modelFallbackApplied(
-                executionResult.modelFallback.from,
-                executionResult.modelFallback.to,
-              ),
+      if (executionResult?.agentHostRun) {
+        lastAgentHostRunByTaskId.set(task.id, executionResult.agentHostRun);
+      }
+      if (executionResult?.modelExecution) {
+        lastModelExecutionByTaskId.set(
+          task.id,
+          executionResult.modelExecution,
         );
       }
-    } catch (error) {
-      // executePrompt displays its own warning on failure.
-      markExecutionErrorAsUserNotified(error);
-      throw error;
+      if (executionResult?.modelFallback) {
+        lastModelFallbackByTaskId.set(task.id, executionResult.modelFallback);
+      }
+    }
+    if (executionResult?.modelFallback) {
+      notify(
+        executionResult.modelFallback.route
+          ? messages.executionHistoryModelReplacement(
+              executionResult.modelFallback.from,
+              executionResult.modelFallback.to,
+              executionResult.modelFallback.route === "agentHost",
+            )
+          : messages.modelFallbackApplied(
+              executionResult.modelFallback.from,
+              executionResult.modelFallback.to,
+            ),
+      );
     }
 
     await syncPromptSnapshotAfterRun(
@@ -1958,7 +1983,7 @@ async function executeTask(
       promptResolution,
       deps?.updateTaskPrompts,
     );
-    attachmentBlockNotifications.delete(task.id);
+    preflightBlockNotifications.delete(task.id);
 
     if (trigger === "auto") {
       const nextRunDate = getNotificationNextRun(task, new Date());
@@ -2007,18 +2032,84 @@ async function executeTask(
       }
     }
   } catch (error) {
+    // A failure that is not a preflight block means the earlier block was fixed,
+    // so the same block must notify again if it comes back.
+    if (
+      !isPromptBlockedError(error) ||
+      getPreflightBlockSignature(task, error) === undefined
+    ) {
+      preflightBlockNotifications.delete(task.id);
+    }
     if (isPromptBlockedError(error)) {
       // A scheduled task that silently stops is worse than a noisy one, but the
       // warning must not repeat on every tick.
-      const attachmentSignature = getAttachmentSignature(task);
+      const preflightSignature = getPreflightBlockSignature(task, error);
       if (
-        getPromptBlockedReason(error) === "attachmentMissing" &&
-        attachmentBlockNotifications.get(task.id) !== attachmentSignature
+        preflightSignature !== undefined &&
+        !isExecutionErrorUserNotified(error) &&
+        (trigger === "manual" ||
+          preflightBlockNotifications.get(task.id)?.signature !== preflightSignature)
       ) {
-        attachmentBlockNotifications.set(task.id, attachmentSignature);
-        void vscode.window.showWarningMessage(
-          error instanceof Error ? error.message : String(error),
-        );
+        const taskName = task.name.replace(/[\r\n]+/g, " ").trim();
+        const reason = getPromptBlockedReason(error);
+        const warningDetail =
+          reason === "pathUnresolved" || reason === "readFailed"
+            ? describePromptBlockedReason(reason)
+            : error instanceof Error ? error.message : String(error);
+        try {
+          const warningText =
+            reason === "pathUnresolved" || reason === "readFailed"
+              ? messages.promptFileBlocked(taskName, warningDetail)
+              : messages.taskExecutionWarning(taskName, warningDetail);
+          const warning = vscode.window.showWarningMessage(
+            warningText,
+            messages.actionOpenTaskSettings(),
+          );
+          const warningState = { signature: preflightSignature };
+          preflightBlockNotifications.set(task.id, warningState);
+          markExecutionErrorAsUserNotified(error);
+          void Promise.resolve(warning)
+            .then(async (action) => {
+              if (action !== messages.actionOpenTaskSettings()) return;
+              try {
+                await vscode.commands.executeCommand(
+                  "copilotScheduler.editTask",
+                  task.id,
+                  true,
+                );
+              } catch (actionError) {
+                logError(
+                  "[CopilotScheduler] Could not open task settings:",
+                  sanitizeErrorDetailsForLog(
+                    actionError instanceof Error ? actionError.message : String(actionError),
+                  ),
+                );
+                notifyError(messages.taskSettingsOpenFailed());
+              }
+            })
+            .catch((notificationError: unknown) => {
+              if (preflightBlockNotifications.get(task.id) === warningState) {
+                preflightBlockNotifications.delete(task.id);
+              }
+              logError(
+                "[CopilotScheduler] Execution warning failed:",
+                sanitizeErrorDetailsForLog(
+                  notificationError instanceof Error ? notificationError.message : String(notificationError),
+                ),
+              );
+              notifyExecutionWarningFailure(taskName, warningDetail);
+            });
+        } catch (notificationError) {
+          logError(
+            "[CopilotScheduler] Execution warning failed:",
+            sanitizeErrorDetailsForLog(
+              notificationError instanceof Error ? notificationError.message : String(notificationError),
+            ),
+          );
+          if (notifyExecutionWarningFailure(taskName, warningDetail)) {
+            markExecutionErrorAsUserNotified(error);
+          }
+        }
       }
       // Manual runs record their own history entry via appendManualRunHistory.
       if (trigger === "auto") {
@@ -2590,6 +2681,7 @@ export const __testOnly = {
   assertSkillAvailable,
   createAgentHostInputHandler,
   createAgentHostQueueBlockedHandler,
+  handleManualRunFailure,
   normalizeNotificationMode,
   resolveNotificationMode,
   resolvePromptText,
@@ -2617,7 +2709,7 @@ export const __testOnly = {
   resetExecutionHistoryQueueForTests,
   getAttachmentSignature,
   pruneRuntimeCachesForRemovedTasks,
-  attachmentBlockNotifications,
+  preflightBlockNotifications,
   schedulePromptPreviewRefresh,
   disposePromptResourceWatchers,
   lastAgentHostRunByTaskId,
@@ -3218,11 +3310,13 @@ function registerEditTaskCommand(
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
     "copilotScheduler.editTask",
-    async (item?: ScheduledTaskItem) => {
+    async (item?: ScheduledTaskItem | string, protectUnsavedForm = false) => {
       try {
         let taskId: string | undefined;
 
-        if (item instanceof ScheduledTaskItem) {
+        if (typeof item === "string") {
+          taskId = item;
+        } else if (item instanceof ScheduledTaskItem) {
           taskId = item.task.id;
         } else {
           // Show quick pick to select task
@@ -3244,6 +3338,11 @@ function registerEditTaskCommand(
           taskId = selected.id;
         }
 
+        if (!scheduleManager.getAllTasks().some((task) => task.id === taskId)) {
+          notifyError(messages.taskNotFound());
+          return;
+        }
+
         await SchedulerWebview.show(
           context.extensionUri,
           scheduleManager.getAllTasks(),
@@ -3252,7 +3351,7 @@ function registerEditTaskCommand(
           (requestedTaskId) => void handlePromptPreviewRequest(requestedTaskId),
           (requestedTaskId) => void handleOpenPromptFile(requestedTaskId),
         );
-        SchedulerWebview.editTask(taskId);
+        SchedulerWebview.editTask(taskId, protectUnsavedForm === true);
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);

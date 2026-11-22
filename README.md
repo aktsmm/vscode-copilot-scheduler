@@ -92,6 +92,8 @@ Monthly friendly schedules default to days 1-28 so the task can run every month.
 
 Execution history shows scheduled time, delay, attachment count, prompt source, path, hash, resolution time, and fallback reason when available. Existing-chat tasks are labeled **Queued** once Agent Host acknowledges that specific request (an acknowledgement of an earlier request for the same task is ignored); they do not interrupt an active turn. The chat route is labeled **Dispatched**; a normal Agent Host run with a completion signal is labeled **Turn completed**. Agent Host history also distinguishes failure, cancellation, and an unknown result, and indicates whether response text was observed. It does not store the response text. A completed turn does not prove that the requested work succeeded.
 
+Execution warnings that offer **Copy Prompt** also identify the saved task and offer **Open Task Settings** to open that task's editor directly. Preflight warnings for missing attachments, unavailable prompt files, and unavailable skills offer the same editor action without copying an unused prompt. Repeated automatic warnings for the same preflight failure are suppressed until the failure changes or the task succeeds; a manual retry shows the action again. If another form has unsaved changes, Scheduler asks before discarding them; opening the same task preserves its current form. Opening the editor does not save changes or retry the run. If the task has since been deleted, Scheduler reports that it was not found. Unsaved prompt tests keep the copy action without a task settings button.
+
 ## 🛠️ Copilot Chat Tools
 
 In Copilot Chat agent mode, use the scheduler tools with `#` references:
@@ -382,7 +384,7 @@ A task can carry up to 10 attachment files that are sent with the prompt, so ins
 - Attachments are stored relative to the workspace folder (`local`) or to the global prompts folder (`global`), never as absolute paths.
 - **Only workspace-scoped tasks can attach workspace files.** A global task runs in any window, where the same relative path could point at a different file, so workspace attachments are rejected for them.
 - Files such as `.env*`, `*.pem`, `*.key`, `id_rsa*` and anything under `secrets/` or `.ssh/` are never attached.
-- **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history and reported once per attachment set, so a renamed file does not silently stop the schedule and changing the attachments makes the next failure visible again.
+- **If an attachment cannot be found when the task runs, the task is skipped instead of running without it.** The run is recorded as `blocked` in the execution history. Automatic runs warn once for an unchanged failure; they warn again when the configured attachments or missing files change, or if the failure recurs after the task succeeds. Manual retries always show the warning.
 - **Trust boundary**: the checks above are a path boundary, not a content-provenance boundary. Anything that can write inside the workspace folder can also place or link a file there, and the file is read at run time, so it is the content at that moment that is sent. Attach files only from workspaces you trust, the same way you would trust a prompt file that runs unattended.
 
 ## 📋 Requirements
