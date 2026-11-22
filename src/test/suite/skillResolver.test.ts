@@ -87,6 +87,20 @@ suite("Skill resolver", () => {
     }
   });
 
+  test("skill diagnostics report unknown when a workspace skill resolves outside its folder", async () => {
+    const outside = path.join(tmp, "outside");
+    writeSkill(outside, "escape", ["name: escape"]);
+    const skills = path.join(ws, ".github", "skills");
+    fs.mkdirSync(skills, { recursive: true });
+    fs.symlinkSync(path.join(outside, "escape"), path.join(skills, "escape"), "junction");
+    const result = await diagnoseSkillPrompt(
+      { scope: "workspace", workspacePath: ws, promptSource: "inline", prompt: "/escape" },
+      getSkillRoots([ws], home),
+      true,
+    );
+    assert.strictEqual(result.status, "unknown");
+  });
+
   test("skill diagnostics report unknown for unreadable skill files", async () => {
     const roots = getSkillRoots([ws], home);
     const originalOpen = fs.promises.open;

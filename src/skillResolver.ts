@@ -418,13 +418,14 @@ export async function diagnoseSkillPrompt(
       continue;
     }
     const file = path.join(root.dir, command, "SKILL.md");
-    if (root.boundary && !isPathInsideBaseDir(root.boundary, file)) {
-      incomplete = true;
-      continue;
-    }
     let handle: fs.promises.FileHandle | undefined;
     try {
       handle = await fs.promises.open(file, "r");
+      // Real paths only resolve for an existing file, so the boundary is checked after it opens.
+      if (root.boundary && !isPathInsideBaseDir(root.boundary, file)) {
+        incomplete = true;
+        continue;
+      }
       const stat = await handle.stat();
       if (!stat.isFile()) {
         incomplete = true;
