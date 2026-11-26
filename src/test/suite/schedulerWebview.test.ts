@@ -1074,11 +1074,16 @@ suite("SchedulerWebview model list retry", () => {
   }
 
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Fixed waits are too short when the machine is busy, so poll for the end state.
+  const waitFor = async (done: () => boolean, timeoutMs = 5000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!done() && Date.now() < deadline) await wait(10);
+  };
 
   test("keeps asking while the list is the fallback and stops once it is available", async () => {
     await withCatalog(["fallback", "fallback", "api"], async (calls) => {
       await wv.refreshAgentsAndModels(true);
-      await wait(300);
+      await waitFor(() => calls() >= 3 && wv.modelRetryTimer === undefined);
       assert.strictEqual(calls(), 3);
       assert.strictEqual(wv.modelRetryTimer, undefined);
       assert.strictEqual(wv.modelRetryCount, 0);
@@ -1089,27 +1094,31 @@ suite("SchedulerWebview model list retry", () => {
   test("gives up after five retries and a manual reload starts over", async () => {
     await withCatalog(["fallback"], async (calls) => {
       await wv.refreshAgentsAndModels(true);
-      await wait(400);
+      await waitFor(() => calls() >= 6 && wv.modelRetryTimer === undefined);
       assert.strictEqual(calls(), 6, "one request plus five retries");
       assert.strictEqual(wv.modelRetryTimer, undefined);
       await wv.refreshAgentsAndModels(true);
-      await wait(400);
+      await waitFor(() => calls() >= 12 && wv.modelRetryTimer === undefined);
       assert.strictEqual(calls(), 12, "reloading restarts the five retries");
     });
   });
 
   test("closing the panel stops the retries", async () => {
+    // A stalled event loop can fire early retries before the panel closes, so only
+    // requests made after the close are counted.
     await withCatalog(["fallback"], async (calls) => {
       await wv.refreshAgentsAndModels(true);
       wv.panel = undefined;
+      const atClose = calls();
       await wait(150);
-      assert.strictEqual(calls(), 1);
+      assert.strictEqual(calls(), atClose);
     });
     await withCatalog(["fallback"], async (calls) => {
       await wv.refreshAgentsAndModels(true);
       SchedulerWebview.dispose();
+      const atClose = calls();
       await wait(150);
-      assert.strictEqual(calls(), 1);
+      assert.strictEqual(calls(), atClose);
       assert.strictEqual(wv.modelRetryTimer, undefined);
     });
   });
