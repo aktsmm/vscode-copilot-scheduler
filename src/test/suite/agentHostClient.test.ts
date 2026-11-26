@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  agentHostModelCatalogRetry,
   AgentHostError,
   disposeAgentHostInputObservers,
   findAgentHostEndpoint,
@@ -394,9 +395,11 @@ suite("Agent Host client", () => {
 
   setup(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "scheduler-ahp-"));
+    agentHostModelCatalogRetry.delayMs = 0;
   });
 
   teardown(() => {
+    agentHostModelCatalogRetry.delayMs = 3000;
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -527,6 +530,16 @@ suite("Agent Host client", () => {
       await assert.rejects(
         queueAgentHostMessage({ ...request, taskId: undefined, occurrenceId: "occurrence" }),
         (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported",
+      );
+      // An absent model is looked up again on fresh connections before it is refused.
+      const initializesBefore = host.calls.filter((call) => call.method === "initialize").length;
+      await assert.rejects(
+        queueAgentHostMessage({ ...request, taskId: "absent-model", modelId: "missing" }),
+        (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported",
+      );
+      assert.strictEqual(
+        host.calls.filter((call) => call.method === "initialize").length - initializesBefore,
+        agentHostModelCatalogRetry.attempts + 1,
       );
       const queued = host.calls.filter((call) => {
         if (call.method !== "dispatchAction") return false;
@@ -1350,7 +1363,9 @@ suite("Agent Host client", () => {
       assert.throws(
         () => mapModelConfiguration(model, { reasoningEffort: "extreme" }),
         (error: unknown) =>
-          error instanceof AgentHostError && error.kind === "unsupported",
+          error instanceof AgentHostError &&
+          error.kind === "unsupported" &&
+          /"reasoningEffort" value "extreme" \(accepted: [^)]+\)/.test(error.message),
       );
       assert.throws(
         () => mapModelConfiguration(MODELS[1], { reasoningEffort: "low" }),
@@ -1880,6 +1895,23 @@ suite("Agent Host client", () => {
       }
     });
 
+    test("recovers when the Host catalog lists the model only on a later connection", async () => {
+      const late = "vendor/group/late";
+      let calls = 0;
+      host = await startFakeHost(tmp, {
+        get models() {
+          return ++calls < 3 ? [{ id: "vendor/group/other" }] : [{ id: late }];
+        },
+      } as Parameters<typeof startFakeHost>[1]);
+      const result = await runAgentHostTurn({
+        ...baseRequest(host.endpoint),
+        modelId: late,
+        hostModelIdExplicit: true,
+      });
+      assert.strictEqual(result.requestedModel, late);
+      assert.strictEqual(calls, 3);
+    });
+
     test("dispatches an explicit Host replacement once without copying options", async () => {
       const replacement = "vendor/group/replacement";
       const disabled = "vendor/group/disabled";
@@ -1899,6 +1931,12 @@ suite("Agent Host client", () => {
         runAgentHostTurn({ ...request, hostModelIdExplicit: false, modelFallback: { agentHostModelId: replacement } }),
         (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported");
       assert.ok(!host.calls.some((call) => call.method === "dispatchAction"));
+      // A model that stays absent is retried on fresh connections before it is refused.
+      const initializes = (): number => host!.calls.filter((call) => call.method === "initialize").length;
+      const before = initializes();
+      await assert.rejects(runAgentHostTurn({ ...request, modelFallback: {} }),
+        (error: unknown) => error instanceof AgentHostError && error.kind === "unsupported");
+      assert.strictEqual(initializes() - before, agentHostModelCatalogRetry.attempts + 1);
       const result = await runAgentHostTurn({ ...request, modelFallback: { agentHostModelId: replacement } });
       assert.strictEqual(result.requestedModel, replacement);
       assert.strictEqual(result.fallbackFromModel, "missing");

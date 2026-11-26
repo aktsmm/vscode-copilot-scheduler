@@ -5,6 +5,13 @@ All notable changes to the "Copilot Scheduler" extension will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.2] - 2026-11-27
+
+### Fixed
+
+- An Agent Host run or queued message no longer fails right away with "does not offer the requested model" when the Host's model catalog is briefly incomplete (for example just after VS Code starts). The model is looked up again on fresh connections up to three times, 3 seconds apart, before it is refused. Nothing is sent during these checks.
+- When the Host refuses a model option value, the message now names the value and the values the model accepts, so a rejected reasoning effort can be traced.
+
 ## [1.25.1] - 2026-11-22
 
 ### Added

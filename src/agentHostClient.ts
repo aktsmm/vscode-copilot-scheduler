@@ -455,7 +455,7 @@ export function mapModelConfiguration(
     if (option.enum && !option.enum.includes(resolved)) {
       throw new AgentHostError(
         "unsupported",
-        `The model does not accept the "${key}" value.`,
+        `The model does not accept the "${key}" value "${String(resolved)}" (accepted: ${option.enum.join(", ")}).`,
       );
     }
     config[hostKey] = resolved;
@@ -646,6 +646,26 @@ function getAgentHostModels(
   });
 }
 
+const MODEL_NOT_OFFERED_MESSAGE = "The Agent Host does not offer the requested model.";
+
+/** Mutable so tests can skip the wait. */
+export const agentHostModelCatalogRetry = { attempts: 3, delayMs: 3000 };
+
+function shouldRetryModelCatalog(error: unknown, attempt: number): boolean {
+  return (
+    attempt < agentHostModelCatalogRetry.attempts &&
+    error instanceof AgentHostError &&
+    error.kind === "unsupported" &&
+    error.message === MODEL_NOT_OFFERED_MESSAGE
+  );
+}
+
+function waitForModelCatalogRetry(): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, agentHostModelCatalogRetry.delayMs),
+  );
+}
+
 function selectAgentHostModel(
   agents: readonly Record<string, unknown>[],
   modelId: string,
@@ -674,10 +694,7 @@ function selectAgentHostModel(
     : [];
   const rawModel = matches[0] ?? (replacement.length === 1 ? replacement[0] : undefined);
   if (!rawModel) {
-    throw new AgentHostError(
-      "unsupported",
-      "The Agent Host does not offer the requested model.",
-    );
+    throw new AgentHostError("unsupported", MODEL_NOT_OFFERED_MESSAGE);
   }
   if (rawModel._meta !== undefined && !isRecord(rawModel._meta)) {
     throw new AgentHostError("modelIdentity", "The Agent Host model metadata is invalid.");
@@ -1236,23 +1253,36 @@ export async function queueAgentHostMessage(
   request: AgentHostQueuedMessageRequest,
 ): Promise<AgentHostQueuedMessageResult> {
   const messageId = queuedMessageId(request.taskId, request.occurrenceId);
-  const connection = await AgentHostConnection.open(request.endpoint);
+  let connection = await AgentHostConnection.open(request.endpoint);
   let stopInputObservation: (() => void) | undefined;
   let observerStopped = false;
   let keepConnection = false;
   let acceptQueuedMessage!: () => void;
   const queuedAcceptance = new Promise<void>((resolve) => { acceptQueuedMessage = resolve; });
   try {
-    const agents = await initializeAgentHost(connection);
+    let agents = await initializeAgentHost(connection);
     requireAgentHostAgent(agents);
     let model: { id: string; config?: Record<string, string | number> } | undefined;
     if (request.modelId) {
-      const info = selectAgentHostModel(
-        agents,
-        request.modelId,
-        request.hostModelIdExplicit === true,
-        request.modelFallback,
-      );
+      let info: AgentHostModelInfo;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          info = selectAgentHostModel(
+            agents,
+            request.modelId,
+            request.hostModelIdExplicit === true,
+            request.modelFallback,
+          );
+          break;
+        } catch (error) {
+          if (!shouldRetryModelCatalog(error, attempt)) throw error;
+          connection.close();
+          await waitForModelCatalogRetry();
+          connection = await AgentHostConnection.open(request.endpoint);
+          agents = await initializeAgentHost(connection);
+          requireAgentHostAgent(agents);
+        }
+      }
       const config = mapModelConfiguration(info, info.id === request.modelId ? request.modelOptions ?? {} : {});
       model = {
         id: info.id,
@@ -1341,14 +1371,26 @@ export async function queueAgentHostMessage(
 export async function runAgentHostTurn(
   request: AgentHostTurnRequest,
 ): Promise<AgentHostTurnResult> {
-  const connection = await AgentHostConnection.open(request.endpoint);
+  let connection = await AgentHostConnection.open(request.endpoint);
   try {
     let prepared: {
       ref: PreparedAgentHostSession;
       model?: { id: string; config?: Record<string, string | number> };
     };
     try {
-      prepared = await prepareTurn(connection, request);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          prepared = await prepareTurn(connection, request);
+          break;
+        } catch (error) {
+          // The model catalog in a fresh Host can be incomplete for a moment.
+          // Nothing has been sent yet, so a new connection can safely look again.
+          if (!shouldRetryModelCatalog(error, attempt)) throw error;
+          connection.close();
+          await waitForModelCatalogRetry();
+          connection = await AgentHostConnection.open(request.endpoint);
+        }
+      }
     } catch (error) {
       // Nothing has been sent yet, so another route can still run the task.
       throw error instanceof AgentHostError &&
